@@ -1,5 +1,6 @@
 // ไฟล์: constants/config.ts
 
-// ✅ ใช้ Domain ของ Ngrok ที่รันอยู่
-export const API_BASE = "https://unhealing-logistically-raguel.ngrok-free.dev/tjc-api";
-export const IMG_BASE_URL = "https://unhealing-logistically-raguel.ngrok-free.dev/tjc-api/";
+// ✅ ใช้ Domain ของ InfinityFree (Server จริง)
+// หมายเหตุ: ใช้ http หรือ https ตามที่ตั้งค่าไว้ (ถ้ายังไม่ทำ SSL ให้ใช้ http)
+export const API_BASE = "http://tjc-api.wuaze.com"; 
+export const IMG_BASE_URL = "http://tjc-api.wuaze.com/uploads/profiles/";

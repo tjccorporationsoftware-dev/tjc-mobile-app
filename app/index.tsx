@@ -16,6 +16,10 @@ import {
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 import { useAuth } from './_layout';
 
+// ✅ 1. Import ตัวแปร URL จากไฟล์ Config (ตรวจสอบ path ให้ถูกว่าไฟล์อยู่ไหน)
+// ถ้าไฟล์ constants อยู่คนละโฟลเดอร์ ให้แก้ path เช่น '../constants/config'
+import { API_BASE } from '../constants/config';
+
 const { width } = Dimensions.get('window');
 const PRIMARY_COLOR = '#4e54c8';
 const SECONDARY_COLOR = '#8f94fb';
@@ -36,16 +40,54 @@ export default function LoginScreen() {
         }
 
         setLoading(true);
+        console.log("🚀 กำลังเชื่อมต่อ:", `${API_BASE}/api_mobile.php?action=login`);
+
         try {
-            const success = await signIn(username, password);
+            // ✅ 2. ยิง API ไปที่ Server ของเรา
+            const response = await fetch(`${API_BASE}/api_mobile.php?action=login`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    username: username,
+                    password: password
+                }),
+            });
+
+            // ✅ 3. อ่านค่าเป็น Text ก่อน (เผื่อ Server ส่ง HTML Error มา)
+            const textResponse = await response.text();
+            console.log("📩 Server ตอบกลับ:", textResponse); // ดู Log นี้สำคัญมาก!
+
+            // แปลงเป็น JSON
+            let json;
+            try {
+                json = JSON.parse(textResponse);
+            } catch (e) {
+                // ถ้าแปลงไม่ได้ แสดงว่าติดหน้า HTML (Anti-bot ของ InfinityFree)
+                Alert.alert('Connection Error', 'Server ส่งข้อมูลผิดพลาด (อาจติด Firewall หรือ URL ผิด)');
+                setLoading(false);
+                return;
+            }
             
-            if (success) {
+            // ✅ 4. ตรวจสอบสถานะการล็อกอิน
+            if (json.status === 'success') {
+                console.log("✅ Login สำเร็จ:", json.user);
+                
+                // ส่งข้อมูลผู้ใช้ไปเก็บใน Context (Global State)
+                // สมมติว่าฟังก์ชัน signIn ของคุณรับ object user ได้
+                // ถ้า signIn ของคุณรับแค่ username/pass ให้แก้ตรงนี้ตามความเหมาะสม
+                signIn(json.user); 
+                
+                // ไปหน้า Dashboard
                 router.replace('/(tabs)/dashboard');
             } else {
-                Alert.alert('เข้าสู่ระบบไม่สำเร็จ', 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
+                Alert.alert('เข้าสู่ระบบไม่สำเร็จ', json.message || 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
             }
+
         } catch (error) {
-            Alert.alert('Error', 'เกิดข้อผิดพลาดในการเชื่อมต่อ');
+            console.error("❌ Network Error:", error);
+            Alert.alert('Error', 'เกิดข้อผิดพลาดในการเชื่อมต่อ (เช็คเน็ต หรือ URL)');
         } finally {
             setLoading(false);
         }
@@ -66,13 +108,10 @@ export default function LoginScreen() {
             >
                 <View style={styles.logoContainer}>
                     <Animated.View entering={FadeInDown.delay(200).duration(1000).springify()} style={styles.iconCircle}>
-                        
-                        {/* ✅ แก้ตรงนี้: เรียกใช้ไฟล์ LogoTJC.webp */}
                         <Image 
-                            source={require('../assets/images/LogoTJC.webp')} 
+                            source={require('../assets/images/LogoTJC.png')} 
                             style={{ width: 80, height: 80, resizeMode: 'contain' }} 
                         />
-
                     </Animated.View>
                     
                     <Animated.View entering={FadeInDown.delay(400).duration(1000).springify()}>
