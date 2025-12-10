@@ -4,12 +4,12 @@
     "slug": "tjc-mobile-app",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/LogoTJC.webp",
+    "icon": "./assets/images/LogoTJC.png",
     "scheme": "tjcmobileapp",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/images/LogoTJC.webp",
+      "image": "./assets/images/LogoTJC.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
@@ -18,16 +18,17 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/LogoTJC.webp",
+        "foregroundImage": "./assets/images/LogoTJC.png",
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.davit097.tjcmobileapp"
     },
     "web": {
       "bundler": "metro",
       "output": "static",
-      "favicon": "./assets/images/LogoTJC.webp"
+      "favicon": "./assets/images/LogoTJC.png"
     },
     "plugins": [
       "expo-router",
@@ -35,6 +36,12 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "0f16257d-1706-4520-9bc3-4073a27cfcc5"
+      }
     }
   }
 }
