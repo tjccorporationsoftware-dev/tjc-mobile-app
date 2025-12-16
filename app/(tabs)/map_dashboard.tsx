@@ -29,9 +29,16 @@ export default function MapDashboardScreen() {
     const [markers, setMarkers] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
     
+    // --- Helper: หา "วันที่ 1" ของเดือนปัจจุบัน ---
+    const getFirstDayOfMonth = () => {
+        const date = new Date();
+        return new Date(date.getFullYear(), date.getMonth(), 1);
+    };
+
     // Filter States
-    const [startDate, setStartDate] = useState<Date | null>(new Date()); // เริ่มต้นวันนี้
-    const [endDate, setEndDate] = useState<Date | null>(new Date());     // เริ่มต้นวันนี้
+    // 🚩 FIX 1: เริ่มต้นวันที่ 1 ของเดือน เพื่อให้เห็นข้อมูลย้อนหลัง
+    const [startDate, setStartDate] = useState<Date | null>(getFirstDayOfMonth()); 
+    const [endDate, setEndDate] = useState<Date | null>(new Date());     // ถึงวันนี้
     
     const [userList, setUserList] = useState<string[]>([]);
     const [selectedUser, setSelectedUser] = useState('');
@@ -88,31 +95,43 @@ export default function MapDashboardScreen() {
             let url = `${API_BASE}/api_mobile.php?action=get_map_data&start_date=${startStr}&end_date=${endStr}`;
             if (selectedUser) url += `&filter_name=${selectedUser}`;
             
-            console.log("Fetching:", url);
+            // 🚩 FIX 2: Debug Logs (ดูค่าใน Terminal)
+            console.log("--------------------------------");
+            console.log("📍 Fetching URL:", url);
 
             const res = await axios.get(url);
             
+            // console.log("📦 API Response:", JSON.stringify(res.data, null, 2)); // เปิดบรรทัดนี้ถ้าอยากเห็นข้อมูลดิบ
+
             if (Array.isArray(res.data)) {
-                setMarkers(res.data);
+                // 🚩 FIX 3: กรองข้อมูลที่ไม่มี Lat/Lng ออกก่อน เพื่อกัน Map Error
+                const validMarkers = res.data.filter((m: any) => 
+                    m.lat && m.lng && !isNaN(parseFloat(m.lat)) && parseFloat(m.lat) !== 0
+                );
+
+                console.log(`✅ Valid Markers: ${validMarkers.length} / ${res.data.length}`);
+
+                setMarkers(validMarkers);
                 
                 // Auto Zoom
                 setTimeout(() => {
-                    if (res.data.length > 0 && mapRef.current) {
-                        const coordinates = res.data.map((m: any) => ({
+                    if (validMarkers.length > 0 && mapRef.current) {
+                        const coordinates = validMarkers.map((m: any) => ({
                             latitude: parseFloat(m.lat),
                             longitude: parseFloat(m.lng),
                         }));
                         mapRef.current.fitToCoordinates(coordinates, {
-                            edgePadding: { top: 280, right: 50, bottom: 50, left: 50 }, // Padding for Filter Bar
+                            edgePadding: { top: 280, right: 50, bottom: 50, left: 50 },
                             animated: true,
                         });
                     }
                 }, 800);
             } else {
+                console.log("⚠️ API did not return an array");
                 setMarkers([]);
             }
         } catch (error) { 
-            console.error('API Error:', error);
+            console.error('❌ API Error:', error);
             Alert.alert("ข้อผิดพลาด", "ไม่สามารถโหลดข้อมูลได้");
         } 
         finally { 
@@ -123,7 +142,7 @@ export default function MapDashboardScreen() {
     // Auto fetch when user changes
     useEffect(() => { fetchMapData(); }, [selectedUser]);
 
-    // ✅ Button Handlers (เพิ่มฟังก์ชันที่เคยหายไป)
+    // Button Handlers
     const handleSearch = () => {
         setShowUserDropdown(false);
         fetchMapData(); 
@@ -131,8 +150,8 @@ export default function MapDashboardScreen() {
     
     const handleReset = () => {
         setSelectedUser('');
-        setStartDate(null);
-        setEndDate(null);
+        setStartDate(getFirstDayOfMonth()); // Reset กลับไปเป็นต้นเดือน
+        setEndDate(new Date());
         setShowUserDropdown(false);
         setTimeout(() => fetchMapData(), 100); 
     };
@@ -141,7 +160,7 @@ export default function MapDashboardScreen() {
         const today = new Date();
         setStartDate(today);
         setEndDate(today);
-        // User needs to click Search to apply
+        // User needs to click Search to apply or call fetchMapData() immediately if preferred
     };
 
     // --- Date Picker Logic ---
@@ -202,13 +221,12 @@ export default function MapDashboardScreen() {
 
                     return (
                         <Marker 
-                            // 🔴 CRITICAL FIX: ใช้ marker.id เป็น Key เพื่อแก้ปัญหาหมุดสลับคน
-                            key={marker.id ? marker.id.toString() : Math.random().toString()} 
+                            key={marker.id ? marker.id.toString() : `marker-${Math.random()}`} 
                             coordinate={{ 
                                 latitude: parseFloat(marker.lat), 
                                 longitude: parseFloat(marker.lng) 
                             }}
-                            tracksViewChanges={true} // True เพื่อให้รูปโหลดติดเสมอ
+                            tracksViewChanges={true}
                         >
                             <View style={styles.markerContainer}>
                                 <View style={[styles.pinHead, { borderColor: color }]}>
@@ -249,7 +267,7 @@ export default function MapDashboardScreen() {
                 })}
             </MapView>
 
-            {/* 2. Filter Bar (ถาวรด้านบน) */}
+            {/* 2. Filter Bar */}
             <SafeAreaView style={styles.topControlContainer} pointerEvents="box-none">
                 <View style={styles.filterCard}>
                     
@@ -314,11 +332,10 @@ export default function MapDashboardScreen() {
 
                         <TouchableOpacity onPress={handleReset} style={[styles.btn, {backgroundColor: COLOR_RESET, flex: 1}]}>
                             <Ionicons name="refresh" size={18} color="white" />
-                            {/* <Text style={styles.btnText}>รีเซ็ต</Text> */}
                         </TouchableOpacity>
                     </View>
                     
-                    <Text style={styles.resultText}>พบทั้งหมด {markers.length} รายการ</Text>
+                    <Text style={styles.resultText}>พบข้อมูลที่แสดงผลได้ {markers.length} รายการ</Text>
 
                 </View>
             </SafeAreaView>

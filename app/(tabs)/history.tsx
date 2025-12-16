@@ -3,7 +3,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import axios from 'axios';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
@@ -28,6 +28,9 @@ const PRIMARY_COLOR = '#4e54c8';
 const SECONDARY_COLOR = '#8f94fb';
 const COLOR_RESET = '#95a5a6';
 
+// ตัวเลือกสถานะ
+const FILTER_OPTIONS = ['ทั้งหมด', 'กำลังติดตาม', 'ได้งาน', 'เข้าเสนอโครงการ', 'ไม่ได้งาน'];
+
 export default function HistoryScreen() {
     const { user } = useAuth();
     const [loading, setLoading] = useState(true);
@@ -38,9 +41,10 @@ export default function HistoryScreen() {
     const [summary, setSummary] = useState({ total: 0, expense: 0 });
     const [statusBreakdown, setStatusBreakdown] = useState<any[]>([]);
 
-    // Filter States (✅ แก้ไข State ให้ถูกต้อง)
+    // Filter States
     const [startDate, setStartDate] = useState<Date | null>(null);
     const [endDate, setEndDate] = useState<Date | null>(null);
+    const [filterStatus, setFilterStatus] = useState('ทั้งหมด');
 
     // UI States
     const [showDatePicker, setShowDatePicker] = useState(false);
@@ -77,11 +81,21 @@ export default function HistoryScreen() {
         }
 
         try {
+            if (!refreshing && historyList.length === 0) setLoading(true);
+
             let url = `${API_BASE}/api_mobile.php?action=get_dashboard_stats`;
-            url += `&filter_name=${user.fullname}`; // กรองเฉพาะตัวเอง
+            
+            // ✅ เข้ารหัสชื่อและสถานะให้ถูกต้อง
+            url += `&filter_name=${encodeURIComponent(user.fullname)}`; 
 
             if (startDate) url += `&start_date=${formatDateForAPI(startDate)}`;
             if (endDate) url += `&end_date=${formatDateForAPI(endDate)}`;
+            
+            if (filterStatus !== 'ทั้งหมด') {
+                url += `&status_filter=${encodeURIComponent(filterStatus)}`;
+            }
+
+            console.log("Fetching URL:", url); 
 
             const res = await axios.get(url);
             
@@ -92,11 +106,23 @@ export default function HistoryScreen() {
             }
         } catch (error) {
             console.error("Fetch Error:", error);
+            Alert.alert("ข้อผิดพลาด", "ไม่สามารถโหลดข้อมูลได้");
         } finally {
             setLoading(false);
             setRefreshing(false);
         }
     };
+
+    // ✅ Client-Side Filtering (กรองซ้ำที่หน้าจอเพื่อความชัวร์)
+    const displayedList = useMemo(() => {
+        if (filterStatus === 'ทั้งหมด') return historyList;
+        return historyList.filter(item => item.job_status === filterStatus);
+    }, [historyList, filterStatus]);
+
+    // โหลดใหม่เมื่อ filterStatus เปลี่ยน
+    useEffect(() => {
+        fetchHistory();
+    }, [filterStatus]);
 
     useFocusEffect(useCallback(() => { fetchHistory(); }, [user]));
 
@@ -106,10 +132,8 @@ export default function HistoryScreen() {
     const handleReset = () => {
         setStartDate(null);
         setEndDate(null);
-        setTimeout(() => { 
-            setLoading(true); 
-            fetchHistory(); 
-        }, 100);
+        setFilterStatus('ทั้งหมด'); 
+        setTimeout(() => fetchHistory(), 100);
     };
 
     // Date Picker Logic
@@ -120,7 +144,6 @@ export default function HistoryScreen() {
         setShowDatePicker(true);
     };
 
-    // ✅ ฟังก์ชันจัดการวันที่ (รวม Android/iOS)
     const onDateChange = (event: any, selectedDate?: Date) => {
         if (Platform.OS === 'android') {
             setShowDatePicker(false);
@@ -139,8 +162,21 @@ export default function HistoryScreen() {
         else setEndDate(tempDate);
     };
 
+    // ✅ แก้ไขฟังก์ชันเปิดรูปภาพให้ URL สมบูรณ์
     const openImage = (filename: string) => { 
-        if (filename) Linking.openURL(`${API_BASE.replace('api_mobile.php', '')}uploads/${filename}`); 
+        if (!filename) return;
+
+        // ลบ api_mobile.php ออก (ถ้ามี)
+        let baseUrl = API_BASE.replace('api_mobile.php', '');
+        
+        // เติม / ถ้าไม่มี
+        if (!baseUrl.endsWith('/')) {
+            baseUrl += '/';
+        }
+
+        const fullUrl = `${baseUrl}uploads/${filename}`;
+        console.log("Open Image:", fullUrl); // Debug URL
+        Linking.openURL(fullUrl).catch(err => Alert.alert("ข้อผิดพลาด", "ไม่สามารถเปิดลิงก์รูปภาพได้")); 
     };
     
     const openDetailModal = (item: any) => { 
@@ -231,6 +267,29 @@ export default function HistoryScreen() {
 
             {/* Filter Section */}
             <View style={styles.filterSection}>
+                
+                {/* Status Filter (Chips) */}
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterChipContainer}>
+                    {FILTER_OPTIONS.map((status, index) => (
+                        <TouchableOpacity 
+                            key={index}
+                            onPress={() => setFilterStatus(status)}
+                            style={[
+                                styles.filterChip,
+                                filterStatus === status && styles.activeFilterChip
+                            ]}
+                        >
+                            <Text style={[
+                                styles.filterChipText,
+                                filterStatus === status && styles.activeFilterChipText
+                            ]}>
+                                {status}
+                            </Text>
+                        </TouchableOpacity>
+                    ))}
+                </ScrollView>
+
+                {/* Date Filter */}
                 <View style={styles.dateFilterRow}>
                     <TouchableOpacity onPress={() => openDatePicker('start')} style={styles.dateBtn}>
                         <Text style={styles.dateBtnText}>{startDate ? formatDateForDisplay(startDate) : 'วันที่เริ่ม'}</Text>
@@ -245,6 +304,7 @@ export default function HistoryScreen() {
                     </TouchableOpacity>
                 </View>
                 
+                {/* Action Buttons */}
                 <View style={styles.actionButtonRow}>
                     <TouchableOpacity onPress={handleSearch} style={styles.searchBtn}>
                         <Ionicons name="search" size={18} color="white" />
@@ -259,11 +319,11 @@ export default function HistoryScreen() {
 
             {loading ? <ActivityIndicator size="large" color={PRIMARY_COLOR} style={{marginTop: 50}} /> : 
             <FlatList
-                data={historyList}
+                data={displayedList} // ✅ ใช้ displayedList ที่กรองแล้ว
                 keyExtractor={(item) => item.id.toString()}
                 renderItem={renderItem}
                 contentContainerStyle={{ paddingBottom: 20, paddingTop: 10 }}
-                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={fetchHistory} />}
+                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchHistory(); }} />}
                 ListHeaderComponent={
                     <View style={styles.kpiContainer}>
                         <View style={styles.kpiRow}>
@@ -271,24 +331,30 @@ export default function HistoryScreen() {
                             <KpiCard label="ยอดเบิกจ่าย" value={summary.expense ? (summary.expense / 1000).toFixed(1) + 'k' : '0'} icon="wallet" colors={['#9b59b6', '#8e44ad']} delay={100} />
                         </View>
                         
-                        <View style={styles.dynamicGrid}>
-                            {statusBreakdown.map((item, index) => {
-                                const config = getStatusConfig(item.status);
-                                return (
-                                    <View key={index} style={styles.gridItem}>
-                                        <KpiCard 
-                                            label={item.status} 
-                                            value={item.count} 
-                                            icon={config.icon} 
-                                            colors={config.colors} 
-                                            delay={200 + (index * 50)} 
-                                        />
-                                    </View>
-                                );
-                            })}
-                        </View>
+                        {/* Breakdown */}
+                        {statusBreakdown.length > 0 && (
+                            <View style={styles.dynamicGrid}>
+                                {statusBreakdown.map((item, index) => {
+                                    const config = getStatusConfig(item.status);
+                                    return (
+                                        <View key={index} style={styles.gridItem}>
+                                            <KpiCard 
+                                                label={item.status} 
+                                                value={item.count} 
+                                                icon={config.icon} 
+                                                colors={config.colors} 
+                                                delay={200 + (index * 50)} 
+                                            />
+                                        </View>
+                                    );
+                                })}
+                            </View>
+                        )}
                         
-                        <Text style={styles.sectionTitle}>รายการล่าสุด ({historyList.length})</Text>
+                        <Text style={styles.sectionTitle}>
+                            รายการล่าสุด ({displayedList.length})
+                            {filterStatus !== 'ทั้งหมด' ? ` [${filterStatus}]` : ''}
+                        </Text>
                     </View>
                 }
                 ListEmptyComponent={<View style={styles.emptyState}><Ionicons name="file-tray-outline" size={50} color="#ccc"/><Text style={{color:'#999', marginTop:10}}>ไม่พบข้อมูลประวัติ</Text></View>}
@@ -361,6 +427,13 @@ const styles = StyleSheet.create({
     headerSub: { fontSize: 14, color: '#666', marginTop: 2 },
 
     filterSection: { padding: 15, backgroundColor: 'white', borderBottomLeftRadius: 20, borderBottomRightRadius: 20, shadowColor:'#000', shadowOpacity:0.05, shadowRadius:10, elevation:3, zIndex:10 },
+    
+    filterChipContainer: { flexDirection: 'row', marginBottom: 15 },
+    filterChip: { paddingHorizontal: 15, paddingVertical: 8, borderRadius: 20, backgroundColor: '#f0f2f5', marginRight: 8, borderWidth: 1, borderColor: '#eee' },
+    activeFilterChip: { backgroundColor: PRIMARY_COLOR, borderColor: PRIMARY_COLOR },
+    filterChipText: { fontSize: 13, color: '#636e72' },
+    activeFilterChipText: { color: 'white', fontWeight: 'bold' },
+
     dateFilterRow: { flexDirection: 'row', alignItems: 'center', justifyContent:'space-between', marginBottom: 15 },
     dateBtn: { flex: 1, flexDirection:'row', justifyContent:'space-between', alignItems:'center', backgroundColor: '#f0f2f5', padding: 12, borderRadius: 10 },
     dateBtnText: { fontSize: 13, color: '#555', fontWeight:'500' },
@@ -391,7 +464,6 @@ const styles = StyleSheet.create({
     statusBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
     
     cardBody: { paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: '#f0f0f0', marginBottom: 10 },
-    projectTitle: { fontSize: 15, fontWeight: 'bold', color: '#2c3e50', marginBottom: 5 },
     infoRow: { flexDirection: 'row', alignItems: 'center', marginTop: 3 },
     clientText: { fontSize: 13, color: '#555', flex: 1 },
     infoText: { fontSize: 12, color: '#888', flex: 1 },
@@ -403,16 +475,12 @@ const styles = StyleSheet.create({
     emptyState: { alignItems: 'center', marginTop: 50 },
     divider: { height:1, backgroundColor:'#eee', marginVertical:10 },
 
-    // ✅ เพิ่ม Styles ที่เคยหายไป
     modalOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)' },
     modalContent: { backgroundColor: 'white', padding: 20, borderRadius: 15, width: '85%', maxHeight: '70%' },
-    iosPickerContainer: { backgroundColor: 'white', width: '90%', borderRadius: 15, overflow: 'hidden', paddingBottom: 0 },
-    pickerTitle: { textAlign: 'center', padding: 15, fontWeight: 'bold', fontSize: 16, borderBottomWidth: 1, borderColor: '#eee', backgroundColor: '#f9f9f9' },
     iosPickerBtn: { flex: 1, padding: 15, alignItems: 'center', backgroundColor: 'white' },
     detailModalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' },
     detailModalContent: { backgroundColor: 'white', borderTopLeftRadius: 25, borderTopRightRadius: 25, padding: 25, maxHeight: '85%' },
     detailHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
     detailTitle: { fontSize: 20, fontWeight: 'bold', color: '#333' },
     imgHeader: { fontSize: 15, fontWeight: 'bold', color: '#333', marginTop: 10 },
-    closeBtn: { marginTop: 15, backgroundColor: PRIMARY_COLOR, padding: 12, borderRadius: 10, width: '100%', alignItems: 'center' },
 });
