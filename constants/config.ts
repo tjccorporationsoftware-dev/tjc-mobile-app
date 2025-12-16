@@ -1,5 +1,5 @@
-// ไฟล์: constants/config.ts
+// เปลี่ยนเป็นโดเมน tjc-report.oo.gd
+// ข้อควรระวัง: ถ้าเว็บยังไม่ได้ทำ SSL (กุญแจล็อคสีเขียว) ให้เปลี่ยน https เป็น http แทนนะครับ
 
-// กรณีที่ 1: ถ้าคุณอัปโหลดไฟล์ api_mobile.php ไว้หน้าแรกสุด (ใน htdocs)
-export const API_BASE = "https://tjc-api.wuaze.com";
-export const IMG_BASE_URL = "https://tjc-api.wuaze.com ";
+export const API_BASE = "https://tjc-report.oo.gd"; 
+export const IMG_BASE_URL = "https://tjc-report.oo.gd/uploads";

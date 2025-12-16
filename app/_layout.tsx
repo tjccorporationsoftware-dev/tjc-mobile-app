@@ -62,33 +62,35 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // ฟังก์ชัน Login
   const signIn = async (username: string, password: string): Promise<boolean> => {
-    try {
-      const res = await axios.post(`${API_BASE}/api_mobile.php?action=login`, {
-        username,
-        password
-      });
+  try {
+    const res = await axios.post(`${API_BASE}/api_mobile.php?action=login`, {
+      username,
+      password
+    });
 
-      if (res.data.status === 'success') {
-        // ✅ ดึงข้อมูลใหม่ทั้งหมดจาก API Response
-        const userData: UserData = {
-          id: res.data.id,
-          fullname: res.data.fullname,
-          role: res.data.role,
-          username: username, // ใช้จาก argument
-          avatar: res.data.avatar || '',
-          allowed_pages: res.data.allowed_pages || [], // ส่ง [] ถ้าไม่มี
-        };
-        
-        setUser(userData);
-        await AsyncStorage.setItem('user', JSON.stringify(userData));
-        return true;
-      }
-      return false;
-    } catch (error) {
-      console.error("Login API Error:", error);
-      return false;
+    console.log("API Login Response:", res.data);
+
+    if (res.data.status === 'success') {
+      const userData: UserData = {
+        id: res.data.id,
+        fullname: res.data.fullname,
+        role: res.data.role,
+        username: username,
+        avatar: res.data.avatar || '',
+        allowed_pages: res.data.allowed_pages || [],
+      };
+
+      setUser(userData);
+      await AsyncStorage.setItem('user', JSON.stringify(userData));
+      return true;
     }
-  };
+    return false;
+
+  } catch (error) {
+    console.error("Login API Error:", error);
+    return false;
+  }
+};
 
   // ฟังก์ชัน Logout
   const signOut = async () => {

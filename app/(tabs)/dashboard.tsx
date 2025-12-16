@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import axios from 'axios';
-import * as ImagePicker from 'expo-image-picker'; // ✅ เพิ่ม ImagePicker
+import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
@@ -24,28 +24,33 @@ import { useAuth } from '../_layout';
 const PRIMARY_COLOR = '#4e54c8';
 const SECONDARY_COLOR = '#8f94fb';
 
+// ✅ รายการตัวกรองสถานะ
+const FILTER_OPTIONS = ['ทั้งหมด', 'กำลังติดตาม', 'ได้งาน', 'เข้าเสนอโครงการ', 'ไม่ได้งาน'];
+
 export default function DashboardScreen() {
     const { user } = useAuth();
     const router = useRouter();
     
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
-    const [uploading, setUploading] = useState(false); // ✅ สถานะกำลังอัปโหลดรูป
+    const [uploading, setUploading] = useState(false);
     
     // Data States
     const [stats, setStats] = useState({ total: 0, won: 0, follow: 0, expense: 0 });
     const [recentList, setRecentList] = useState<any[]>([]);
     const [statusBreakdown, setStatusBreakdown] = useState<any[]>([]);
     
+    // ✅ Filter State (เพิ่มสถานะตัวกรอง)
+    const [filterStatus, setFilterStatus] = useState('ทั้งหมด');
+
     const [userAvatar, setUserAvatar] = useState<string | null>(null); 
-    const [timestamp, setTimestamp] = useState(new Date().getTime()); // ✅ ใช้แก้ Cache รูป
+    const [timestamp, setTimestamp] = useState(new Date().getTime());
 
     // Load Data
     const fetchDashboardData = async () => {
         if (!user?.fullname) return;
         
         try {
-            // 1. ดึง Stats
             const url = `${API_BASE}/api_mobile.php?action=get_dashboard_stats&filter_name=${user.fullname}`;
             const res = await axios.get(url);
 
@@ -60,7 +65,6 @@ export default function DashboardScreen() {
                 setRecentList(res.data.recent || []);
             }
 
-            // 2. ดึงรูปโปรไฟล์ล่าสุด
             if (user?.username) {
                 const profileRes = await axios.get(`${API_BASE}/api_mobile.php?action=get_user_profile&username=${user.username}`);
                 if (profileRes.data?.avatar) {
@@ -85,7 +89,6 @@ export default function DashboardScreen() {
         fetchDashboardData();
     }, []);
 
-    // ✅ 1. ฟังก์ชันเลือกรูป (กดที่รูปโปรไฟล์)
     const pickImage = async () => {
         const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
         if (status !== 'granted') {
@@ -105,7 +108,6 @@ export default function DashboardScreen() {
         }
     };
 
-    // ✅ 2. ฟังก์ชันอัปโหลดรูป
     const handleUploadProfile = async (uri: string) => {
         setUploading(true);
         const formData = new FormData();
@@ -125,8 +127,8 @@ export default function DashboardScreen() {
 
             if (res.data.status === 'success') {
                 Alert.alert("สำเร็จ", "เปลี่ยนรูปโปรไฟล์เรียบร้อย");
-                setTimestamp(new Date().getTime()); // รีเฟรชรูปทันที
-                fetchDashboardData(); // โหลดข้อมูลใหม่
+                setTimestamp(new Date().getTime());
+                fetchDashboardData();
             } else {
                 Alert.alert("ล้มเหลว", res.data.message || "อัปโหลดไม่สำเร็จ");
             }
@@ -137,12 +139,11 @@ export default function DashboardScreen() {
         }
     };
 
-    // Helper: สร้าง URL รูปภาพ
     const getAvatarUrl = () => {
         if (!userAvatar) return null;
         let baseUrl = API_BASE.replace('/api_mobile.php', '').replace('api_mobile.php', '');
         if (!baseUrl.endsWith('/')) baseUrl += '/';
-        return `${baseUrl}uploads/profiles/${userAvatar}?t=${timestamp}`; // ใส่ timestamp กัน Cache
+        return `${baseUrl}uploads/profiles/${userAvatar}?t=${timestamp}`;
     };
 
     const getStatusConfig = (statusName: string) => {
@@ -154,6 +155,12 @@ export default function DashboardScreen() {
             default: return { color: '#6c5ce7', bg: '#e0dcfc', icon: 'bookmark' };
         }
     };
+
+    // ✅ Logic การกรองข้อมูล
+    const filteredList = recentList.filter(item => {
+        if (filterStatus === 'ทั้งหมด') return true;
+        return item.job_status === filterStatus;
+    });
 
     // Components
     const StatCard = ({ label, value, icon, color, delay }: any) => (
@@ -196,9 +203,7 @@ export default function DashboardScreen() {
             <LinearGradient colors={[PRIMARY_COLOR, SECONDARY_COLOR]} style={styles.headerBackground}>
                 <SafeAreaView edges={['top']} style={styles.headerContent}>
                     
-                    {/* ✅ ส่วนแสดงโปรไฟล์ + เปลี่ยนรูป */}
                     <View style={styles.profileRow}>
-                        
                         <TouchableOpacity onPress={pickImage} disabled={uploading} style={styles.avatarWrapper}>
                             <View style={styles.avatarContainer}>
                                 {uploading ? (
@@ -211,7 +216,6 @@ export default function DashboardScreen() {
                                     </View>
                                 )}
                             </View>
-                            {/* ไอคอนกล้องเล็กๆ เพื่อสื่อว่าเปลี่ยนรูปได้ */}
                             <View style={styles.cameraBadge}>
                                 <Ionicons name="camera" size={12} color="white" />
                             </View>
@@ -237,8 +241,6 @@ export default function DashboardScreen() {
                     contentContainerStyle={{ paddingBottom: 100 }}
                     refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={PRIMARY_COLOR}/>}
                 >
-                    {/* ❌ ลบปุ่มลงบันทึกงานออกแล้ว ตามคำขอ */}
-
                     {/* 📊 My Stats */}
                     <Text style={styles.sectionTitle}>ผลงานของฉัน</Text>
                     <View style={styles.statsGrid}>
@@ -269,15 +271,39 @@ export default function DashboardScreen() {
                             </TouchableOpacity>
                         </View>
 
+                        {/* ✅ Filter Chips (แถบกรองสถานะ) */}
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterContainer}>
+                            {FILTER_OPTIONS.map((status, index) => (
+                                <TouchableOpacity 
+                                    key={index}
+                                    onPress={() => setFilterStatus(status)}
+                                    style={[
+                                        styles.filterChip,
+                                        filterStatus === status && styles.activeFilterChip
+                                    ]}
+                                >
+                                    <Text style={[
+                                        styles.filterText,
+                                        filterStatus === status && styles.activeFilterText
+                                    ]}>
+                                        {status}
+                                    </Text>
+                                </TouchableOpacity>
+                            ))}
+                        </ScrollView>
+
                         {loading ? (
                             <ActivityIndicator color={PRIMARY_COLOR} style={{marginTop:20}} />
-                        ) : recentList.length > 0 ? (
-                            recentList.slice(0, 5).map((item, index) => (
+                        ) : filteredList.length > 0 ? (
+                            // ✅ ใช้ filteredList แทน recentList
+                            filteredList.slice(0, 10).map((item, index) => (
                                 <RecentItem key={index} item={item} index={index} />
                             ))
                         ) : (
                             <View style={styles.emptyState}>
-                                <Text style={{color:'#999'}}>ยังไม่มีรายการบันทึก</Text>
+                                <Text style={{color:'#999'}}>
+                                    {filterStatus === 'ทั้งหมด' ? 'ยังไม่มีรายการบันทึก' : `ไม่มีงานสถานะ "${filterStatus}"`}
+                                </Text>
                             </View>
                         )}
                     </View>
@@ -310,7 +336,7 @@ const styles = StyleSheet.create({
     roleText: { color: 'white', fontSize: 13, fontWeight: '500' },
 
     // Body
-    bodyContainer: { flex: 1, marginTop: -20 }, // ขยับขึ้นเล็กน้อยเพราะไม่มีปุ่ม Action แล้ว
+    bodyContainer: { flex: 1, marginTop: -20 },
 
     // Stats Grid
     sectionTitle: { fontSize: 18, fontWeight: 'bold', color: '#2d3436', marginLeft: 20, marginBottom: 10, marginTop: 20 },
@@ -321,11 +347,18 @@ const styles = StyleSheet.create({
     statValue: { fontSize: 18, fontWeight: 'bold', color: '#2d3436' },
     statLabel: { fontSize: 12, color: '#636e72' },
 
-    // Recent List
+    // Recent List & Filters
     recentSection: { marginTop: 10, paddingHorizontal: 20 },
     sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
     seeAllText: { color: PRIMARY_COLOR, fontWeight: 'bold', fontSize: 13 },
     
+    // ✅ Styles สำหรับ Filter
+    filterContainer: { marginBottom: 15, paddingBottom: 5 },
+    filterChip: { paddingHorizontal: 15, paddingVertical: 8, borderRadius: 20, backgroundColor: 'white', marginRight: 10, borderWidth: 1, borderColor: '#eee' },
+    activeFilterChip: { backgroundColor: PRIMARY_COLOR, borderColor: PRIMARY_COLOR },
+    filterText: { fontSize: 13, color: '#636e72' },
+    activeFilterText: { color: 'white', fontWeight: 'bold' },
+
     recentItem: { backgroundColor: 'white', padding: 15, borderRadius: 12, marginBottom: 10, flexDirection: 'row', alignItems: 'center', elevation: 1 },
     statusIndicator: { width: 4, height: 40, borderRadius: 2, marginRight: 15 },
     recentContent: { flex: 1 },

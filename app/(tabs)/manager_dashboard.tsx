@@ -3,7 +3,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import axios from 'axios';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
@@ -21,12 +21,14 @@ import {
 import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-// ✅ Import จากไฟล์ Config กลาง (ถูกต้องตามหลักการ)
+// ✅ Import จากไฟล์ Config กลาง
 import { API_BASE, IMG_BASE_URL } from '../../constants/config';
-
 import { useAuth } from '../_layout';
 
 const PRIMARY_COLOR = '#4e54c8';
+
+// ✅ 1. เพิ่มตัวเลือกสถานะ
+const FILTER_OPTIONS = ['ทั้งหมด', 'กำลังติดตาม', 'ได้งาน', 'เข้าเสนอโครงการ', 'ไม่ได้งาน'];
 
 export default function ManagerDashboardScreen() {
     const { user } = useAuth();
@@ -43,6 +45,9 @@ export default function ManagerDashboardScreen() {
     const [selectedUser, setSelectedUser] = useState('');
     const [startDate, setStartDate] = useState<Date | null>(null);
     const [endDate, setEndDate] = useState<Date | null>(null);
+    
+    // ✅ 2. เพิ่ม State สำหรับปุ่มกรองสถานะ
+    const [filterStatus, setFilterStatus] = useState('ทั้งหมด');
     
     // UI States
     const [showDatePicker, setShowDatePicker] = useState(false);
@@ -94,27 +99,25 @@ export default function ManagerDashboardScreen() {
 
     useFocusEffect(useCallback(() => { fetchDashboard(); }, []));
 
+    // ✅ 3. Logic กรองข้อมูลรายการ (Client Side Filtering)
+    const filteredList = useMemo(() => {
+        if (filterStatus === 'ทั้งหมด') return recentList;
+        return recentList.filter(item => item.job_status === filterStatus);
+    }, [recentList, filterStatus]);
+
     const onSearch = () => { setLoading(true); fetchDashboard(); };
     const onReset = () => {
-        setSelectedUser(''); setStartDate(null); setEndDate(null);
+        setSelectedUser(''); setStartDate(null); setEndDate(null); setFilterStatus('ทั้งหมด');
         setTimeout(() => { setLoading(true); fetchDashboard(); }, 100);
     };
 
-    // ✅ ฟังก์ชันเปิดรูป (ใช้ IMG_BASE_URL จาก Config)
     const openImage = (filename: string) => { 
         if (!filename) return;
-
-        // ไม่ต้อง replace หรือ hardcode IP แล้ว ใช้ตัวแปรกลางได้เลย
         const fullUrl = `${IMG_BASE_URL}${filename}`;
-        
         console.log("Opening Receipt:", fullUrl);
-
         Linking.canOpenURL(fullUrl).then(supported => {
-            if (supported) {
-                Linking.openURL(fullUrl);
-            } else {
-                Alert.alert("แจ้งเตือน", "ไม่สามารถเปิดลิงก์นี้ได้");
-            }
+            if (supported) Linking.openURL(fullUrl);
+            else Alert.alert("แจ้งเตือน", "ไม่สามารถเปิดลิงก์นี้ได้");
         }).catch(err => console.error("An error occurred", err));
     };
 
@@ -241,7 +244,8 @@ export default function ManagerDashboardScreen() {
 
             {loading ? <ActivityIndicator size="large" color={PRIMARY_COLOR} style={{marginTop: 50}} /> : 
             <FlatList
-                data={recentList}
+                // ✅ 4. ใช้ filteredList แทน recentList
+                data={filteredList}
                 keyExtractor={(item) => item.id.toString()}
                 renderItem={renderItem}
                 contentContainerStyle={{ paddingBottom: 20, paddingTop: 10 }}
@@ -264,7 +268,31 @@ export default function ManagerDashboardScreen() {
                             })}
                         </View>
 
-                        <Text style={styles.sectionTitle}>📋 รายการล่าสุด ({recentList.length})</Text>
+                        <Text style={styles.sectionTitle}>📋 รายการล่าสุด ({filteredList.length})</Text>
+
+                        {/* ✅ 5. ส่วนแสดงปุ่มกรองสถานะ (Chips) */}
+                        <View style={{ marginBottom: 15 }}>
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
+                                {FILTER_OPTIONS.map((status, index) => (
+                                    <TouchableOpacity 
+                                        key={index}
+                                        onPress={() => setFilterStatus(status)}
+                                        style={[
+                                            styles.filterChip,
+                                            filterStatus === status && styles.activeFilterChip
+                                        ]}
+                                    >
+                                        <Text style={[
+                                            styles.filterChipText,
+                                            filterStatus === status && styles.activeFilterChipText
+                                        ]}>
+                                            {status}
+                                        </Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </ScrollView>
+                        </View>
+
                     </View>
                 }
                 ListEmptyComponent={<View style={styles.emptyState}><Ionicons name="folder-open-outline" size={50} color="#ccc"/><Text style={{color:'#999', marginTop:10}}>ไม่พบข้อมูลตามเงื่อนไข</Text></View>}
@@ -311,7 +339,6 @@ export default function ManagerDashboardScreen() {
                                     
                                     <Text style={styles.imgHeader}>📸 หลักฐาน / ใบเสร็จ</Text>
                                     <View style={{flexDirection:'row', gap:15, marginTop:10}}>
-                                        {/* ✅ ปุ่มดูรูป ใช้ openImage ที่ดึงค่าจาก Config */}
                                         {selectedItem.fuel_receipt && <ImageButton icon="gas-station" color="#e74c3c" label="น้ำมัน" onPress={()=>openImage(selectedItem.fuel_receipt)} />}
                                         {selectedItem.accommodation_receipt && <ImageButton icon="bed" color="#3498db" label="ที่พัก" onPress={()=>openImage(selectedItem.accommodation_receipt)} />}
                                         {selectedItem.other_receipt && <ImageButton icon="dots-horizontal-circle" color="#9b59b6" label="อื่นๆ" onPress={()=>openImage(selectedItem.other_receipt)} />}
@@ -373,6 +400,25 @@ const styles = StyleSheet.create({
     kpiValue: { color: 'white', fontSize: 22, fontWeight: 'bold' },
 
     sectionTitle: { fontSize: 16, fontWeight: 'bold', color: '#444', marginTop: 15, marginBottom: 10 },
+
+    // ✅ 6. Styles สำหรับปุ่มกรอง (Chips)
+    chipScroll: { flexDirection: 'row' },
+    filterChip: { 
+        paddingHorizontal: 15, 
+        paddingVertical: 8, 
+        borderRadius: 20, 
+        backgroundColor: '#fff', 
+        marginRight: 8, 
+        borderWidth: 1, 
+        borderColor: '#eee',
+        elevation: 1
+    },
+    activeFilterChip: { 
+        backgroundColor: PRIMARY_COLOR, 
+        borderColor: PRIMARY_COLOR 
+    },
+    filterChipText: { fontSize: 13, color: '#636e72' },
+    activeFilterChipText: { color: 'white', fontWeight: 'bold' },
 
     card: { backgroundColor: 'white', marginHorizontal: 15, marginBottom: 12, borderRadius: 15, padding: 15, borderLeftWidth: 5, elevation: 2, shadowColor:'#000', shadowOpacity:0.05, shadowRadius:5 },
     cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 },
