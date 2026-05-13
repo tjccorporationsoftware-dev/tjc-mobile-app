@@ -1,5 +1,3 @@
-// เปลี่ยนเป็นโดเมน tjc-report.oo.gd
-// ข้อควรระวัง: ถ้าเว็บยังไม่ได้ทำ SSL (กุญแจล็อคสีเขียว) ให้เปลี่ยน https เป็น http แทนนะครับ
-
-export const API_BASE = "https://tjc-report.oo.gd"; 
-export const IMG_BASE_URL = "https://tjc-report.oo.gd/uploads";
+export const API_BASE = "http://192.168.103.127/tjc-api"; // ไม่ต้องใส่ / ปิดท้าย
+export const IMG_BASE_URL = "http://192.168.103.127/tjc-api/uploads";
+export const API_TASKS_URL = "http://192.168.103.127/tjc-api/api_tasks.php";
