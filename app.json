@@ -1,15 +1,15 @@
 {
   "expo": {
-    "name": "tjc-mobile-app",
-    "slug": "tjc-mobile-app",
+    "name": "TJC GROUP",
+    "slug": "TJC-ROUP",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/LogoTJC.png",
+    "icon": "./assets/images/favicon2.png",
     "scheme": "tjcmobileapp",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/images/LogoTJC.png",
+      "image": "./assets/images/favicon2.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
@@ -18,7 +18,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/LogoTJC.png",
+        "foregroundImage": "./assets/images/favicon2.png",
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
@@ -28,11 +28,12 @@
     "web": {
       "bundler": "metro",
       "output": "static",
-      "favicon": "./assets/images/LogoTJC.png"
+      "favicon": "./assets/images/favicon2.png"
     },
     "plugins": [
       "expo-router",
-      "expo-secure-store"
+      "expo-secure-store",
+      "@react-native-community/datetimepicker"
     ],
     "experiments": {
       "typedRoutes": true
@@ -40,7 +41,7 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "0f16257d-1706-4520-9bc3-4073a27cfcc5"
+        "projectId": "4800aa9b-fb62-45e2-b30d-12b1359d292b"
       }
     }
   }
