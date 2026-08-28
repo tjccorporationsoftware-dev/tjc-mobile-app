@@ -1,5 +1,6 @@
 import { FontAwesome5, Ionicons } from "@expo/vector-icons";
 import axios from "axios";
+import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import React, { useEffect, useState } from "react";
 import {
@@ -50,21 +51,44 @@ export default function ManagerDashboard() {
     fetchMenus();
   };
 
-  // เช็คไอคอนว่าเป็น FontAwesome หรือ Ionicons (ปกติ FontAwesome5 จะใช้กับ truck/box ได้ดีกว่า)
-  const getIcon = (iconName: string, color: string) => {
-    const faIcons = [
-      "truck",
-      "box",
-      "dolly",
-      "warehouse",
-      "bullhorn",
-      "shopping-cart",
-    ];
-    if (faIcons.includes(iconName) || iconName === "building") {
-      return <FontAwesome5 name={iconName} size={24} color={color} />;
-    }
-    // Default เป็น Ionicons
-    return <Ionicons name={iconName as any} size={24} color={color} />;
+  // ปรับสีให้อ่อนลง/เข้มขึ้น สำหรับทำไล่เฉดในกล่องไอคอน (percent บวก = อ่อนลง)
+  const shade = (hex: string, percent: number) => {
+    const h = (hex || "#4e54c8").replace("#", "");
+    const full =
+      h.length === 3
+        ? h
+            .split("")
+            .map((c) => c + c)
+            .join("")
+        : h;
+    const num = parseInt(full, 16);
+    const adj = (v: number) =>
+      Math.round(Math.min(255, Math.max(0, v + (percent / 100) * 255)));
+    const r = adj((num >> 16) & 255);
+    const g = adj((num >> 8) & 255);
+    const b = adj(num & 255);
+    return `rgb(${r}, ${g}, ${b})`;
+  };
+
+  // ไอคอนประจำฝ่าย — เลือกให้สื่อถึงงานของฝ่ายนั้นและรูปทรงต่างกันชัดเจน
+  // อิงจาก id ที่ API ส่งมา (ไม่ใช่ชื่อไอคอนใน DB) เพื่อคุมหน้าตาได้แน่นอน
+  const ICON_BY_ID: Record<string, string> = {
+    sales: "chart-line", // กราฟยอดขายพุ่งขึ้น
+    purchase: "shopping-cart", // รถเข็นจัดซื้อ
+    marketing: "bullhorn", // โทรโข่งประชาสัมพันธ์
+    admin: "clipboard-list", // แฟ้มเอกสารงานธุรการ
+    warehouse: "warehouse",
+    delivery: "truck",
+    accounting: "coins",
+    hr: "users",
+    document: "file-invoice-dollar",
+  };
+
+  const getIcon = (item: any, color: string) => {
+    // ใช้ไอคอนประจำฝ่ายก่อน ถ้าเป็นฝ่ายใหม่ที่ยังไม่ได้กำหนด
+    // ค่อยใช้ชื่อไอคอนที่ DB ส่งมา และปิดท้ายด้วยไอคอนกลาง
+    const name = ICON_BY_ID[item.id] || item.icon || "th-large";
+    return <FontAwesome5 name={name as any} size={24} color={color} />;
   };
 
   return (
@@ -99,11 +123,20 @@ export default function ManagerDashboard() {
               onPress={() => router.push(item.route)}
               activeOpacity={0.8}
             >
-              <View
-                style={[styles.iconBox, { backgroundColor: item.color + "15" }]}
+              <LinearGradient
+                colors={[
+                  shade(item.color, 22),
+                  item.color,
+                  shade(item.color, -20),
+                ]}
+                start={{ x: 0.1, y: 0 }}
+                end={{ x: 0.9, y: 1 }}
+                style={[styles.iconBox, { shadowColor: item.color }]}
               >
-                {getIcon(item.icon, item.color)}
-              </View>
+                {/* แสงสะท้อนมุมบนซ้าย ทำให้ดูนูนขึ้นมา */}
+                <View style={styles.iconGloss} />
+                {getIcon(item, "#fff")}
+              </LinearGradient>
 
               <View style={styles.contentBox}>
                 <Text style={styles.cardTitle}>{item.label}</Text>
@@ -156,12 +189,27 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
   },
   iconBox: {
-    width: 50,
-    height: 50,
-    borderRadius: 12,
+    width: 54,
+    height: 54,
+    borderRadius: 16,
     justifyContent: "center",
     alignItems: "center",
     marginRight: 15,
+    overflow: "hidden",
+    // เงาสีเดียวกับไอคอน ทำให้ดูลอยขึ้นจากการ์ด
+    elevation: 6,
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+  },
+  iconGloss: {
+    position: "absolute",
+    top: -14,
+    left: -14,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(255,255,255,0.22)",
   },
   contentBox: { flex: 1 },
   cardTitle: { fontSize: 18, fontWeight: "bold", color: "#333" },

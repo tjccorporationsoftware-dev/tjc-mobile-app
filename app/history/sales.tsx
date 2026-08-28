@@ -100,17 +100,28 @@ export default function HistorySales() {
     setSelectedExpenseItem(item); // จำงานที่เลือก
 
     // 1. ดึงค่าน้ำมัน (เนื่องจาก DB เก็บเป็นยอดรวม เราจะใส่ยอดรวมไว้ในแถวแรก)
-    const hasFuelFile = item.fuel_receipt && item.fuel_receipt !== "";
-    setFuelList([
-      {
-        amount:
-          item.fuel_cost && parseFloat(item.fuel_cost) > 0
-            ? parseFloat(item.fuel_cost).toString()
-            : "",
-        // สร้าง Object หลอกๆ เพื่อให้ปุ่มขึ้นสีเขียวว่ามีไฟล์แล้ว (isExisting: true)
-        file: hasFuelFile ? { uri: item.fuel_receipt, isExisting: true } : null,
-      },
-    ]);
+    // แตกค่าน้ำมันออกเป็นหลายบิล (DB เก็บเป็น "100,200,300")
+    const fuelCosts = item.fuel_cost
+      ? String(item.fuel_cost)
+        .split(",")
+        .map((v: string) => v.trim())
+        .filter((v: string) => v !== "")
+      : [""];
+    const fuelReceipts = item.fuel_receipt
+      ? String(item.fuel_receipt)
+        .split(",")
+        .map((v: string) => v.trim())
+        .filter((v: string) => v !== "")
+      : [];
+
+    setFuelList(
+      fuelCosts.map((cost: string, idx: number) => ({
+        amount: parseFloat(cost) > 0 ? parseFloat(cost).toString() : "",
+        file: fuelReceipts[idx]
+          ? { uri: fuelReceipts[idx], isExisting: true }
+          : null,
+      })),
+    );
 
     // 2. ดึงค่าที่พัก
     const hasHotelFile =
@@ -250,23 +261,32 @@ export default function HistorySales() {
       formData.append("action", "update_expense_request");
       formData.append("report_id", String(selectedExpenseItem.id));
 
-      formData.append("fuel_cost", totalFuel.toString());
+      // ✅ ส่งแยกแต่ละบิล ไม่รวมเป็นยอดเดียว เพื่อให้ DB เก็บเป็น "100,200,300"
+      fuelList.forEach((item) => {
+        formData.append("fuel_cost[]", item.amount || "0");
+      });
       formData.append("accommodation_cost", totalHotel.toString());
       formData.append("other_cost", totalOther.toString());
       formData.append("other_cost_detail", otherCost.detail);
 
       // 3. แนบไฟล์ (เฉพาะไฟล์ที่ถ่ายใหม่ - ไม่เอาไฟล์เดิมที่มี isExisting)
+      const keptFuelReceipts: string[] = [];
       fuelList.forEach((item) => {
-        // เช็คว่ามีไฟล์ และ ไม่ใช่ไฟล์เก่า (isExisting != true)
-        if (item.file && !item.file.isExisting) {
-          // @ts-ignore
-          formData.append("fuel_receipt_file[]", {
-            uri: item.file.uri,
-            name: item.file.name || "fuel.jpg",
-            type: item.file.type || "image/jpeg",
-          });
+        // เช็คว่ามีไฟล์
+        if (item.file) {
+          if (item.file.isExisting) {
+            keptFuelReceipts.push(item.file.uri);
+          } else {
+            // @ts-ignore
+            formData.append("fuel_receipt_file[]", {
+              uri: item.file.uri,
+              name: item.file.name || "fuel.jpg",
+              type: item.file.type || "image/jpeg",
+            });
+          }
         }
       });
+      formData.append("kept_fuel_receipts", JSON.stringify(keptFuelReceipts));
 
       if (hotelCost.file && !hotelCost.file.isExisting) {
         // @ts-ignore
@@ -297,11 +317,16 @@ export default function HistorySales() {
         Alert.alert("สำเร็จ", "บันทึกข้อมูลเรียบร้อยแล้ว");
 
         // 5. อัปเดตข้อมูลในหน้าจอทันที
+        // ✅ เก็บ fuel_cost เป็น comma-separated string ใน local state
+        const fuelCostSaved = fuelList
+          .map((f) => f.amount || "0")
+          .join(",");
+
         const updatedData = rawData.map((item) => {
           if (item.id === selectedExpenseItem.id) {
             return {
               ...item,
-              fuel_cost: totalFuel.toString(),
+              fuel_cost: fuelCostSaved,
               accommodation_cost: totalHotel.toString(),
               other_cost: totalOther.toString(),
               other_cost_detail: otherCost.detail,
@@ -857,23 +882,50 @@ export default function HistorySales() {
                 <Text style={styles.withdrawTextSmall}>เบิกเงิน</Text>
               </TouchableOpacity>
             </View>
-            <TouchableOpacity
-              style={styles.viewBtn}
-              onPress={() => {
-                setSelectedItem(item);
-                setDetailModalVisible(true);
-              }}
-            >
-              <Text
-                style={{
-                  fontSize: 12,
-                  color: PRIMARY_COLOR,
-                  fontWeight: "bold",
+            <View style={{ flexDirection: "row", gap: 6 }}>
+              {/* ➕ ปุ่มแก้ไข */}
+              <TouchableOpacity
+                style={[styles.viewBtn, { backgroundColor: "#fef2f2" }]}
+                onPress={() => {
+                  router.push({
+                    pathname: "/write_report", // ⚠️ ปรับ path ตรงนี้ให้ตรงกับ Routing จริงของไฟล์ write_report
+                    params: {
+                      edit_id: item.id,
+                      edit_data: JSON.stringify(item),
+                    },
+                  });
                 }}
               >
-                รายละเอียด <Ionicons name="chevron-forward" size={12} />
-              </Text>
-            </TouchableOpacity>
+                <Text
+                  style={{
+                    fontSize: 12,
+                    color: DANGER_COLOR,
+                    fontWeight: "bold",
+                  }}
+                >
+                  <Ionicons name="create-outline" size={12} /> แก้ไข
+                </Text>
+              </TouchableOpacity>
+
+              {/* ปุ่มรายละเอียด (เดิม) */}
+              <TouchableOpacity
+                style={styles.viewBtn}
+                onPress={() => {
+                  setSelectedItem(item);
+                  setDetailModalVisible(true);
+                }}
+              >
+                <Text
+                  style={{
+                    fontSize: 12,
+                    color: PRIMARY_COLOR,
+                    fontWeight: "bold",
+                  }}
+                >
+                  รายละเอียด <Ionicons name="chevron-forward" size={12} />
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Animated.View>

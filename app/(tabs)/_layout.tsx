@@ -44,7 +44,7 @@ const MENU_GROUPS = [
   {
     id: "pr_group",
     title: "หมวดประชาสัมพันธ์",
-    items: ["news"],
+    items: ["news", "correspondence_dashboard", "correspondence_book"],
   },
   {
     id: "overview_group",
@@ -80,7 +80,7 @@ const MENU_GROUPS = [
   {
     id: "vehicle_groups",
     title: "ขนส่ง",
-    items: ["fm_dashboard", "alert_screen"],
+    items: ["fm_dashboard", "fm_jobs", "alert_screen"],
   },
   {
     id: "driver_group",
@@ -695,6 +695,14 @@ export default function DrawerLayout() {
         options={getDrawerOptions("จัดการงานขนส่ง", "bus", "fm_dashboard.php")}
       />
       <Drawer.Screen
+        name="fm_jobs"
+        options={getDrawerOptions(
+          "ตารางงานขนส่ง",
+          "calendar-number",
+          "fm_jobs.php",
+        )}
+      />
+      <Drawer.Screen
         name="alert_screen"
         options={getDrawerOptions(
           "แจ้งเตือน พ.ร.บ และ ประกัน",
@@ -705,7 +713,7 @@ export default function DrawerLayout() {
       <Drawer.Screen
         name="DriverTasks"
         options={getDrawerOptions(
-          "งานจัดส่งของฉัน",
+          "ใบงานจัดส่ง",
           "car-sport",
           "driver_tasks.php",
         )}
@@ -731,6 +739,22 @@ export default function DrawerLayout() {
           "สมุดลงงานเข้าเมือง",
           "create",
           "Immigration_Report.php",
+        )}
+      />
+      <Drawer.Screen
+        name="correspondence_dashboard"
+        options={getDrawerOptions(
+          "แดชบอร์ด/ลงรับ สารบรรณ",
+          "documents",
+          "dashboard_correspondence.php",
+        )}
+      />
+      <Drawer.Screen
+        name="correspondence_book"
+        options={getDrawerOptions(
+          "สมุดทะเบียนหนังสือ",
+          "book",
+          "correspondence_book.php",
         )}
       />
       {/* หน้าที่ซ่อน */}

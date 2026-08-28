@@ -219,12 +219,17 @@ const formatJustDateThai = (dateStr: string) => {
 const cleanNoteText = (rawNote: string) => {
   if (!rawNote || rawNote === "-" || rawNote === "") return "-";
   let temp = rawNote;
-  temp = temp.replace(/จอดที่:.*?(?=\s*(?:พลังงาน|ปัญหา|หมายเหตุ|$))/gi, "");
-  temp = temp.replace(/\|?\s*พลังงาน(คงเหลือ)?\s*:\s*[^\s]+/gi, "");
+  // ลบ emoji ที่ใช้นำหน้าแต่ละส่วน (📍 🔋 ⚡ ⚠️) ออกก่อน
+  // เพื่อให้ regex ด้านล่างจับได้ทั้งฟอร์แมตของเว็บและของแอป
+  temp = temp.replace(/[\u{1F4CD}\u{1F50B}\u{26A1}\u{26A0}\u{FE0F}]/gu, "");
+  temp = temp.replace(
+    /จอดที่\s*:.*?(?=\s*(?:\||พลังงาน|ปัญหา|หมายเหตุ|$))/gi,
+    "",
+  );
+  temp = temp.replace(/\|?\s*พลังงาน(คงเหลือ)?\s*:\s*[^\s|]*/gi, "");
   temp = temp.replace(/\|?\s*เสียบชาร์จอยู่/gi, "");
-  temp = temp.replace(/⚠️ หมายเหตุ:/g, "");
-  temp = temp.replace(/(?:\||^)?\s*(?:ปัญหา|หมายเหตุ):/g, "");
-  temp = temp.replace(/\|/g, "").trim();
+  temp = temp.replace(/(?:\||^)?\s*(?:ปัญหา|หมายเหตุ)\s*:/gi, "");
+  temp = temp.replace(/\|/g, " ").replace(/\s+/g, " ").trim();
   return temp || "-";
 };
 
@@ -1309,7 +1314,8 @@ export default function CarDashboardScreen() {
             marginBottom: 10,
           }}
         >
-          <Text style={{ color: colors.textSub, fontSize: 12 }}>ผู้จอง</Text>
+          {/* fullname มาจาก user_id = ผู้ใช้รถจริง ไม่ใช่คนที่กดจอง */}
+          <Text style={{ color: colors.textSub, fontSize: 12 }}>ผู้ใช้รถ</Text>
           <Text
             style={{ color: colors.textMain, fontSize: 16, fontWeight: "bold" }}
           >
@@ -1331,6 +1337,42 @@ export default function CarDashboardScreen() {
                 : "ไม่ระบุเบอร์โทร"}
             </Text>
           </View>
+
+          {/* 👥 แสดงผู้จองแทนเฉพาะกรณีที่มี (จองเองจะไม่ขึ้น) */}
+          {!!selectedDetail.booked_by && !!selectedDetail.booker_name && (
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                alignSelf: "flex-start",
+                marginTop: 8,
+                paddingHorizontal: 8,
+                paddingVertical: 4,
+                borderRadius: 20,
+                borderWidth: 1,
+                borderColor: isDarkMode ? "#1e40af" : "#bfdbfe",
+                backgroundColor: isDarkMode
+                  ? "rgba(37, 99, 235, 0.15)"
+                  : "#eff6ff",
+              }}
+            >
+              <Ionicons
+                name="person-add"
+                size={12}
+                color={isDarkMode ? "#93c5fd" : "#1e40af"}
+                style={{ marginRight: 5 }}
+              />
+              <Text
+                style={{
+                  fontSize: 11,
+                  fontWeight: "bold",
+                  color: isDarkMode ? "#93c5fd" : "#1e40af",
+                }}
+              >
+                จองแทนโดย: {selectedDetail.booker_name}
+              </Text>
+            </View>
+          )}
         </View>
 
         <View
@@ -2383,15 +2425,20 @@ export default function CarDashboardScreen() {
         </TouchableOpacity>
       </Modal>
 
-      {/* ✅ Detail Modal */}
-      <Modal
-        transparent={true}
-        visible={detailModalVisible}
-        animationType="fade"
-        onRequestClose={() => setDetailModalVisible(false)}
-      >
-        <View style={styles.modalOverlay}>{renderDetailModal()}</View>
-      </Modal>
+      {/* ✅ Detail Modal — เปิดได้ 2 ทาง: จากรายการประวัติ และจากรายการในปฏิทิน
+          ⚠️ Android: <Modal> คือ native Dialog — Modal 2 ตัวที่เป็นพี่น้องกัน
+          ตัวที่เปิดทีหลังจะไม่ถูกยกขึ้นมาแสดงจนกว่าตัวแรกจะปิด (ดูเหมือนกดไม่ติด)
+          → ถ้าปฏิทินเปิดอยู่ ต้อง render ไว้ "ข้างใน" Modal ปฏิทิน */}
+      {!scheduleModalVisible && (
+        <Modal
+          transparent={true}
+          visible={detailModalVisible}
+          animationType="fade"
+          onRequestClose={() => setDetailModalVisible(false)}
+        >
+          <View style={styles.modalOverlay}>{renderDetailModal()}</View>
+        </Modal>
+      )}
 
       {/* ✅ Schedule Modal (Calendar) */}
       <Modal
@@ -2401,6 +2448,17 @@ export default function CarDashboardScreen() {
         onRequestClose={() => setScheduleModalVisible(false)}
       >
         {renderScheduleModal()}
+
+        {scheduleModalVisible && (
+          <Modal
+            transparent={true}
+            visible={detailModalVisible}
+            animationType="fade"
+            onRequestClose={() => setDetailModalVisible(false)}
+          >
+            <View style={styles.modalOverlay}>{renderDetailModal()}</View>
+          </Modal>
+        )}
       </Modal>
 
       {loading && (

@@ -51,6 +51,7 @@ export default function ManagerSales() {
     expense: 0,
     sales: 0,
     target: 0,
+    yearly_target: 0,
   });
   const [successKeyword, setSuccessKeyword] = useState("เซ็นสัญญา"); // ➕ เก็บคำว่าสถานะไหนคือได้งาน
   const [kpiList, setKpiList] = useState<any[]>([]);
@@ -76,16 +77,22 @@ export default function ManagerSales() {
     const stats: { [key: string]: any } = {};
 
     dataList.forEach((item) => {
-      const name = item.reporter_name;
+      // ➕ [ปรับแก้] เช็คว่าเป็นทีมประมูลหรือไม่ ถ้าใช่ให้ใช้ชื่อทีมแทนชื่อพนักงาน
+      const isBidding = item.team_type === "bidding";
+      const name =
+        isBidding && item.bidding_team_name
+          ? item.bidding_team_name
+          : item.reporter_name || "ไม่ระบุชื่อ";
+
       if (!stats[name]) {
         stats[name] = {
           name: name,
+          teamType: isBidding ? "bidding" : "marketing",
           totalReports: 0,
           totalProjectValue: 0,
           totalExpense: 0,
-          targetAmount: parseFloat(
-            String(item.target_amount || "0").replace(/,/g, ""),
-          ),
+          targetAmount: parseFloat(String(item.target_amount || "0").replace(/,/g, "")),
+          yearlyTargetAmount: parseFloat(String(item.yearly_target_amount || "0").replace(/,/g, "")), // ➕ เพิ่มบรรทัดนี้
           statusCounts: {},
         };
       }
@@ -197,6 +204,27 @@ export default function ManagerSales() {
     return str.split(/\r?\n/).map((s) => s.trim());
   };
 
+  // Helper 5: สกัดชื่อสมาชิกทีมจาก activity_detail
+  const extractTeamMembers = (
+    activityDetail: string,
+    customerName: string,
+  ): string[] => {
+    if (!activityDetail || !customerName) return [];
+    const lines = newlineSplit(activityDetail);
+    for (const line of lines) {
+      if (line.includes(customerName)) {
+        const match = line.match(/\[ทีม:\s*([^\]]+)\]/);
+        if (match) {
+          return match[1]
+            .split(",")
+            .map((m) => m.trim())
+            .filter(Boolean);
+        }
+      }
+    }
+    return [];
+  };
+
   const getStatusColor = (status: string) => {
     const s = (status || "").trim();
     if (s.includes("ไม่ได้") || s.includes("ยกเลิก") || s.includes("แพ้"))
@@ -275,13 +303,18 @@ export default function ManagerSales() {
           overrideStatus !== undefined ? overrideStatus : filterStatus;
 
         // ----------------------------------------------------
-        // 🟢 STEP 1: กรองข้อมูลตาม "พนักงาน"
+        // 🟢 STEP 1: กรองข้อมูลตาม "พนักงาน หรือ ชื่อทีมประมูล"
         // ----------------------------------------------------
         let filteredByReporter = rawList;
         if (targetReporter) {
-          filteredByReporter = filteredByReporter.filter(
-            (i: any) => i.reporter_name === targetReporter,
-          );
+          filteredByReporter = filteredByReporter.filter((i: any) => {
+            const isBidding = i.team_type === "bidding";
+            const recordName =
+              isBidding && i.bidding_team_name
+                ? i.bidding_team_name
+                : i.reporter_name;
+            return recordName === targetReporter;
+          });
         }
 
         // อัปเดต Status Breakdown (ใช้ข้อมูลที่กรองแค่พนักงาน เพื่อให้เห็นปุ่มสถานะอื่นๆ ให้กดสลับได้)
@@ -347,6 +380,7 @@ export default function ManagerSales() {
           expense: totalExpenseCalculated,
           sales: totalSalesCalculated,
           target: globalTarget,
+          yearly_target: response.data.summary.yearly_target || 0,
         });
 
         // นำข้อมูลไปแสดงในรายการตารางด้านล่างสุด
@@ -367,7 +401,7 @@ export default function ManagerSales() {
         `${API_BASE}/api_mobile.php?action=get_users`,
       );
       if (Array.isArray(res.data)) setReporters(res.data);
-    } catch (e) {}
+    } catch (e) { }
   };
 
   const fetchCustomerHistory = async (customerName: string) => {
@@ -512,19 +546,26 @@ export default function ManagerSales() {
   };
 
   const renderEmployeeCard = ({ item }: { item: any }) => {
+    const isBidding = item.teamType === "bidding";
+    const themeColor = isBidding ? "#7c3aed" : PRIMARY_COLOR;
+
     return (
       <TouchableOpacity
-        style={styles.empCard}
+        style={[styles.empCard, { borderLeftColor: themeColor }]}
         onPress={() => {
           setFilterReporter(item.name);
           setFilterStatus("");
           fetchData(item.name, "");
-          setEmpModalVisible(false); // ➕ สั่งปิด Popup ด้วย
+          setEmpModalVisible(false);
         }}
       >
         <View style={styles.empHeader}>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{item.name.charAt(0)}</Text>
+          <View style={[styles.avatar, { backgroundColor: themeColor }]}>
+            {isBidding ? (
+              <Ionicons name="people" size={20} color="#fff" />
+            ) : (
+              <Text style={styles.avatarText}>{item.name.charAt(0)}</Text>
+            )}
           </View>
           <View>
             <Text style={styles.empName}>{item.name}</Text>
@@ -534,14 +575,23 @@ export default function ManagerSales() {
           </View>
         </View>
 
-        {/* ➕ [เพิ่มใหม่] ส่วนแสดงเป้าหมายและ Progress Bar */}
+        {/* ส่วนแสดงเป้าหมายและ Progress Bar (รายเดือน และ รายปี) */}
         {(() => {
           const target = item.targetAmount || 0;
+          const yearlyTarget = item.yearlyTargetAmount || 0; // รับมาจาก API
           const actual = item.totalProjectValue;
+
+          // คำนวณรายเดือน
           const percent = target > 0 ? (actual / target) * 100 : 0;
           const percentCap = Math.min(percent, 100);
           const diff = actual - target;
           const barColor = percent >= 100 ? SUCCESS_COLOR : WARNING_COLOR;
+
+          // คำนวณรายปี
+          const yPercent = yearlyTarget > 0 ? (actual / yearlyTarget) * 100 : 0;
+          const yPercentCap = Math.min(yPercent, 100);
+          const yDiff = actual - yearlyTarget;
+          const yBarColor = yPercent >= 100 ? SUCCESS_COLOR : "#0284c7"; // สีฟ้า
 
           return (
             <View
@@ -555,69 +605,41 @@ export default function ManagerSales() {
                 borderStyle: "dashed",
               }}
             >
-              <View
-                style={{
-                  flexDirection: "row",
-                  justifyContent: "space-between",
-                  marginBottom: 5,
-                }}
-              >
-                <Text
-                  style={{ fontSize: 11, color: "#64748b", fontWeight: "bold" }}
-                >
-                  🏁 เป้า: {target > 0 ? target.toLocaleString() : "-"}
+              {/* 1. รายเดือน */}
+              <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 5 }}>
+                <Text style={{ fontSize: 11, color: "#64748b", fontWeight: "bold" }}>
+                  📅 เป้าเดือน: {target > 0 ? target.toLocaleString() : "-"}
                 </Text>
-                <Text
-                  style={{ fontSize: 11, color: "#334155", fontWeight: "900" }}
-                >
-                  {percent.toFixed(1)}%
-                </Text>
+                <Text style={{ fontSize: 11, color: "#334155", fontWeight: "900" }}>{percent.toFixed(1)}%</Text>
+              </View>
+              <View style={{ height: 6, backgroundColor: "#e2e8f0", borderRadius: 3, overflow: "hidden", marginBottom: 6 }}>
+                <View style={{ width: `${percentCap}%`, height: "100%", backgroundColor: barColor, borderRadius: 3 }} />
+              </View>
+              <View style={{ alignItems: "flex-end", marginBottom: 10 }}>
+                {diff >= 0 ? (
+                  <Text style={{ fontSize: 10, color: SUCCESS_COLOR, fontWeight: "bold" }}>▲ เกินเป้า: {diff.toLocaleString()}</Text>
+                ) : (
+                  <Text style={{ fontSize: 10, color: DANGER_COLOR, fontWeight: "bold" }}>▼ ขาดอีก: {Math.abs(diff).toLocaleString()}</Text>
+                )}
               </View>
 
-              <View
-                style={{
-                  height: 6,
-                  backgroundColor: "#e2e8f0",
-                  borderRadius: 3,
-                  overflow: "hidden",
-                  marginBottom: 6,
-                }}
-              >
-                <View
-                  style={{
-                    width: `${percentCap}%`,
-                    height: "100%",
-                    backgroundColor: barColor,
-                    borderRadius: 3,
-                  }}
-                />
+              {/* 2. รายปี */}
+              <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 5 }}>
+                <Text style={{ fontSize: 11, color: "#64748b", fontWeight: "bold" }}>
+                  🏆 เป้ารายปี: {yearlyTarget > 0 ? yearlyTarget.toLocaleString() : "-"}
+                </Text>
+                <Text style={{ fontSize: 11, color: "#334155", fontWeight: "900" }}>{yPercent.toFixed(1)}%</Text>
               </View>
-
-              {target > 0 && (
-                <View style={{ alignItems: "flex-end" }}>
-                  {diff >= 0 ? (
-                    <Text
-                      style={{
-                        fontSize: 10,
-                        color: SUCCESS_COLOR,
-                        fontWeight: "bold",
-                      }}
-                    >
-                      ▲ เกินเป้า: {diff.toLocaleString()}
-                    </Text>
-                  ) : (
-                    <Text
-                      style={{
-                        fontSize: 10,
-                        color: DANGER_COLOR,
-                        fontWeight: "bold",
-                      }}
-                    >
-                      ▼ ขาดอีก: {Math.abs(diff).toLocaleString()}
-                    </Text>
-                  )}
-                </View>
-              )}
+              <View style={{ height: 6, backgroundColor: "#e0f2fe", borderRadius: 3, overflow: "hidden", marginBottom: 6 }}>
+                <View style={{ width: `${yPercentCap}%`, height: "100%", backgroundColor: yBarColor, borderRadius: 3 }} />
+              </View>
+              <View style={{ alignItems: "flex-end" }}>
+                {yDiff >= 0 ? (
+                  <Text style={{ fontSize: 10, color: SUCCESS_COLOR, fontWeight: "bold" }}>▲ เกินเป้า: {yDiff.toLocaleString()}</Text>
+                ) : (
+                  <Text style={{ fontSize: 10, color: DANGER_COLOR, fontWeight: "bold" }}>▼ ขาดอีก: {Math.abs(yDiff).toLocaleString()}</Text>
+                )}
+              </View>
             </View>
           );
         })()}
@@ -625,19 +647,13 @@ export default function ManagerSales() {
         <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
           <View style={[styles.moneyBox, { backgroundColor: "#eff6ff" }]}>
             <Text style={{ fontSize: 10, color: INFO_COLOR }}>ยอดขายทำได้</Text>
-            <Text
-              style={{ fontSize: 13, fontWeight: "bold", color: "#1d4ed8" }}
-              numberOfLines={1}
-            >
+            <Text style={{ fontSize: 13, fontWeight: "bold", color: "#1d4ed8" }} numberOfLines={1}>
               ฿{item.totalProjectValue.toLocaleString()}
             </Text>
           </View>
           <View style={[styles.moneyBox, { backgroundColor: "#fef2f2" }]}>
             <Text style={{ fontSize: 10, color: "#991b1b" }}>รวมเบิกจ่าย</Text>
-            <Text
-              style={{ fontSize: 13, fontWeight: "bold", color: "#b91c1c" }}
-              numberOfLines={1}
-            >
+            <Text style={{ fontSize: 13, fontWeight: "bold", color: "#b91c1c" }} numberOfLines={1}>
               ฿{item.totalExpense.toLocaleString()}
             </Text>
           </View>
@@ -1089,7 +1105,7 @@ export default function ManagerSales() {
             ]}
           >
             <Text style={[styles.kpiLabel, { color: "#8b5cf6" }]}>
-              ยอดขาย vs เป้าหมาย
+              ยอดขาย vs เป้ารายเดือน
             </Text>
             <View style={{ flexDirection: "row", alignItems: "baseline" }}>
               <Text
@@ -1137,6 +1153,72 @@ export default function ManagerSales() {
                     }}
                   >
                     {gPercent.toFixed(1)}%
+                  </Text>
+                </View>
+              );
+            })()}
+          </View>
+
+          <View
+            style={[
+              styles.kpiCard,
+              { borderLeftColor: "#0284c7", minWidth: 180 },
+            ]}
+          >
+            <Text style={[styles.kpiLabel, { color: "#0284c7" }]}>
+              ยอดขาย vs เป้ารายปี
+            </Text>
+            <View style={{ flexDirection: "row", alignItems: "baseline" }}>
+              <Text
+                style={[styles.kpiValue, { color: "#1e293b" }]}
+                numberOfLines={1}
+              >
+                ฿{parseFloat(summary.sales.toString()).toLocaleString()}
+              </Text>
+              <Text style={{ fontSize: 10, color: "#64748b", marginLeft: 4 }}>
+                /{" "}
+                {summary.yearly_target > 0
+                  ? summary.yearly_target.toLocaleString()
+                  : "-"}
+              </Text>
+            </View>
+
+            {(() => {
+              const gyPercent =
+                summary.yearly_target > 0
+                  ? (summary.sales / summary.yearly_target) * 100
+                  : 0;
+              const gyCap = Math.min(gyPercent, 100);
+              const gyColor = gyPercent >= 100 ? SUCCESS_COLOR : "#0284c7";
+              return (
+                <View style={{ marginTop: 5 }}>
+                  <View
+                    style={{
+                      height: 4,
+                      backgroundColor: "#e0f2fe",
+                      borderRadius: 2,
+                      overflow: "hidden",
+                    }}
+                  >
+                    <View
+                      style={{
+                        width: `${gyCap}%`,
+                        height: "100%",
+                        backgroundColor: gyColor,
+                        borderRadius: 2,
+                      }}
+                    />
+                  </View>
+                  <Text
+                    style={{
+                      textAlign: "right",
+                      fontSize: 10,
+                      color: gyColor,
+                      fontWeight: "bold",
+                      marginTop: 2,
+                    }}
+                  >
+                    {gyPercent.toFixed(1)}%
                   </Text>
                 </View>
               );
@@ -1403,24 +1485,70 @@ export default function ManagerSales() {
                     let note = notes[i] || "";
                     note = note.replace(/^\(.*\):\s*/, "").trim();
 
-                    validJobs.push({ cus, proj, stat, appt, sum, note });
+                    const members = extractTeamMembers(
+                      selectedItem.activity_detail,
+                      cus,
+                    );
+                    validJobs.push({
+                      cus,
+                      proj,
+                      stat,
+                      appt,
+                      sum,
+                      note,
+                      members,
+                    });
                   }
 
                   return (
                     <>
-                      <View style={styles.detailRow}>
-                        <Text style={styles.detailLabel}>ผู้รายงาน:</Text>
-                        <Text style={styles.detailValue}>
-                          {selectedItem.reporter_name}
-                        </Text>
-                      </View>
-                      <View style={styles.detailRow}>
-                        <Text style={styles.detailLabel}>วันที่:</Text>
-                        <Text style={styles.detailValue}>
-                          {new Date(
-                            selectedItem.report_date,
-                          ).toLocaleDateString("th-TH")}
-                        </Text>
+                      {/* Meta chips */}
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          gap: 8,
+                          marginBottom: 14,
+                          flexWrap: "wrap",
+                        }}
+                      >
+                        <View style={styles.metaChip}>
+                          <Ionicons
+                            name="person-outline"
+                            size={14}
+                            color="#64748b"
+                          />
+                          <Text style={styles.metaChipText}>
+                            {selectedItem.reporter_name}
+                          </Text>
+                        </View>
+                        <View style={styles.metaChip}>
+                          <Ionicons
+                            name="calendar-outline"
+                            size={14}
+                            color="#64748b"
+                          />
+                          <Text style={styles.metaChipText}>
+                            {new Date(
+                              selectedItem.report_date,
+                            ).toLocaleDateString("th-TH")}
+                          </Text>
+                        </View>
+                        <View style={styles.metaChip}>
+                          <Ionicons
+                            name={
+                              selectedItem.gps === "Office"
+                                ? "business-outline"
+                                : "car-outline"
+                            }
+                            size={14}
+                            color="#64748b"
+                          />
+                          <Text style={styles.metaChipText}>
+                            {selectedItem.gps === "Office"
+                              ? "ออฟฟิศ"
+                              : "นอกสถานที่"}
+                          </Text>
+                        </View>
                       </View>
 
                       <Text
@@ -1435,85 +1563,129 @@ export default function ManagerSales() {
                         const displayValue = pjValue
                           ? parseCurrency(pjValue).toLocaleString() + " ฿"
                           : "-";
-
                         return (
-                          <View
-                            key={i}
-                            style={{
-                              backgroundColor: "#f8fafc",
-                              padding: 15,
-                              borderRadius: 12,
-                              marginBottom: 12,
-                              borderWidth: 1,
-                              borderColor: "#e2e8f0",
-                            }}
-                          >
-                            <Text style={styles.detailLabel}>
-                              ลูกค้า / หน่วยงาน
-                            </Text>
+                          <View key={i} style={styles.jobDetailCard}>
+                            {/* ชื่อลูกค้า */}
                             <TouchableOpacity
                               onPress={() => fetchCustomerHistory(job.cus)}
+                              style={{
+                                flexDirection: "row",
+                                alignItems: "center",
+                                gap: 6,
+                                marginBottom: job.members?.length > 0 ? 6 : 10,
+                              }}
                             >
+                              <Ionicons
+                                name="business"
+                                size={15}
+                                color={PRIMARY_COLOR}
+                              />
                               <Text
                                 style={{
-                                  fontWeight: "bold",
-                                  color: PRIMARY_COLOR,
                                   fontSize: 15,
-                                  marginBottom: 8,
+                                  fontWeight: "600",
+                                  color: PRIMARY_COLOR,
                                 }}
                               >
                                 {job.cus}
                               </Text>
                             </TouchableOpacity>
 
+                            {/* ผู้ร่วมทีมประมูล */}
+                            {job.members?.length > 0 && (
+                              <View
+                                style={{
+                                  flexDirection: "row",
+                                  flexWrap: "wrap",
+                                  gap: 6,
+                                  marginBottom: 10,
+                                  paddingLeft: 2,
+                                }}
+                              >
+                                <Ionicons
+                                  name="people-outline"
+                                  size={13}
+                                  color="#7c3aed"
+                                  style={{ marginTop: 2 }}
+                                />
+                                {job.members.map(
+                                  (member: string, idx: number) => (
+                                    <View
+                                      key={idx}
+                                      style={{
+                                        flexDirection: "row",
+                                        alignItems: "center",
+                                        backgroundColor: "#f5f3ff",
+                                        borderRadius: 6,
+                                        paddingHorizontal: 8,
+                                        paddingVertical: 3,
+                                        borderWidth: 0.5,
+                                        borderColor: "#ddd6fe",
+                                      }}
+                                    >
+                                      <Text
+                                        style={{
+                                          fontSize: 11,
+                                          color: "#7c3aed",
+                                          fontWeight: "500",
+                                        }}
+                                      >
+                                        {member}
+                                      </Text>
+                                    </View>
+                                  ),
+                                )}
+                              </View>
+                            )}
+
+                            {/* Grid 2 คอลัมน์ */}
                             <View
                               style={{
                                 flexDirection: "row",
-                                justifyContent: "space-between",
+                                gap: 10,
                                 marginBottom: 8,
                               }}
                             >
-                              <View style={{ flex: 1, paddingRight: 5 }}>
+                              <View style={{ flex: 1 }}>
                                 <Text style={styles.detailLabel}>
                                   ชื่อโครงการ
                                 </Text>
                                 <Text style={styles.detailValue}>{pjName}</Text>
                               </View>
-                              <View style={{ flex: 0.7 }}>
+                              <View style={{ flex: 1 }}>
                                 <Text style={styles.detailLabel}>
                                   มูลค่าโครงการ
                                 </Text>
                                 <Text
                                   style={{
-                                    color: SUCCESS_COLOR,
-                                    fontWeight: "bold",
                                     fontSize: 13,
+                                    fontWeight: "600",
+                                    color: pjValue ? SUCCESS_COLOR : "#ccc",
                                   }}
                                 >
                                   {displayValue}
                                 </Text>
                               </View>
                             </View>
-
                             <View
                               style={{
                                 flexDirection: "row",
-                                justifyContent: "space-between",
-                                marginBottom: 8,
+                                gap: 10,
+                                marginBottom: 6,
                               }}
                             >
                               <View style={{ flex: 1 }}>
                                 <Text style={styles.detailLabel}>สถานะงาน</Text>
                                 <View
-                                  style={{
-                                    alignSelf: "flex-start",
-                                    paddingHorizontal: 8,
-                                    paddingVertical: 3,
-                                    borderRadius: 6,
-                                    backgroundColor: stColor + "15",
-                                    borderWidth: 1,
-                                    borderColor: stColor,
-                                  }}
+                                  style={[
+                                    styles.statusBadgeSmall,
+                                    {
+                                      borderColor: stColor,
+                                      backgroundColor: stColor + "18",
+                                      alignSelf: "flex-start",
+                                      marginTop: 2,
+                                    },
+                                  ]}
                                 >
                                   <Text
                                     style={{
@@ -1528,67 +1700,51 @@ export default function ManagerSales() {
                               </View>
                               <View style={{ flex: 1 }}>
                                 <Text style={styles.detailLabel}>
-                                  นัดหมายครั้งถัดไป
+                                  นัดหมายถัดไป
                                 </Text>
                                 <Text style={styles.detailValue}>
-                                  <Ionicons name="calendar" size={12} />{" "}
                                   {job.appt}
                                 </Text>
                               </View>
                             </View>
 
+                            {/* สรุปการเข้าพบ */}
                             {job.sum !== "" && (
-                              <View
-                                style={{
-                                  marginTop: 5,
-                                  padding: 10,
-                                  backgroundColor: "#eff6ff",
-                                  borderRadius: 8,
-                                  borderLeftWidth: 3,
-                                  borderLeftColor: INFO_COLOR,
-                                }}
-                              >
-                                <Text
-                                  style={{
-                                    fontSize: 11,
-                                    color: INFO_COLOR,
-                                    fontWeight: "bold",
-                                    marginBottom: 2,
-                                  }}
-                                >
+                              <View style={styles.noteBlue}>
+                                <Text style={styles.noteLabelBlue}>
                                   สรุปการเข้าพบ
                                 </Text>
-                                <Text
-                                  style={{ fontSize: 12, color: "#334155" }}
-                                >
+                                <Text style={styles.noteTextBlue}>
                                   {job.sum}
                                 </Text>
                               </View>
                             )}
 
+                            {/* บันทึกเพิ่มเติม */}
                             {job.note !== "" && (
                               <View
-                                style={{
-                                  marginTop: 8,
-                                  padding: 10,
-                                  backgroundColor: "#fff7ed",
-                                  borderRadius: 8,
-                                  borderLeftWidth: 3,
-                                  borderLeftColor: "#f97316",
-                                }}
+                                style={[
+                                  styles.noteBlue,
+                                  {
+                                    borderLeftColor: "#f97316",
+                                    backgroundColor: "#fff7ed",
+                                    marginTop: 6,
+                                  },
+                                ]}
                               >
                                 <Text
-                                  style={{
-                                    fontSize: 11,
-                                    color: "#c2410c",
-                                    fontWeight: "bold",
-                                    marginBottom: 2,
-                                  }}
+                                  style={[
+                                    styles.noteLabelBlue,
+                                    { color: "#c2410c" },
+                                  ]}
                                 >
                                   บันทึกเพิ่มเติม
                                 </Text>
                                 <Text
-                                  style={{ fontSize: 12, color: "#7c2d12" }}
+                                  style={[
+                                    styles.noteTextBlue,
+                                    { color: "#7c2d12" },
+                                  ]}
                                 >
                                   {job.note}
                                 </Text>
@@ -1599,64 +1755,79 @@ export default function ManagerSales() {
                       })}
 
                       <View style={styles.divider} />
-                      <Text style={styles.detailSectionTitle}>
-                        💸 รายละเอียดค่าใช้จ่าย
-                      </Text>
-                      <View style={styles.costGrid}>
-                        <View style={styles.costBox}>
-                          <Text style={styles.costLabel}>น้ำมัน</Text>
-                          <Text style={styles.costNum}>
-                            {parseFloat(
-                              selectedItem.fuel_cost || 0,
-                            ).toLocaleString()}
-                          </Text>
-                        </View>
-                        <View style={styles.costBox}>
-                          <Text style={styles.costLabel}>ที่พัก</Text>
-                          <Text style={styles.costNum}>
-                            {parseFloat(
-                              selectedItem.accommodation_cost || 0,
-                            ).toLocaleString()}
-                          </Text>
-                        </View>
-                        <View style={styles.costBox}>
-                          <Text style={styles.costLabel}>
-                            อื่นๆ ({selectedItem.other_cost_detail || "-"})
-                          </Text>
-                          <Text style={styles.costNum}>
-                            {parseFloat(
-                              selectedItem.other_cost || 0,
-                            ).toLocaleString()}
-                          </Text>
-                        </View>
-                      </View>
-                      <View
-                        style={{
-                          marginTop: 5,
-                          paddingTop: 5,
-                          borderTopWidth: 1,
-                          borderColor: "#eee",
-                          flexDirection: "row",
-                          justifyContent: "space-between",
-                        }}
-                      >
-                        <Text
-                          style={{ fontWeight: "bold", color: PRIMARY_COLOR }}
+                      <View style={styles.expenseCard}>
+                        {[
+                          {
+                            label: "น้ำมัน",
+                            icon: "flame-outline",
+                            val: selectedItem.fuel_cost,
+                          },
+                          {
+                            label: "ที่พัก",
+                            icon: "bed-outline",
+                            val: selectedItem.accommodation_cost,
+                          },
+                          {
+                            label: `อื่นๆ (${selectedItem.other_cost_detail || "-"})`,
+                            icon: "receipt-outline",
+                            val: selectedItem.other_cost,
+                          },
+                        ].map((row, i) => (
+                          <View key={i} style={styles.expenseRow}>
+                            <View
+                              style={{
+                                flexDirection: "row",
+                                alignItems: "center",
+                                gap: 8,
+                              }}
+                            >
+                              <Ionicons
+                                name={row.icon as any}
+                                size={16}
+                                color="#64748b"
+                              />
+                              <Text style={{ fontSize: 13, color: "#64748b" }}>
+                                {row.label}
+                              </Text>
+                            </View>
+                            <Text
+                              style={{
+                                fontSize: 13,
+                                fontWeight: "500",
+                                color: "#333",
+                              }}
+                            >
+                              {parseFloat(row.val || 0).toLocaleString()} ฿
+                            </Text>
+                          </View>
+                        ))}
+                        <View
+                          style={[
+                            styles.expenseRow,
+                            {
+                              borderTopWidth: 0.5,
+                              borderColor: "#e2e8f0",
+                              marginTop: 4,
+                              paddingTop: 8,
+                            },
+                          ]}
                         >
-                          รวมสุทธิ
-                        </Text>
-                        <Text
-                          style={{
-                            fontWeight: "bold",
-                            color: DANGER_COLOR,
-                            fontSize: 14,
-                          }}
-                        >
-                          {parseFloat(
-                            selectedItem.total_expense,
-                          ).toLocaleString()}{" "}
-                          ฿
-                        </Text>
+                          <Text style={{ fontWeight: "600", color: "#333" }}>
+                            รวมสุทธิ
+                          </Text>
+                          <Text
+                            style={{
+                              fontWeight: "700",
+                              fontSize: 15,
+                              color: DANGER_COLOR,
+                            }}
+                          >
+                            {parseFloat(
+                              selectedItem.total_expense,
+                            ).toLocaleString()}{" "}
+                            ฿
+                          </Text>
+                        </View>
                       </View>
 
                       <Text
@@ -1890,12 +2061,12 @@ export default function ManagerSales() {
                   <Text style={{ fontSize: 16, color: "#333" }}>{item}</Text>
                   {(filterReporter === item ||
                     (item === "ทั้งหมด" && !filterReporter)) && (
-                    <Ionicons
-                      name="checkmark"
-                      size={20}
-                      color={PRIMARY_COLOR}
-                    />
-                  )}
+                      <Ionicons
+                        name="checkmark"
+                        size={20}
+                        color={PRIMARY_COLOR}
+                      />
+                    )}
                 </TouchableOpacity>
               )}
             />
@@ -1918,12 +2089,56 @@ export default function ManagerSales() {
                 <Ionicons name="close-circle" size={28} color="#999" />
               </TouchableOpacity>
             </View>
-            <FlatList
-              data={employeeStats}
-              keyExtractor={(item, index) => index.toString()}
-              renderItem={renderEmployeeCard}
-              contentContainerStyle={{ padding: 20, paddingTop: 10 }}
-            />
+
+            <ScrollView contentContainerStyle={{ padding: 20, paddingTop: 10 }}>
+              {/* ➕ [ปรับแก้] แยกกลุ่มทีมประมูล (สีม่วง) และ ทีมการตลาด (สีน้ำเงิน) แบบหน้าเว็บ */}
+
+              {employeeStats.filter((e) => e.teamType === "bidding").length >
+                0 && (
+                  <View style={{ marginBottom: 15 }}>
+                    <Text
+                      style={{
+                        fontSize: 16,
+                        fontWeight: "bold",
+                        color: "#7c3aed",
+                        marginBottom: 10,
+                      }}
+                    >
+                      <Ionicons name="people" size={16} /> ทีมประมูล
+                    </Text>
+                    {employeeStats
+                      .filter((e) => e.teamType === "bidding")
+                      .map((emp, index) => (
+                        <View key={`bid-${index}`}>
+                          {renderEmployeeCard({ item: emp })}
+                        </View>
+                      ))}
+                  </View>
+                )}
+
+              {employeeStats.filter((e) => e.teamType !== "bidding").length >
+                0 && (
+                  <View style={{ marginBottom: 15 }}>
+                    <Text
+                      style={{
+                        fontSize: 16,
+                        fontWeight: "bold",
+                        color: PRIMARY_COLOR,
+                        marginBottom: 10,
+                      }}
+                    >
+                      <Ionicons name="person" size={16} /> ทีมการตลาด (รายบุคคล)
+                    </Text>
+                    {employeeStats
+                      .filter((e) => e.teamType !== "bidding")
+                      .map((emp, index) => (
+                        <View key={`mkt-${index}`}>
+                          {renderEmployeeCard({ item: emp })}
+                        </View>
+                      ))}
+                  </View>
+                )}
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -2368,4 +2583,54 @@ const styles = StyleSheet.create({
     borderColor: "#eff6ff",
   },
   avatarMicroText: { color: "#fff", fontSize: 12, fontWeight: "bold" },
+  metaChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: "#f1f5f9",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderWidth: 0.5,
+    borderColor: "#e2e8f0",
+  },
+  metaChipText: { fontSize: 12, color: "#334155" },
+  jobDetailCard: {
+    backgroundColor: "#f8fafc",
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
+    borderWidth: 0.5,
+    borderColor: "#e2e8f0",
+  },
+  noteBlue: {
+    borderLeftWidth: 2,
+    borderLeftColor: "#85B7EB",
+    backgroundColor: "#E6F1FB",
+    borderRadius: 6,
+    padding: 8,
+    marginTop: 8,
+  },
+  noteLabelBlue: {
+    fontSize: 10,
+    fontWeight: "bold",
+    color: "#185FA5",
+    marginBottom: 3,
+  },
+  noteTextBlue: { fontSize: 12, color: "#0C447C" },
+  expenseCard: {
+    backgroundColor: "#f8fafc",
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 0.5,
+    borderColor: "#e2e8f0",
+  },
+  expenseRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 6,
+    borderBottomWidth: 0.5,
+    borderColor: "#f1f5f9",
+  },
 });
