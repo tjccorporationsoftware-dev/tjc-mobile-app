@@ -61,8 +61,32 @@ export default function DriverConfirmItems() {
         setItems(fetchedItems);
 
         const initialStates: Record<string, any> = {};
+
+        // 🌟 1. เตรียมตัวแปรเพื่อเก็บรูปภาพเดิมแยกตามโปรเจกต์
+        const sImgs: Record<string, string[]> = {};
+        const dImgs: Record<string, string[]> = {};
+        const wImgs: Record<string, string[]> = {};
+        const wNotes: Record<string, string> = {};
+
         fetchedItems.forEach((item: any) => {
-          // 🌟 แกะข้อมูลเดิมมาใส่คืน (ถ้าเคยบันทึกแล้ว)
+          const pId = item.project_id || item.project_name || "ไม่ระบุโครงการ";
+
+          // 🌟 โหลดรูปภาพเดิมเข้า State (ดึงแค่จากไอเทมแรกก็พอเพราะเซฟเหมือนกันทั้งโปรเจกต์)
+          if (!sImgs[pId] && item.proof_image && item.proof_image !== "null") {
+            sImgs[pId] = item.proof_image.split(',').filter(Boolean).map((img: string) => getImageUri(img));
+          }
+          if (!dImgs[pId] && item.damaged_image && item.damaged_image !== "null") {
+            dImgs[pId] = item.damaged_image.split(',').filter(Boolean).map((img: string) => getImageUri(img));
+          }
+          if (!wImgs[pId] && item.work_image && item.work_image !== "null") {
+            wImgs[pId] = item.work_image.split(',').filter(Boolean).map((img: string) => getImageUri(img));
+          }
+          // โหลดหมายเหตุงานเพิ่มเติมเข้า State
+          if (!wNotes[pId] && item.work_note) {
+            wNotes[pId] = item.work_note;
+          }
+
+          // 🌟 แกะข้อมูลเดิมมาใส่คืน
           let rType = "warehouse";
           let rShop = "";
           let cleanNote = item.driver_note || "";
@@ -77,6 +101,9 @@ export default function DriverConfirmItems() {
           } else if (cleanNote.startsWith('[ส่งกลับคลัง]')) {
             cleanNote = cleanNote.replace(/\[ส่งกลับคลัง\]\s*/, '');
           }
+
+          // ดึงชื่อคนแก้ไขตรงๆ จากฐานข้อมูลเลย
+          let editedByStr = item.edited_by || "";
 
           const isSaved = item.delivery_status && item.delivery_status !== "กำลังจัดส่ง";
           let aQty = "";
@@ -99,9 +126,17 @@ export default function DriverConfirmItems() {
             returnType: rType,
             repairShop: rShop,
             note: cleanNote.trim(),
+            editedBy: editedByStr,
           };
         });
+
         setItemStates(initialStates);
+
+        // 🌟 2. เซ็ตค่ารูปภาพและงานเพิ่มเติมลง State หลัก
+        setProjectSuccessImages(sImgs);
+        setProjectDmgImages(dImgs);
+        setProjectWorkImages(wImgs);
+        setProjectWorkNotes(wNotes);
       })
       .catch((err) => {
         Alert.alert("ข้อผิดพลาด", "ไม่สามารถโหลดข้อมูลได้");
@@ -257,6 +292,54 @@ export default function DriverConfirmItems() {
               formData.append("work_note", currentWorkNote);
               formData.append("custom_time", "");
 
+              // 🌟 แยกรูปเก่า (ที่โหลดมาจาก DB) กับรูปใหม่ (ที่เพิ่งถ่าย/เลือก)
+              const keptSuccess = currentSuccessImages.filter(uri => uri.startsWith('http'));
+              const newSuccess = currentSuccessImages.filter(uri => !uri.startsWith('http'));
+
+              const keptDmg = currentDmgImages.filter(uri => uri.startsWith('http'));
+              const newDmg = currentDmgImages.filter(uri => !uri.startsWith('http'));
+
+              const keptWork = currentWorkImages.filter(uri => uri.startsWith('http'));
+              const newWork = currentWorkImages.filter(uri => !uri.startsWith('http'));
+
+              // ส่ง "รูปเก่าที่ยังไม่ถูกลบ" กลับไปบอก API 
+              formData.append("kept_proof_images", JSON.stringify(keptSuccess));
+              formData.append("kept_damaged_images", JSON.stringify(keptDmg));
+              formData.append("kept_work_images", JSON.stringify(keptWork));
+
+              // 🌟 ดึงข้อมูล User เพื่อส่งไปบอก API ว่าใครเป็นคนบันทึก/แก้ไข
+              let currentFullName = "";
+              let currentRole = "staff";
+
+              try {
+                const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+
+                // 🛑 ดักจับ Key หลายๆ แบบ เผื่อตอน Login ตั้งชื่อตัวแปรไว้ต่างกัน
+                let userJson = await AsyncStorage.getItem("user");
+                if (!userJson) userJson = await AsyncStorage.getItem("user_data");
+                if (!userJson) userJson = await AsyncStorage.getItem("userInfo");
+
+                if (userJson) {
+                  const userObj = JSON.parse(userJson);
+                  currentRole = userObj.role || "staff";
+                  currentFullName = userObj.fullname || userObj.name || userObj.username || "";
+                }
+              } catch (e) {
+                console.log("Error loading user data from AsyncStorage:", e);
+              }
+
+              // 🚨 เช็คด่านสุดท้าย: ถ้าหาชื่อไม่เจอจริงๆ อย่าเพิ่งยิง API ให้แจ้งเตือนให้รู้ตัวก่อน
+              if (!currentFullName || currentFullName.trim() === "") {
+                Alert.alert(
+                  "ไม่พบข้อมูลผู้ใช้",
+                  "แอปไม่สามารถระบุตัวตนของคุณได้ กรุณาล็อกเอาท์แล้วล็อกอินเข้าแอปใหม่อีกครั้งครับ"
+                );
+                return; // หยุดการทำงาน ไม่ยิงไปหา API
+              }
+
+              formData.append("role", currentRole);
+              formData.append("fullname", currentFullName);
+
               const appendImages = (images: string[], fieldName: string) => {
                 images.forEach((uri, index) => {
                   const ext = uri.split(".").pop() || "jpg";
@@ -268,9 +351,10 @@ export default function DriverConfirmItems() {
                 });
               };
 
-              appendImages(currentSuccessImages, "proof_image[]");
-              appendImages(currentDmgImages, "damaged_image_group[]");
-              appendImages(currentWorkImages, "work_image_group[]");
+              // 🌟 3. อัปโหลดเฉพาะ "รูปใหม่" ส่งไปเป็นไฟล์จริงๆ
+              appendImages(newSuccess, "proof_image[]");
+              appendImages(newDmg, "damaged_image_group[]");
+              appendImages(newWork, "work_image_group[]");
 
               const response = await fetch(`${API_BASE}/api_mobile.php?action=update_project_items`, {
                 method: "POST",
@@ -292,7 +376,7 @@ export default function DriverConfirmItems() {
                   {
                     text: "ตกลง",
                     onPress: () => {
-                      // 🌟 ปิดโหมดแก้ไข
+                      // ปิดโหมดแก้ไข
                       setEditingProjects(prev => ({ ...prev, [projectId]: false }));
 
                       // เคลียร์ค่าที่เลือกไว้เฉพาะโปรเจคนี้ เพื่อเตรียมอัปเดตหน้าจอ
@@ -655,16 +739,28 @@ export default function DriverConfirmItems() {
                         )}
 
                         {/* Notes Section */}
-                        {(project.items.some((it: any) => it.note || it.repair_shop) || project.items[0]?.work_note) && (
+                        {(project.items.some((it: any) => it.note || it.repair_shop || itemStates[it.id]?.editedBy) || project.items[0]?.work_note) && (
                           <View style={{ marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: "#f1f5f9" }}>
                             <Text style={{ fontSize: 15, fontWeight: "700", color: "#1e293b", marginBottom: 8 }}>หมายเหตุ & ข้อมูลเพิ่มเติม</Text>
                             {project.items.map((it: any, idx: number) => {
-                              if (!it.note && !it.repair_shop) return null;
+                              // 🌟 ดึงชื่อคนแก้ไขมาจาก State ที่เราสกัดไว้
+                              const editedBy = itemStates[it.id]?.editedBy;
+
+                              // เช็คว่าถ้าไม่มีอะไรเลยให้ข้าม แต่ถ้ามีชื่อคนแก้ให้แสดงด้วย
+                              if (!it.note && !it.repair_shop && !editedBy) return null;
+
                               return (
                                 <View key={idx} style={{ marginBottom: 6 }}>
                                   <Text style={{ fontSize: 14, fontWeight: "700", color: "#475569" }}>- {it.main_item_name}:</Text>
                                   {it.note ? <Text style={{ fontSize: 14, color: "#64748b", marginLeft: 12 }}>หมายเหตุ: {it.note}</Text> : null}
                                   {it.repair_shop ? <Text style={{ fontSize: 14, color: "#8b5cf6", marginLeft: 12 }}>ส่งซ่อมร้าน: {it.repair_shop}</Text> : null}
+
+                                  {/* 🌟 แสดงป้ายกำกับว่าใครเป็นคนเข้ามาแก้ไข */}
+                                  {editedBy ? (
+                                    <Text style={{ fontSize: 12, fontWeight: "700", color: "#8b5cf6", marginLeft: 12, marginTop: 4 }}>
+                                      <Wrench size={12} color="#8b5cf6" /> แก้ไขล่าสุดโดย: {editedBy}
+                                    </Text>
+                                  ) : null}
                                 </View>
                               );
                             })}

@@ -4,12 +4,20 @@ import DateTimePicker, {
 } from "@react-native-community/datetimepicker";
 import axios from "axios";
 import { useFocusEffect } from "expo-router";
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ActivityIndicator,
   Animated,
   Dimensions,
+  FlatList,
   Image,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -20,6 +28,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   View,
   useColorScheme,
 } from "react-native";
@@ -78,6 +87,31 @@ const DEFAULT_CAR_IMAGE =
   "https://cdn-icons-png.flaticon.com/512/3202/3202926.png";
 const { width } = Dimensions.get("window");
 
+// --- 👥 โหมด "จองให้ตัวเอง + คนอื่น" ---
+interface Employee {
+  id: number | string;
+  fullname: string;
+  phone: string | null;
+}
+
+// ข้อมูลที่กรอกแยกต่อรถ 1 คัน (ใช้เฉพาะโหมด group)
+interface CarEntry {
+  driverId: number | string | null;
+  driverName: string;
+  phone: string;
+  destination: string;
+  reason: string;
+  startDate: Date;
+  endDate: Date;
+}
+
+// ข้อความจาก createBooking() ฝั่ง PHP มี <br> ติดมา ต้องแปลงก่อนแสดงในแอป
+const stripHtml = (s: string) =>
+  (s || "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .trim();
+
 // --- 📅 Helper Functions ---
 const formatDateDisplay = (date: Date) => {
   const d = new Date(date);
@@ -118,12 +152,17 @@ const formatJustDateThai = (dateStr: string) => {
 const cleanNoteText = (rawNote: string) => {
   if (!rawNote || rawNote === "-" || rawNote === "") return "-";
   let temp = rawNote;
-  temp = temp.replace(/จอดที่:.*?(?=\s*(?:พลังงาน|ปัญหา|หมายเหตุ|$))/gi, "");
-  temp = temp.replace(/\|?\s*พลังงาน(คงเหลือ)?\s*:\s*[^\s]+/gi, "");
+  // ลบ emoji ที่ใช้นำหน้าแต่ละส่วน (📍 🔋 ⚡ ⚠️) ออกก่อน
+  // เพื่อให้ regex ด้านล่างจับได้ทั้งฟอร์แมตของเว็บและของแอป
+  temp = temp.replace(/[\u{1F4CD}\u{1F50B}\u{26A1}\u{26A0}\u{FE0F}]/gu, "");
+  temp = temp.replace(
+    /จอดที่\s*:.*?(?=\s*(?:\||พลังงาน|ปัญหา|หมายเหตุ|$))/gi,
+    "",
+  );
+  temp = temp.replace(/\|?\s*พลังงาน(คงเหลือ)?\s*:\s*[^\s|]*/gi, "");
   temp = temp.replace(/\|?\s*เสียบชาร์จอยู่/gi, "");
-  temp = temp.replace(/⚠️ หมายเหตุ:/g, "");
-  temp = temp.replace(/(?:\||^)?\s*(?:ปัญหา|หมายเหตุ):/g, "");
-  temp = temp.replace(/\|/g, "").trim();
+  temp = temp.replace(/(?:\||^)?\s*(?:ปัญหา|หมายเหตุ)\s*:/gi, "");
+  temp = temp.replace(/\|/g, " ").replace(/\s+/g, " ").trim();
   return temp || "-";
 };
 
@@ -260,17 +299,24 @@ const CustomAlertModal = ({
           >
             {title}
           </Text>
-          <Text
-            style={{
-              fontSize: 15,
-              color: themeColors.subText,
-              textAlign: "center",
-              marginBottom: 25,
-              lineHeight: 22,
-            }}
+          {/* ScrollView ครอบไว้ เพราะสรุปผลจองแบบกลุ่มอาจยาวหลายบรรทัด */}
+          <ScrollView
+            style={{ maxHeight: 260, width: "100%" }}
+            contentContainerStyle={{ paddingBottom: 5 }}
+            showsVerticalScrollIndicator={false}
           >
-            {message}
-          </Text>
+            <Text
+              style={{
+                fontSize: 15,
+                color: themeColors.subText,
+                textAlign: "center",
+                marginBottom: 25,
+                lineHeight: 22,
+              }}
+            >
+              {message}
+            </Text>
+          </ScrollView>
           <View style={{ flexDirection: "row", gap: 10, width: "100%" }}>
             {showCancel && (
               <TouchableOpacity
@@ -362,15 +408,38 @@ export default function CarBookingScreen() {
   const [detailModalVisible, setDetailModalVisible] = useState(false);
   const [selectedDetail, setSelectedDetail] = useState<any>(null);
 
-  // Date Picker Config
+  // Date Picker Config (carId มีค่าเมื่อเป็นการเลือกวัน-เวลาของรถรายคันในโหมด group)
   const [pickerConfig, setPickerConfig] = useState<{
     mode: "date" | "time";
     target: "start" | "end";
+    carId?: number | null;
   } | null>(null);
+
+  // 👥 โหมดจองให้ตัวเอง + คนอื่น
+  const [canBookForOthers, setCanBookForOthers] = useState(false);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [bookingMode, setBookingMode] = useState<"self" | "group">("self");
+  const [carEntries, setCarEntries] = useState<Record<number, CarEntry>>({});
+  const [driverPickerCarId, setDriverPickerCarId] = useState<number | null>(
+    null,
+  );
+  const [driverSearch, setDriverSearch] = useState("");
 
   const isDark = colorScheme === "dark";
   const themeColors = isDark ? DarkColors : LightColors;
   const themeStyles = useMemo(() => getStyles(isDark), [isDark]);
+
+  // ข้อมูลการจองบาง response ไม่มี car_type จึงต้องหา type จากรายการรถด้วย car_id
+  const returnCarType =
+    returnBookingData?.car_type ??
+    returnBookingData?.type ??
+    cars.find(
+      (car) => String(car.id) === String(returnBookingData?.car_id ?? ""),
+    )?.type;
+  const isReturnCarEV =
+    String(returnCarType ?? "")
+      .trim()
+      .toUpperCase() === "EV";
 
   // 🔥 Memoized Calendar Theme (เพื่อความสมูทในการเปลี่ยนเดือน และจัดตัวเลข)
   const calendarTheme = useMemo(() => {
@@ -422,10 +491,16 @@ export default function CarBookingScreen() {
   }, [themeColors]);
 
   // Validate Logic
-  const validateBookingConflict = (selectedCar: any) => {
+  // from/to เป็น optional เพื่อให้โหมด group ส่งช่วงเวลาของรถรายคันเข้ามาได้
+  // (โหมด self เรียกแบบเดิมได้เพราะมี default parameter)
+  const validateBookingConflict = (
+    selectedCar: any,
+    from: Date = startDate,
+    to: Date = endDate,
+  ) => {
     if (!selectedCar?.schedule?.length) return { conflict: false };
-    const reqStart = startDate.getTime(),
-      reqEnd = endDate.getTime();
+    const reqStart = from.getTime(),
+      reqEnd = to.getTime();
     for (const b of selectedCar.schedule) {
       if (["cancelled", "rejected", "completed"].includes(b.status)) continue;
 
@@ -443,6 +518,10 @@ export default function CarBookingScreen() {
   const filteredCars = useMemo(() => {
     if (filterType === "all") return cars;
     return cars.filter((c) => {
+      // โหมด group: คันที่เลือกไว้แล้วต้องไม่หายไปจากรายการ ไม่ว่าตัวกรองจะเป็นอะไร
+      // (ไม่งั้นผู้ใช้จะเห็นการ์ดรายละเอียดด้านล่าง แต่หาการ์ดรถที่กดเลือกไว้ไม่เจอ)
+      if (bookingMode === "group" && carEntries[c.id]) return true;
+
       const isMaintenance = c.status === "maintenance";
       const conflictResult: any = validateBookingConflict(c);
 
@@ -451,7 +530,59 @@ export default function CarBookingScreen() {
 
       return filterType === "available" ? !isUnavailable : isUnavailable;
     });
-  }, [cars, filterType, startDate, endDate]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cars, filterType, startDate, endDate, bookingMode, carEntries]);
+
+  // --- 👥 Helper สำหรับโหมด group ---
+
+  // "คันที่ 3 — Toyota Vios" (ให้ตรงกับข้อความสรุปที่ API ส่งกลับ)
+  const carLabel = useCallback(
+    (carId: number) => {
+      const c = cars.find((x) => String(x.id) === String(carId));
+      if (!c) return `รถ #${carId}`;
+      return (c.car_number ? `คันที่ ${c.car_number} — ` : "") + c.name;
+    },
+    [cars],
+  );
+
+  const selectedCarIds = useMemo(
+    () => Object.keys(carEntries).map(Number),
+    [carEntries],
+  );
+
+  // รายชื่อพนักงานใน Modal: ปักหมุด "ตัวฉัน" บนสุด แล้วค่อยรายชื่อที่ผ่านการค้นหา
+  const filteredEmployees = useMemo(() => {
+    const q = driverSearch.trim().toLowerCase();
+    const list = q
+      ? employees.filter((e) => (e.fullname || "").toLowerCase().includes(q))
+      : employees;
+    // ตัวฉันแสดงเป็นแถวแยกด้านบนแล้ว จึงกันซ้ำออกจากรายการหลัก
+    return list.filter((e) => String(e.id) !== String(user?.id));
+  }, [employees, driverSearch, user?.id]);
+
+  const updateEntry = (carId: number, patch: Partial<CarEntry>) => {
+    setCarEntries((prev) => {
+      if (!prev[carId]) return prev;
+      return { ...prev, [carId]: { ...prev[carId], ...patch } };
+    });
+  };
+
+  const removeEntry = (carId: number) => {
+    setCarEntries((prev) => {
+      const next = { ...prev };
+      delete next[carId];
+      return next;
+    });
+  };
+
+  // ถ้าสิทธิ์ถูกถอนระหว่างที่ผู้ใช้ค้างอยู่ในโหมด group ต้องเด้งกลับโหมด self ไม่ให้ค้าง
+  useEffect(() => {
+    if (!canBookForOthers && bookingMode === "group") {
+      setBookingMode("self");
+      setCarEntries({});
+      setDriverPickerCarId(null);
+    }
+  }, [canBookForOthers, bookingMode]);
 
   // 🔥 คำนวณวันที่สำหรับปฏิทิน
   const modalMarkedDates = useMemo(() => {
@@ -616,6 +747,11 @@ export default function CarBookingScreen() {
           setCars(sortedCars);
         } else setCars([]);
         if (data.user_phone && !phone) setPhone(data.user_phone);
+
+        // สิทธิ์ + รายชื่อพนักงาน มาใหม่ทุกครั้งที่โหลดหน้า
+        // → แอดมินแก้สิทธิ์ใน ManagePermissions แล้วเห็นผลทันทีแค่ pull-to-refresh
+        setCanBookForOthers(data.can_book_for_others === true);
+        setEmployees(Array.isArray(data.employees) ? data.employees : []);
       }
     } catch (error) {
       console.error("❌ Fetch Error:", error);
@@ -655,26 +791,39 @@ export default function CarBookingScreen() {
     return `${baseUrl}/uploads/cars/${cleanPath}`;
   };
 
-  const showPicker = (target: "start" | "end", mode: "date" | "time") => {
-    const currentDate = target === "start" ? startDate : endDate;
+  const showPicker = (
+    target: "start" | "end",
+    mode: "date" | "time",
+    carId?: number,
+  ) => {
+    const entry = carId != null ? carEntries[carId] : null;
+    const currentDate = entry
+      ? target === "start"
+        ? entry.startDate
+        : entry.endDate
+      : target === "start"
+        ? startDate
+        : endDate;
+
     if (Platform.OS === "android") {
       DateTimePickerAndroid.open({
         value: currentDate,
         onChange: (event, date) => {
           if (event.type === "set" && date)
-            handleDateChange(target, date, mode);
+            handleDateChange(target, date, mode, carId);
         },
         mode: mode,
         is24Hour: true,
         minimumDate: mode === "date" ? new Date() : undefined,
       });
-    } else setPickerConfig({ target, mode });
+    } else setPickerConfig({ target, mode, carId: carId ?? null });
   };
 
   const handleDateChange = (
     target: "start" | "end",
     newDate: Date,
     mode: "date" | "time",
+    carId?: number | null,
   ) => {
     const setDate = (prev: Date) => {
       const d = new Date(prev);
@@ -687,6 +836,26 @@ export default function CarBookingScreen() {
       else d.setHours(newDate.getHours(), newDate.getMinutes());
       return d;
     };
+
+    // โหมด group: เขียนลงช่วงเวลาของรถคันนั้นๆ
+    if (carId != null) {
+      const entry = carEntries[carId];
+      if (!entry) return;
+      if (target === "start") {
+        const updated = setDate(entry.startDate);
+        const patch: Partial<CarEntry> = { startDate: updated };
+        if (updated >= entry.endDate) {
+          const next = new Date(updated);
+          next.setHours(updated.getHours() + 4);
+          patch.endDate = next;
+        }
+        updateEntry(carId, patch);
+      } else {
+        updateEntry(carId, { endDate: setDate(entry.endDate) });
+      }
+      return;
+    }
+
     if (target === "start") {
       const updated = setDate(startDate);
       setStartDate(updated);
@@ -784,8 +953,170 @@ export default function CarBookingScreen() {
     }
   };
 
+  // --- 👥 ส่งการจองแบบกลุ่ม (หลายคัน / ระบุผู้ใช้รถแยกคัน) ---
+  const submitGroupBooking = async () => {
+    try {
+      setLoading(true);
+
+      const items = Object.entries(carEntries).map(([cid, e]) => ({
+        car_id: Number(cid),
+        driver_id: e.driverId,
+        phone: e.phone.replace(/[^0-9]/g, ""), // ให้ตรงกับ preg_replace ของเว็บ
+        destination: e.destination.trim(),
+        reason: e.reason.trim(),
+        start: formatDT(e.startDate) + ":00",
+        end: formatDT(e.endDate) + ":00",
+      }));
+
+      const params = new URLSearchParams({
+        action: "book_car",
+        booking_type: "group",
+        user_id: String(user?.id),
+        items: JSON.stringify(items),
+      });
+
+      const response = await axios.post(
+        `${API_BASE}/api_carboooking_mobile.php`,
+        params.toString(),
+        { headers: { "Content-Type": "application/x-www-form-urlencoded" } },
+      );
+
+      // PHP อาจแทรก warning ก่อน JSON — ใช้ตัวแยกแบบเดียวกับ submitBooking()
+      let data: any = response.data;
+      if (typeof data === "string") {
+        try {
+          const jsonStart = data.indexOf("{");
+          const jsonEnd = data.lastIndexOf("}");
+          if (jsonStart !== -1 && jsonEnd !== -1) {
+            data = JSON.parse(data.substring(jsonStart, jsonEnd + 1));
+          }
+        } catch (e) {
+          console.log("Parse JSON Error:", e);
+        }
+      }
+
+      // ไม่มีสิทธิ์ / ข้อมูลไม่ครบ / payload พัง — API ไม่ส่ง results กลับมา
+      if (!Array.isArray(data?.results)) {
+        const problems = Array.isArray(data?.problems) ? data.problems : [];
+        return showAlert(
+          data?.code === "no_permission" ? "error" : "warning",
+          data?.code === "no_permission" ? "ไม่มีสิทธิ์" : "แจ้งเตือน",
+          [stripHtml(data?.message || "จองรถไม่สำเร็จ"), ...problems]
+            .filter(Boolean)
+            .join("\n"),
+        );
+      }
+
+      const lines = data.results.map((r: any) => {
+        const head = `${r.success ? "✅" : "❌"} ${r.car_label} → ${r.driver_name}`;
+        if (r.success) return head;
+        // ข้อความ "คุณมีการจองรถคันอื่น..." จาก createBooking พูดถึงผู้ใช้รถ ไม่ใช่คนกดจอง
+        const msg = stripHtml(r.message).replace(
+          /^คุณมีการจองรถคันอื่น/,
+          `${r.driver_name} มีการจองรถคันอื่น`,
+        );
+        return `${head}\n     ${msg}`;
+      });
+
+      const alertType =
+        data.status === "success"
+          ? "success"
+          : data.status === "partial"
+            ? "warning"
+            : "error";
+      const alertTitle =
+        data.status === "success"
+          ? `จองรถสำเร็จ ${data.ok_count} คัน!`
+          : data.status === "partial"
+            ? "จองสำเร็จบางส่วน"
+            : "จองไม่สำเร็จ:";
+
+      showAlert(alertType, alertTitle, lines.join("\n"), false, async () => {
+        // เคลียร์เฉพาะคันที่จองสำเร็จ — คันที่ล้มเหลวคงข้อมูลไว้ให้แก้แล้วยิงซ้ำได้
+        setCarEntries((prev) => {
+          const next = { ...prev };
+          data.results.forEach((r: any) => {
+            if (r.success) delete next[Number(r.car_id)];
+          });
+          return next;
+        });
+        // คงโหมด group ไว้ เพราะคนใช้ฟีเจอร์นี้มักจองต่อเนื่องหลายรอบ
+        await fetchData();
+        scrollToTop();
+      });
+    } catch (error: any) {
+      console.error("❌ Group Booking Error:", error);
+      showAlert("error", "ผิดพลาด", error.message || "การเชื่อมต่อขัดข้อง");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleBookingPress = () => {
     if (!user?.id) return showAlert("error", "แจ้งเตือน", "กรุณา Login ใหม่");
+
+    // --- 👥 โหมดจองให้ตัวเอง + คนอื่น ---
+    if (bookingMode === "group") {
+      if (!canBookForOthers)
+        return showAlert(
+          "error",
+          "ไม่มีสิทธิ์",
+          "คุณไม่มีสิทธิ์จองรถให้คนอื่น กรุณาติดต่อผู้ดูแลระบบ",
+        );
+
+      const ids = selectedCarIds;
+      if (ids.length === 0)
+        return showAlert(
+          "warning",
+          "แจ้งเตือน",
+          "กรุณาเลือกรถอย่างน้อย 1 คัน และระบุผู้ใช้รถ",
+        );
+
+      // เก็บปัญหาของทุกคันแล้วรายงานทีเดียว (ดีกว่าเว็บที่หยุดที่คันแรก)
+      const problems: string[] = [];
+      ids.forEach((cid) => {
+        const e = carEntries[cid];
+        if (!e) return;
+        const label = carLabel(cid);
+        if (!e.driverId) problems.push(`${label}: ยังไม่เลือกผู้ใช้รถ`);
+        if (!e.phone.trim()) problems.push(`${label}: ยังไม่กรอกเบอร์โทร`);
+        if (!e.destination.trim()) problems.push(`${label}: ยังไม่กรอกสถานที่`);
+        if (!e.reason.trim()) problems.push(`${label}: ยังไม่กรอกภารกิจ`);
+        if (e.endDate <= e.startDate)
+          problems.push(`${label}: เวลาคืนรถต้องหลังเวลารับรถ`);
+      });
+      if (problems.length)
+        return showAlert("warning", "ข้อมูลไม่ครบ", problems.join("\n"));
+
+      // เช็คคิวชนฝั่ง client เพื่อ UX (เซิร์ฟเวอร์เช็คจริงอีกชั้นตอนบันทึก)
+      const conflicts: string[] = [];
+      ids.forEach((cid) => {
+        const e = carEntries[cid];
+        const car = cars.find((c) => String(c.id) === String(cid));
+        if (!car || !e) return;
+        const r: any = validateBookingConflict(car, e.startDate, e.endDate);
+        if (r.conflict)
+          conflicts.push(
+            `${carLabel(cid)}: ${
+              r.details?.type === "maintenance"
+                ? "ติดซ่อมบำรุงในช่วงเวลานี้"
+                : "ถูกจองในช่วงเวลานี้แล้ว"
+            }`,
+          );
+      });
+      if (conflicts.length)
+        return showAlert("error", "มีคิวชนกัน", conflicts.join("\n"));
+
+      return showAlert(
+        "question",
+        "ยืนยันการจอง",
+        `จองรถ ${ids.length} คัน ตรวจสอบข้อมูลครบถ้วนแล้ว?`,
+        true,
+        submitGroupBooking,
+      );
+    }
+
+    // --- โหมดจองให้ตัวเอง (เดิม) ---
     if (!selectedCarId)
       return showAlert("warning", "แจ้งเตือน", "กรุณาเลือกรถ");
     if (!phone.trim() || !destination.trim() || !reason.trim())
@@ -849,7 +1180,9 @@ export default function CarBookingScreen() {
         car_id: String(returnBookingData?.car_id),
         parking_location: parkingLoc,
         energy_level: energyLevel,
-        car_issue: issue + (isCharging ? " | เสียบชาร์จอยู่" : ""),
+        car_issue: issue,
+        // ส่งแยกฟิลด์ (เดิมยัดรวมใน car_issue) ให้ตรงกับที่เว็บส่ง
+        is_charging: isCharging ? "1" : "0",
       });
       const { data } = await axios.post(
         `${API_BASE}/api_carboooking_mobile.php`,
@@ -889,10 +1222,19 @@ export default function CarBookingScreen() {
       );
     }
 
+    // ถ้าเป็นรายการที่เราจองแทนคนอื่น ให้ระบุชื่อผู้ใช้รถในข้อความยืนยันเพื่อกันกดผิด
+    const b = returnBookingData;
+    const isProxy =
+      !!b?.booked_by &&
+      String(b.booked_by) === String(user?.id ?? "") &&
+      String(b.user_id) !== String(user?.id ?? "");
+
     showAlert(
       "question",
       "ยืนยันการคืนรถ",
-      "คุณตรวจสอบความถูกต้องแล้ว และต้องการยืนยันการคืนรถใช่หรือไม่?",
+      isProxy
+        ? `ยืนยันคืนรถแทน ${b.driver_name || "ผู้ใช้รถ"} ใช่หรือไม่?`
+        : "คุณตรวจสอบความถูกต้องแล้ว และต้องการยืนยันการคืนรถใช่หรือไม่?",
       true,
       submitReturnCar,
     );
@@ -1525,10 +1867,17 @@ export default function CarBookingScreen() {
 
   const renderCarItem = (item: any) => {
     const isMaintenance = item.status === "maintenance";
-    const isSelected = selectedCarId === item.id;
+    const entry = carEntries[item.id];
+    const isGroup = bookingMode === "group";
+    const isSelected = isGroup ? !!entry : selectedCarId === item.id;
+    // ลำดับที่เลือกในโหมด group (แสดงเป็นเลขบนการ์ด)
+    const orderNo = isGroup && entry ? selectedCarIds.indexOf(item.id) + 1 : 0;
     const imageUri = getCarImageUri(item.image_path || item.car_image);
 
-    const conflictResult: any = validateBookingConflict(item);
+    // ถ้าคันนี้ถูกเลือกในโหมด group ให้เช็คคิวชนตามช่วงเวลาของคันนั้นเอง
+    const conflictResult: any = entry
+      ? validateBookingConflict(item, entry.startDate, entry.endDate)
+      : validateBookingConflict(item);
     const isTimeConflict = conflictResult.conflict && !isMaintenance;
 
     let displayLocation = item.last_parking_location || "-";
@@ -1581,7 +1930,29 @@ export default function CarBookingScreen() {
 
     const handlePressCar = () => {
       // อนุญาตให้เลือก car_id ได้แม้จะเป็นสถานะ maintenance เพื่อใช้ในการจองล่วงหน้า
-      setSelectedCarId(item.id);
+      if (isGroup) {
+        // โหมด group: แตะการ์ดเพื่อ toggle เข้า/ออกรายการที่เลือก
+        if (entry) {
+          removeEntry(item.id);
+          return; // ยกเลิกเลือกแล้ว ไม่ต้องเตือนเรื่องซ่อม
+        }
+        setCarEntries((prev) => ({
+          ...prev,
+          [item.id]: {
+            driverId: null,
+            driverName: "",
+            phone: "",
+            destination: "",
+            reason: "",
+            // ยืมช่วงเวลาจากฟอร์มด้านบนเป็นค่าเริ่มต้น (sync แค่ตอนเพิ่มคันใหม่
+            // เพื่อไม่เขียนทับค่าที่ผู้ใช้ปรับรายคันไปแล้ว)
+            startDate: new Date(startDate),
+            endDate: new Date(endDate),
+          },
+        }));
+      } else {
+        setSelectedCarId(item.id);
+      }
 
       if (isMaintenance) {
         // แสดงคำเตือนเพื่อให้ผู้ใช้ทราบเฉยๆ แต่ยังอนุญาตให้เลือก ID ได้
@@ -1597,7 +1968,7 @@ export default function CarBookingScreen() {
     };
 
     return (
-      <TouchableOpacity
+      <View
         key={item.id}
         style={[
           themeStyles.carCard,
@@ -1605,207 +1976,223 @@ export default function CarBookingScreen() {
           isMaintenance && {
             borderColor: themeColors.maintenance,
             backgroundColor: themeColors.maintenanceBg,
-            opacity: 0.9,
           },
           isTimeConflict && {
             borderColor: "#ef4444",
             backgroundColor: themeColors.busyBg,
-            opacity: 0.9,
           },
         ]}
-        onPress={handlePressCar}
-        activeOpacity={0.8}
       >
-        <View style={themeStyles.imageContainer}>
-          <Image
-            source={{ uri: imageUri }}
-            style={[themeStyles.carImage, isMaintenance && { opacity: 0.5 }]}
-            resizeMode="contain"
-          />
-          {isSelected && (
-            <View style={themeStyles.selectedOverlay}>
-              <Ionicons name="checkmark-circle" size={24} color="#2563eb" />
-            </View>
-          )}
-        </View>
+        <TouchableOpacity
+          style={[
+            themeStyles.carCardRow,
+            // จางเฉพาะแถวข้อมูลรถ ไม่ให้ฟอร์มกรอกด้านล่างจางไปด้วย
+            (isMaintenance || isTimeConflict) && { opacity: 0.9 },
+          ]}
+          onPress={handlePressCar}
+          activeOpacity={0.8}
+        >
+          <View style={themeStyles.imageContainer}>
+            <Image
+              source={{ uri: imageUri }}
+              style={[themeStyles.carImage, isMaintenance && { opacity: 0.5 }]}
+              resizeMode="contain"
+            />
+            {isSelected &&
+              (orderNo > 0 ? (
+                <View style={themeStyles.orderBadge}>
+                  <Text style={themeStyles.orderBadgeText}>{orderNo}</Text>
+                </View>
+              ) : (
+                <View style={themeStyles.selectedOverlay}>
+                  <Ionicons name="checkmark-circle" size={24} color="#2563eb" />
+                </View>
+              ))}
+          </View>
 
-        <View style={themeStyles.cardContent}>
-          <View style={{ flexDirection: "row", alignItems: "center" }}>
-            {item.car_number ? (
-              <View
-                style={[
-                  themeStyles.carNumberCircle,
-                  isMaintenance && {
-                    backgroundColor: themeColors.maintenance,
-                  },
-                ]}
-              >
-                <Text style={themeStyles.carNumberText}>{item.car_number}</Text>
-              </View>
-            ) : null}
-            <Text style={themeStyles.carName} numberOfLines={1}>
-              {item.name}
+          <View style={themeStyles.cardContent}>
+            <View style={{ flexDirection: "row", alignItems: "center" }}>
+              {item.car_number ? (
+                <View
+                  style={[
+                    themeStyles.carNumberCircle,
+                    isMaintenance && {
+                      backgroundColor: themeColors.maintenance,
+                    },
+                  ]}
+                >
+                  <Text style={themeStyles.carNumberText}>
+                    {item.car_number}
+                  </Text>
+                </View>
+              ) : null}
+              <Text style={themeStyles.carName} numberOfLines={1}>
+                {item.name}
+              </Text>
+            </View>
+
+            <View style={themeStyles.subHeaderRow}>
+              <Text style={themeStyles.plateText}>{item.plate}</Text>
+              {item.type === "EV" ? (
+                <View
+                  style={[
+                    themeStyles.typeBadge,
+                    {
+                      borderColor: isDark ? "#60a5fa" : "#2563eb",
+                      backgroundColor: isDark
+                        ? "rgba(59, 130, 246, 0.15)"
+                        : "rgba(37, 99, 235, 0.1)",
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      themeStyles.typeText,
+                      { color: isDark ? "#60a5fa" : "#2563eb" },
+                    ]}
+                  >
+                    EV
+                  </Text>
+                </View>
+              ) : (
+                <View
+                  style={[
+                    themeStyles.typeBadge,
+                    {
+                      borderColor: isDark ? "#fbbf24" : "#f59e0b",
+                      backgroundColor: isDark
+                        ? "rgba(245, 158, 11, 0.2)"
+                        : "rgba(245, 158, 11, 0.1)",
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      themeStyles.typeText,
+                      { color: isDark ? "#fbbf24" : "#f59e0b" },
+                    ]}
+                  >
+                    Fuel
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            <View style={{ marginTop: 6 }}>
+              {isMaintenance && displayInfo ? (
+                <View>
+                  <View style={themeStyles.infoItemRow}>
+                    <Ionicons
+                      name="person"
+                      size={12}
+                      color={themeColors.subText}
+                      style={{ marginRight: 4 }}
+                    />
+                    <Text style={themeStyles.infoText} numberOfLines={1}>
+                      {displayInfo.user}
+                    </Text>
+                  </View>
+                  <View style={themeStyles.infoItemRow}>
+                    <Ionicons
+                      name="call"
+                      size={12}
+                      color={themeColors.subText}
+                      style={{ marginRight: 4 }}
+                    />
+                    <Text style={themeStyles.infoText} numberOfLines={1}>
+                      {displayInfo.phone}
+                    </Text>
+                  </View>
+                </View>
+              ) : (
+                <View>
+                  <View style={themeStyles.infoItemRow}>
+                    <Ionicons
+                      name="location-sharp"
+                      size={12}
+                      color="#ef4444"
+                      style={{ marginRight: 4 }}
+                    />
+                    <Text style={themeStyles.infoText} numberOfLines={1}>
+                      {displayLocation}
+                    </Text>
+                  </View>
+                  <View style={themeStyles.infoItemRow}>
+                    <MaterialCommunityIcons
+                      name="lightning-bolt"
+                      size={12}
+                      color="#f59e0b"
+                      style={{ marginRight: 4 }}
+                    />
+                    <Text style={themeStyles.infoText}>{displayEnergy}</Text>
+                    {isCharging && (
+                      <BlinkingView
+                        style={{
+                          marginLeft: 6,
+                          backgroundColor: "#dcfce7",
+                          paddingHorizontal: 4,
+                          borderRadius: 3,
+                        }}
+                      >
+                        <Text
+                          style={{
+                            fontSize: 8,
+                            color: "#166534",
+                            fontWeight: "bold",
+                          }}
+                        >
+                          ⚡ ชาร์จ
+                        </Text>
+                      </BlinkingView>
+                    )}
+                  </View>
+                </View>
+              )}
+            </View>
+          </View>
+
+          <View
+            style={[
+              themeStyles.statusBadge,
+              {
+                backgroundColor: statusColor,
+                position: "absolute",
+                top: 10,
+                right: 10,
+              },
+            ]}
+          >
+            <Text style={[themeStyles.statusText, { color: "#fff" }]}>
+              {statusText}
             </Text>
           </View>
 
-          <View style={themeStyles.subHeaderRow}>
-            <Text style={themeStyles.plateText}>{item.plate}</Text>
-            {item.type === "EV" ? (
-              <View
-                style={[
-                  themeStyles.typeBadge,
-                  {
-                    borderColor: isDark ? "#60a5fa" : "#2563eb",
-                    backgroundColor: isDark
-                      ? "rgba(59, 130, 246, 0.15)"
-                      : "rgba(37, 99, 235, 0.1)",
-                  },
-                ]}
-              >
-                <Text
-                  style={[
-                    themeStyles.typeText,
-                    { color: isDark ? "#60a5fa" : "#2563eb" },
-                  ]}
-                >
-                  EV
-                </Text>
-              </View>
-            ) : (
-              <View
-                style={[
-                  themeStyles.typeBadge,
-                  {
-                    borderColor: isDark ? "#fbbf24" : "#f59e0b",
-                    backgroundColor: isDark
-                      ? "rgba(245, 158, 11, 0.2)"
-                      : "rgba(245, 158, 11, 0.1)",
-                  },
-                ]}
-              >
-                <Text
-                  style={[
-                    themeStyles.typeText,
-                    { color: isDark ? "#fbbf24" : "#f59e0b" },
-                  ]}
-                >
-                  Fuel
-                </Text>
-              </View>
-            )}
-          </View>
-
-          <View style={{ marginTop: 6 }}>
-            {isMaintenance && displayInfo ? (
-              <View>
-                <View style={themeStyles.infoItemRow}>
-                  <Ionicons
-                    name="person"
-                    size={12}
-                    color={themeColors.subText}
-                    style={{ marginRight: 4 }}
-                  />
-                  <Text style={themeStyles.infoText} numberOfLines={1}>
-                    {displayInfo.user}
-                  </Text>
-                </View>
-                <View style={themeStyles.infoItemRow}>
-                  <Ionicons
-                    name="call"
-                    size={12}
-                    color={themeColors.subText}
-                    style={{ marginRight: 4 }}
-                  />
-                  <Text style={themeStyles.infoText} numberOfLines={1}>
-                    {displayInfo.phone}
-                  </Text>
-                </View>
-              </View>
-            ) : (
-              <View>
-                <View style={themeStyles.infoItemRow}>
-                  <Ionicons
-                    name="location-sharp"
-                    size={12}
-                    color="#ef4444"
-                    style={{ marginRight: 4 }}
-                  />
-                  <Text style={themeStyles.infoText} numberOfLines={1}>
-                    {displayLocation}
-                  </Text>
-                </View>
-                <View style={themeStyles.infoItemRow}>
-                  <MaterialCommunityIcons
-                    name="lightning-bolt"
-                    size={12}
-                    color="#f59e0b"
-                    style={{ marginRight: 4 }}
-                  />
-                  <Text style={themeStyles.infoText}>{displayEnergy}</Text>
-                  {isCharging && (
-                    <BlinkingView
-                      style={{
-                        marginLeft: 6,
-                        backgroundColor: "#dcfce7",
-                        paddingHorizontal: 4,
-                        borderRadius: 3,
-                      }}
-                    >
-                      <Text
-                        style={{
-                          fontSize: 8,
-                          color: "#166534",
-                          fontWeight: "bold",
-                        }}
-                      >
-                        ⚡ ชาร์จ
-                      </Text>
-                    </BlinkingView>
-                  )}
-                </View>
-              </View>
-            )}
-          </View>
-        </View>
-
-        <View
-          style={[
-            themeStyles.statusBadge,
-            {
-              backgroundColor: statusColor,
-              position: "absolute",
-              top: 10,
-              right: 10,
-            },
-          ]}
-        >
-          <Text style={[themeStyles.statusText, { color: "#fff" }]}>
-            {statusText}
-          </Text>
-        </View>
-
-        {/* 🔥 ปุ่มดูตารางงาน */}
-        <TouchableOpacity
-          style={themeStyles.scheduleBtn}
-          onPress={() => handleOpenSchedule(item)}
-        >
-          <MaterialCommunityIcons
-            name="calendar-clock"
-            size={14}
-            color="#fff"
-          />
-          <Text
-            style={{
-              color: "#fff",
-              fontSize: 10,
-              fontWeight: "bold",
-              marginLeft: 4,
-            }}
+          {/* 🔥 ปุ่มดูตารางงาน */}
+          <TouchableOpacity
+            style={themeStyles.scheduleBtn}
+            onPress={() => handleOpenSchedule(item)}
           >
-            ตารางงาน
-          </Text>
+            <MaterialCommunityIcons
+              name="calendar-clock"
+              size={14}
+              color="#fff"
+            />
+            <Text
+              style={{
+                color: "#fff",
+                fontSize: 10,
+                fontWeight: "bold",
+                marginLeft: 4,
+              }}
+            >
+              ตารางงาน
+            </Text>
+          </TouchableOpacity>
         </TouchableOpacity>
-      </TouchableOpacity>
+
+        {/* 👥 ฟอร์มกรอกรายละเอียดของรถคันนี้ — กางอยู่ในกล่องรถเลย */}
+        {isGroup && entry && renderCarEntryForm(item.id, entry)}
+      </View>
     );
   };
 
@@ -1823,6 +2210,18 @@ export default function CarBookingScreen() {
           const isOverdue =
             (b.status === "active" || b.status === "approved") &&
             new Date() > new Date(b.end_date);
+
+          // 👥 การจองแทน — เทียบ id ด้วย String() เพราะ API ส่ง id มาเป็น string บางที่
+          const myId = String(user?.id ?? "");
+          const iBookedForOther =
+            !!b.booked_by &&
+            String(b.booked_by) === myId &&
+            String(b.user_id) !== myId;
+          const bookedForMeByOther =
+            String(b.user_id) === myId &&
+            !!b.booked_by &&
+            String(b.booked_by) !== myId;
+
           return (
             <View key={i} style={themeStyles.activeCard}>
               <View
@@ -1856,6 +2255,29 @@ export default function CarBookingScreen() {
                 >
                   {b.car_number} - {b.car_name}
                 </Text>
+
+                {/* 👥 ป้ายบอกว่าใครจองแทนใคร */}
+                {iBookedForOther && (
+                  <View style={themeStyles.proxyBadge}>
+                    <Ionicons name="person-add" size={12} color="#2563eb" />
+                    <Text style={themeStyles.proxyBadgeText}>
+                      คุณจองให้: {b.driver_name || "ไม่ระบุชื่อ"}
+                    </Text>
+                  </View>
+                )}
+                {bookedForMeByOther && (
+                  <View style={themeStyles.proxyBadge}>
+                    <Ionicons
+                      name="checkmark-circle"
+                      size={12}
+                      color="#2563eb"
+                    />
+                    <Text style={themeStyles.proxyBadgeText}>
+                      จองให้คุณโดย: {b.booker_name || "ไม่ระบุชื่อ"}
+                    </Text>
+                  </View>
+                )}
+
                 <Text style={{ color: themeColors.subText }}>
                   เริ่ม: {formatDateDisplay(new Date(b.start_date))}{" "}
                   {formatTimeDisplay(new Date(b.start_date))} น.
@@ -1911,7 +2333,9 @@ export default function CarBookingScreen() {
                         showAlert(
                           "question",
                           "ยกเลิก?",
-                          "ยืนยันการยกเลิก",
+                          iBookedForOther
+                            ? `ยืนยันยกเลิกการจองแทน ${b.driver_name || "ผู้ใช้รถ"}?`
+                            : "ยืนยันการยกเลิก",
                           true,
                           () => cancelBooking(b.id),
                         )
@@ -1935,6 +2359,349 @@ export default function CarBookingScreen() {
       </View>
     );
   };
+
+  // --- 👥 การ์ดกรอกรายละเอียดรายคัน (โหมด group) ---
+  // --- 👥 ฟอร์มกรอกรายละเอียดของรถคันนั้น (กางอยู่ในกล่องรถ) ---
+  const renderCarEntryForm = (cid: number, e: CarEntry) => {
+    const orderNo = selectedCarIds.indexOf(cid) + 1;
+
+    return (
+      <View style={themeStyles.entryInline}>
+        <View style={themeStyles.entryInlineHeader}>
+          <View style={themeStyles.entryOrderCircle}>
+            <Text style={themeStyles.entryOrderText}>{orderNo}</Text>
+          </View>
+          <Text style={themeStyles.entryInlineTitle} numberOfLines={1}>
+            รายละเอียดการจองคันนี้
+          </Text>
+          <TouchableOpacity
+            onPress={() => removeEntry(cid)}
+            style={themeStyles.entryRemoveBtn}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Ionicons name="close" size={16} color="#ef4444" />
+          </TouchableOpacity>
+        </View>
+
+        {/* ผู้ใช้รถ */}
+        <Text style={themeStyles.entryLabel}>
+          ผู้ใช้รถ <Text style={{ color: "red" }}>*</Text>
+        </Text>
+        <TouchableOpacity
+          style={themeStyles.driverSelectBtn}
+          onPress={() => {
+            setDriverSearch("");
+            setDriverPickerCarId(cid);
+          }}
+          activeOpacity={0.8}
+        >
+          <Ionicons
+            name={e.driverId ? "person" : "person-add-outline"}
+            size={16}
+            color={e.driverId ? "#2563eb" : themeColors.subText}
+            style={{ marginRight: 8 }}
+          />
+          <Text
+            style={[
+              themeStyles.driverSelectText,
+              !e.driverId && { color: isDark ? "#94a3b8" : "#9ca3af" },
+            ]}
+            numberOfLines={1}
+          >
+            {e.driverName || "เลือกพนักงาน..."}
+          </Text>
+          <Ionicons name="chevron-down" size={16} color={themeColors.subText} />
+        </TouchableOpacity>
+
+        {/* เบอร์โทร */}
+        <Text style={themeStyles.entryLabel}>
+          เบอร์โทร <Text style={{ color: "red" }}>*</Text>
+        </Text>
+        <TextInput
+          style={themeStyles.input}
+          value={e.phone}
+          onChangeText={(t) =>
+            updateEntry(cid, { phone: t.replace(/[^0-9]/g, "") })
+          }
+          placeholder="0xx-xxx-xxxx"
+          placeholderTextColor={isDark ? "#94a3b8" : "#9ca3af"}
+          keyboardType="number-pad"
+          maxLength={10}
+        />
+
+        {/* วัน-เวลารับรถ */}
+        <Text style={themeStyles.entryLabel}>รับรถ</Text>
+        <View style={themeStyles.dateTimeRow}>
+          <TouchableOpacity
+            style={themeStyles.dateBtnHalf}
+            onPress={() => showPicker("start", "date", cid)}
+          >
+            <Ionicons
+              name="calendar-outline"
+              size={16}
+              color={isDark ? "#cbd5e1" : "#555"}
+              style={{ marginRight: 5 }}
+            />
+            <Text style={themeStyles.dateText}>
+              {formatDateDisplay(e.startDate)}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={themeStyles.dateBtnHalf}
+            onPress={() => showPicker("start", "time", cid)}
+          >
+            <Ionicons
+              name="time-outline"
+              size={16}
+              color="#2563eb"
+              style={{ marginRight: 5 }}
+            />
+            <Text style={themeStyles.timeText}>
+              {formatTimeDisplay(e.startDate)} น.
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* วัน-เวลาคืนรถ */}
+        <Text style={[themeStyles.entryLabel, { color: "#ef4444" }]}>
+          คืนรถ
+        </Text>
+        <View style={themeStyles.dateTimeRow}>
+          <TouchableOpacity
+            style={[
+              themeStyles.dateBtnHalf,
+              {
+                backgroundColor: isDark ? "#450a0a" : "#fff1f2",
+                borderColor: "#fca5a5",
+              },
+            ]}
+            onPress={() => showPicker("end", "date", cid)}
+          >
+            <Ionicons
+              name="calendar-outline"
+              size={16}
+              color="#ef4444"
+              style={{ marginRight: 5 }}
+            />
+            <Text style={[themeStyles.dateText, { color: "#ef4444" }]}>
+              {formatDateDisplay(e.endDate)}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              themeStyles.dateBtnHalf,
+              {
+                backgroundColor: isDark ? "#450a0a" : "#fff1f2",
+                borderColor: "#fca5a5",
+              },
+            ]}
+            onPress={() => showPicker("end", "time", cid)}
+          >
+            <Ionicons
+              name="time-outline"
+              size={16}
+              color="#ef4444"
+              style={{ marginRight: 5 }}
+            />
+            <Text style={[themeStyles.timeText, { color: "#ef4444" }]}>
+              {formatTimeDisplay(e.endDate)} น.
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* สถานที่ + ภารกิจ */}
+        <Text style={themeStyles.entryLabel}>
+          ไปที่ไหน (สถานที่) <Text style={{ color: "red" }}>*</Text>
+        </Text>
+        <TextInput
+          style={themeStyles.input}
+          value={e.destination}
+          onChangeText={(t) => updateEntry(cid, { destination: t })}
+          placeholder="ระบุอำเภอ / จังหวัด"
+          placeholderTextColor={isDark ? "#94a3b8" : "#9ca3af"}
+        />
+        <Text style={themeStyles.entryLabel}>
+          ภารกิจ / เหตุผล <Text style={{ color: "red" }}>*</Text>
+        </Text>
+        <TextInput
+          style={themeStyles.input}
+          value={e.reason}
+          onChangeText={(t) => updateEntry(cid, { reason: t })}
+          placeholder="รายละเอียดเพิ่มเติม..."
+          placeholderTextColor={isDark ? "#94a3b8" : "#9ca3af"}
+        />
+      </View>
+    );
+  };
+
+  // --- 👥 ปุ่มยืนยันการจองแบบกลุ่ม (ท้ายรายการรถ) ---
+  const renderGroupFooter = () => {
+    const ids = selectedCarIds;
+
+    return (
+      <View>
+        {ids.length === 0 && (
+          <View style={themeStyles.emptyEntryBox}>
+            <Ionicons
+              name="car-outline"
+              size={28}
+              color={themeColors.subText}
+            />
+            <Text style={themeStyles.emptyEntryText}>
+              ยังไม่ได้เลือกรถ — แตะการ์ดรถด้านบนเพื่อเลือก (เลือกได้หลายคัน)
+              {"\n"}ช่องกรอกรายละเอียดจะกางอยู่ในกล่องรถคันนั้นเลย
+            </Text>
+          </View>
+        )}
+
+        <TouchableOpacity
+          style={[
+            themeStyles.submitBtn,
+            ids.length === 0 && {
+              backgroundColor: "#9ca3af",
+              shadowOpacity: 0,
+            },
+          ]}
+          onPress={handleBookingPress}
+          disabled={ids.length === 0}
+        >
+          <Text style={themeStyles.submitBtnText}>
+            {ids.length > 0 ? `ยืนยันการจอง ${ids.length} คัน` : "ยืนยันการจอง"}
+          </Text>
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
+  // --- 👥 Modal เลือกผู้ใช้รถ ---
+  const renderDriverPicker = () => {
+    const cid = driverPickerCarId;
+    if (cid == null) return null;
+
+    const pick = (id: number | string, name: string, ph?: string | null) => {
+      updateEntry(cid, {
+        driverId: id,
+        driverName: name,
+        // เติมเบอร์อัตโนมัติ (ยังแก้ได้) — ตรงกับพฤติกรรม $empPhones ของเว็บ
+        phone: (ph || "").replace(/[^0-9]/g, ""),
+      });
+      setDriverPickerCarId(null);
+      setDriverSearch("");
+    };
+
+    const me = employees.find((e) => String(e.id) === String(user?.id));
+
+    return (
+      <View style={themeStyles.modalOverlay}>
+        <View style={themeStyles.driverModalCard}>
+          <View style={themeStyles.driverModalHeader}>
+            <Text style={themeStyles.driverModalTitle}>เลือกผู้ใช้รถ</Text>
+            <TouchableOpacity
+              onPress={() => {
+                setDriverPickerCarId(null);
+                setDriverSearch("");
+              }}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Ionicons name="close" size={22} color={themeColors.text} />
+            </TouchableOpacity>
+          </View>
+
+          <View style={{ paddingHorizontal: 15, paddingTop: 12 }}>
+            <View style={themeStyles.driverSearchBox}>
+              <Ionicons name="search" size={16} color={themeColors.subText} />
+              <TextInput
+                style={themeStyles.driverSearchInput}
+                value={driverSearch}
+                onChangeText={setDriverSearch}
+                placeholder="ค้นหาชื่อ..."
+                placeholderTextColor={isDark ? "#94a3b8" : "#9ca3af"}
+              />
+              {driverSearch !== "" && (
+                <TouchableOpacity onPress={() => setDriverSearch("")}>
+                  <Ionicons
+                    name="close-circle"
+                    size={16}
+                    color={themeColors.subText}
+                  />
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+
+          {/* ทางลัด "ตัวฉัน" — ฟีเจอร์นี้คือจองให้ตัวเอง + คนอื่น ต้องเลือกตัวเองได้ */}
+          <TouchableOpacity
+            style={themeStyles.driverMeRow}
+            onPress={() =>
+              pick(
+                user?.id as any,
+                `ตัวฉัน (${me?.fullname || user?.fullname || "ฉัน"})`,
+                me?.phone || phone,
+              )
+            }
+            activeOpacity={0.7}
+          >
+            <Ionicons name="star" size={16} color="#f59e0b" />
+            <Text style={themeStyles.driverMeText} numberOfLines={1}>
+              ตัวฉัน ({me?.fullname || user?.fullname || "ฉัน"})
+            </Text>
+          </TouchableOpacity>
+
+          <FlatList
+            data={filteredEmployees}
+            keyExtractor={(item) => String(item.id)}
+            style={{ maxHeight: 340 }}
+            keyboardShouldPersistTaps="handled"
+            ItemSeparatorComponent={() => (
+              <View
+                style={{ height: 1, backgroundColor: themeColors.border }}
+              />
+            )}
+            ListEmptyComponent={
+              <View style={{ padding: 25, alignItems: "center" }}>
+                <Text style={{ color: themeColors.subText }}>
+                  ไม่พบพนักงานที่ค้นหา
+                </Text>
+              </View>
+            }
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={themeStyles.driverRow}
+                onPress={() => pick(item.id, item.fullname, item.phone)}
+                activeOpacity={0.7}
+              >
+                <Text style={themeStyles.driverRowName} numberOfLines={1}>
+                  {item.fullname || "-"}
+                </Text>
+                <Text style={themeStyles.driverRowPhone}>
+                  {item.phone || "-"}
+                </Text>
+              </TouchableOpacity>
+            )}
+          />
+        </View>
+      </View>
+    );
+  };
+
+  // ⚠️ Android: <Modal> คือ native Dialog — Modal 2 ตัวที่เป็น "พี่น้องกัน"
+  // ตัวที่เปิดทีหลังจะไม่ถูกยกขึ้นมาแสดงจนกว่าตัวแรกจะปิด (ดูเหมือนแอปค้าง)
+  // ดังนั้น alert ต้อง render อยู่ "ข้างใน" Modal ที่กำลังเปิดอยู่ ไม่ใช่ข้างนอก
+  // → เรียกฟังก์ชันนี้ที่เดียวเสมอ โดยเลือกตำแหน่งตามว่ามี Modal ไหนเปิดอยู่
+  const renderAlert = () => (
+    <CustomAlertModal
+      visible={alertConfig.visible}
+      type={alertConfig.type}
+      title={alertConfig.title}
+      message={alertConfig.message}
+      onConfirm={alertConfig.onConfirm}
+      onCancel={alertConfig.onCancel}
+      showCancel={alertConfig.showCancel}
+      showConfirm={alertConfig.showConfirm}
+      themeColors={themeColors}
+      isDark={isDark}
+    />
+  );
 
   if (loading && !refreshing)
     return (
@@ -1979,21 +2746,94 @@ export default function CarBookingScreen() {
               </Text>
             </View>
             <View style={themeStyles.formCard}>
-              <Text style={themeStyles.inputLabel}>
-                เบอร์โทรศัพท์ติดต่อ (จำเป็น)
-              </Text>
-              <TextInput
-                style={themeStyles.input}
-                value={phone}
-                onChangeText={(t) => setPhone(t.replace(/[^0-9]/g, ""))}
-                placeholder="0xx-xxx-xxxx"
-                placeholderTextColor={isDark ? "#94a3b8" : "#9ca3af"}
-                keyboardType="number-pad"
-                maxLength={10}
-              />
+              {/* 👥 สลับโหมด — แสดงเฉพาะคนที่มีสิทธิ์ book_for_others
+                  คนที่ไม่มีสิทธิ์จะไม่เห็นอะไรเลย หน้าจอเหมือนเดิม 100% */}
+              {canBookForOthers && (
+                <View style={themeStyles.modeToggleRow}>
+                  {(
+                    [
+                      { key: "self", label: "จองให้ตัวเอง", icon: "person" },
+                      {
+                        key: "group",
+                        label: "จองให้ตัวเอง + คนอื่น",
+                        icon: "people",
+                      },
+                    ] as const
+                  ).map((m) => {
+                    const active = bookingMode === m.key;
+                    return (
+                      <TouchableOpacity
+                        key={m.key}
+                        style={[
+                          themeStyles.modeBtn,
+                          active && themeStyles.modeBtnActive,
+                        ]}
+                        onPress={() => {
+                          if (bookingMode === m.key) return;
+                          setBookingMode(m.key);
+                          setSelectedCarId(null);
+                          setCarEntries({});
+                          setDriverPickerCarId(null);
+                        }}
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons
+                          name={m.icon}
+                          size={14}
+                          color={active ? "#fff" : themeColors.subText}
+                        />
+                        <Text
+                          style={[
+                            themeStyles.modeBtnText,
+                            active && themeStyles.modeBtnTextActive,
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {m.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+
+              {bookingMode === "group" ? (
+                <View style={themeStyles.groupHint}>
+                  <Ionicons
+                    name="information-circle"
+                    size={16}
+                    color="#2563eb"
+                  />
+                  <Text style={themeStyles.groupHintText}>
+                    วัน-เวลาด้านล่างเป็น{" "}
+                    <Text style={{ fontWeight: "bold" }}>ค่าเริ่มต้น</Text>{" "}
+                    ของคันที่เลือกใหม่ — ผู้ใช้รถ / เบอร์โทร / สถานที่ / ภารกิจ
+                    ให้กรอกแยกรายคันด้านล่าง
+                  </Text>
+                </View>
+              ) : (
+                <>
+                  <Text style={themeStyles.inputLabel}>
+                    เบอร์โทรศัพท์ติดต่อ (จำเป็น)
+                  </Text>
+                  <TextInput
+                    style={themeStyles.input}
+                    value={phone}
+                    onChangeText={(t) => setPhone(t.replace(/[^0-9]/g, ""))}
+                    placeholder="0xx-xxx-xxxx"
+                    placeholderTextColor={isDark ? "#94a3b8" : "#9ca3af"}
+                    keyboardType="number-pad"
+                    maxLength={10}
+                  />
+                </>
+              )}
               <View style={themeStyles.dateSection}>
                 <View style={themeStyles.dateHeaderRow}>
-                  <Text style={themeStyles.inputLabel}>เริ่มต้นใช้งาน</Text>
+                  <Text style={themeStyles.inputLabel}>
+                    {bookingMode === "group"
+                      ? "เริ่มต้นใช้งาน (ค่าเริ่มต้น)"
+                      : "เริ่มต้นใช้งาน"}
+                  </Text>
                   <TouchableOpacity
                     style={themeStyles.nowBtn}
                     onPress={handleSetNow}
@@ -2080,37 +2920,79 @@ export default function CarBookingScreen() {
                   </TouchableOpacity>
                 </View>
               </View>
-              <View style={themeStyles.divider} />
-              <Text style={themeStyles.inputLabel}>
-                ไปที่ไหน (สถานที่) <Text style={{ color: "red" }}>*</Text>
-              </Text>
-              <TextInput
-                style={themeStyles.input}
-                value={destination}
-                onChangeText={setDestination}
-                placeholder="ระบุอำเภอ / จังหวัด"
-                placeholderTextColor={isDark ? "#94a3b8" : "#9ca3af"}
-              />
-              <Text style={themeStyles.inputLabel}>
-                ภารกิจ / เหตุผล <Text style={{ color: "red" }}>*</Text>
-              </Text>
-              <TextInput
-                style={themeStyles.input}
-                value={reason}
-                onChangeText={setReason}
-                placeholder="รายละเอียดเพิ่มเติม..."
-                placeholderTextColor={isDark ? "#94a3b8" : "#9ca3af"}
-              />
-              <TouchableOpacity
-                style={themeStyles.submitBtn}
-                onPress={handleBookingPress}
-              >
-                <Text style={themeStyles.submitBtnText}>ยืนยันการจอง</Text>
-              </TouchableOpacity>
+
+              {bookingMode === "group" ? (
+                selectedCarIds.length > 0 && (
+                  <TouchableOpacity
+                    style={themeStyles.copyTimeBtn}
+                    onPress={() => {
+                      setCarEntries((prev) => {
+                        const next: Record<number, CarEntry> = {};
+                        Object.entries(prev).forEach(([cid, e]) => {
+                          next[Number(cid)] = {
+                            ...e,
+                            startDate: new Date(startDate),
+                            endDate: new Date(endDate),
+                          };
+                        });
+                        return next;
+                      });
+                      showAlert(
+                        "success",
+                        "สำเร็จ",
+                        `ตั้งวัน-เวลานี้ให้ทั้ง ${selectedCarIds.length} คันแล้ว`,
+                        false,
+                        undefined,
+                        1200,
+                      );
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="copy-outline" size={14} color="#2563eb" />
+                    <Text style={themeStyles.copyTimeBtnText}>
+                      ใช้เวลาเดียวกันทุกคัน ({selectedCarIds.length})
+                    </Text>
+                  </TouchableOpacity>
+                )
+              ) : (
+                <>
+                  <View style={themeStyles.divider} />
+                  <Text style={themeStyles.inputLabel}>
+                    ไปที่ไหน (สถานที่) <Text style={{ color: "red" }}>*</Text>
+                  </Text>
+                  <TextInput
+                    style={themeStyles.input}
+                    value={destination}
+                    onChangeText={setDestination}
+                    placeholder="ระบุอำเภอ / จังหวัด"
+                    placeholderTextColor={isDark ? "#94a3b8" : "#9ca3af"}
+                  />
+                  <Text style={themeStyles.inputLabel}>
+                    ภารกิจ / เหตุผล <Text style={{ color: "red" }}>*</Text>
+                  </Text>
+                  <TextInput
+                    style={themeStyles.input}
+                    value={reason}
+                    onChangeText={setReason}
+                    placeholder="รายละเอียดเพิ่มเติม..."
+                    placeholderTextColor={isDark ? "#94a3b8" : "#9ca3af"}
+                  />
+                  <TouchableOpacity
+                    style={themeStyles.submitBtn}
+                    onPress={handleBookingPress}
+                  >
+                    <Text style={themeStyles.submitBtnText}>ยืนยันการจอง</Text>
+                  </TouchableOpacity>
+                </>
+              )}
             </View>
             <View style={themeStyles.headerTitleRow}>
               <Ionicons name="car" size={24} color="#2563eb" />
-              <Text style={themeStyles.sectionTitle}>เลือกรถที่ต้องการ</Text>
+              <Text style={themeStyles.sectionTitle}>
+                {bookingMode === "group"
+                  ? `เลือกรถ (แตะเพื่อเลือกได้หลายคัน)`
+                  : "เลือกรถที่ต้องการ"}
+              </Text>
             </View>
             <View style={themeStyles.filterContainer}>
               {["all", "available", "unavailable"].map((ft) => (
@@ -2161,6 +3043,9 @@ export default function CarBookingScreen() {
                 </View>
               )}
             </View>
+
+            {/* 👥 ปุ่มยืนยัน (โหมด group) — ฟอร์มรายคันอยู่ในกล่องรถแต่ละคันแล้ว */}
+            {bookingMode === "group" && renderGroupFooter()}
           </View>
         </ScrollView>
         {Platform.OS === "ios" && pickerConfig && (
@@ -2184,12 +3069,25 @@ export default function CarBookingScreen() {
                   </TouchableOpacity>
                 </View>
                 <DateTimePicker
-                  value={pickerConfig.target === "start" ? startDate : endDate}
+                  value={
+                    pickerConfig.carId != null && carEntries[pickerConfig.carId]
+                      ? pickerConfig.target === "start"
+                        ? carEntries[pickerConfig.carId].startDate
+                        : carEntries[pickerConfig.carId].endDate
+                      : pickerConfig.target === "start"
+                        ? startDate
+                        : endDate
+                  }
                   mode={pickerConfig.mode}
                   display="spinner"
                   onChange={(e, d) =>
                     d &&
-                    handleDateChange(pickerConfig.target, d, pickerConfig.mode!)
+                    handleDateChange(
+                      pickerConfig.target,
+                      d,
+                      pickerConfig.mode!,
+                      pickerConfig.carId,
+                    )
                   }
                   minimumDate={new Date()}
                   locale="th-TH"
@@ -2203,125 +3101,147 @@ export default function CarBookingScreen() {
           visible={showReturnModal}
           transparent
           animationType="fade"
-          onRequestClose={() => setShowReturnModal(false)}
+          onRequestClose={() => {
+            Keyboard.dismiss();
+            setShowReturnModal(false);
+          }}
         >
-          <View style={themeStyles.modalOverlay}>
-            <View style={themeStyles.modalContent}>
-              <View style={themeStyles.modalHeader}>
-                <Text style={themeStyles.modalTitle}>แบบฟอร์มคืนรถ</Text>
-                <TouchableOpacity onPress={() => setShowReturnModal(false)}>
-                  <View
-                    style={{
-                      backgroundColor: "rgba(255,255,255,0.2)",
-                      borderRadius: 20,
-                      padding: 5,
+          <TouchableWithoutFeedback
+            onPress={Keyboard.dismiss}
+            accessible={false}
+          >
+            <View style={themeStyles.modalOverlay}>
+              <View style={themeStyles.modalContent}>
+                <View style={themeStyles.modalHeader}>
+                  <Text style={themeStyles.modalTitle}>แบบฟอร์มคืนรถ</Text>
+                  <TouchableOpacity
+                    onPress={() => {
+                      Keyboard.dismiss();
+                      setShowReturnModal(false);
                     }}
                   >
-                    <Ionicons name="close" size={20} color="#fff" />
-                  </View>
-                </TouchableOpacity>
-              </View>
-              <View style={themeStyles.modalBody}>
-                <Text style={themeStyles.inputLabel}>จอดรถไว้ที่ไหน?</Text>
-                <TextInput
-                  style={themeStyles.input}
-                  value={parkingLoc}
-                  onChangeText={setParkingLoc}
-                  placeholder="ระบุตำแหน่ง"
-                  placeholderTextColor={isDark ? "#94a3b8" : "#9ca3af"}
-                />
-                <Text style={themeStyles.inputLabel}>
-                  {returnBookingData?.car_type === "EV"
-                    ? "แบตเตอรี่คงเหลือ (%)"
-                    : "ปริมาณน้ำมันคงเหลือ"}
-                </Text>
-                {returnBookingData?.car_type === "EV" ? (
-                  <View>
-                    <View style={themeStyles.evInputBox}>
-                      <TextInput
-                        style={themeStyles.evInput}
-                        value={energyLevel}
-                        onChangeText={setEnergyLevel}
-                        keyboardType="numeric"
-                        placeholder="0"
-                        placeholderTextColor="#047857"
-                      />
-                      <Text style={themeStyles.evUnit}>%</Text>
-                    </View>
-                    <TouchableOpacity
-                      style={[
-                        themeStyles.chargingBox,
-                        isCharging && themeStyles.chargingBoxActive,
-                      ]}
-                      onPress={() => setIsCharging(!isCharging)}
-                      activeOpacity={0.7}
+                    <View
+                      style={{
+                        backgroundColor: "rgba(255,255,255,0.2)",
+                        borderRadius: 20,
+                        padding: 5,
+                      }}
                     >
-                      <Ionicons
-                        name="flash"
-                        size={20}
-                        color={
-                          isCharging
-                            ? isDark
-                              ? "#4ade80"
-                              : "#15803d"
-                            : isDark
-                              ? "#94a3b8"
-                              : "#6b7280"
-                        }
-                        style={{ marginRight: 8 }}
-                      />
-                      <Text
-                        style={[
-                          themeStyles.chargingText,
-                          isCharging && themeStyles.chargingTextActive,
-                        ]}
-                      >
-                        เสียบสายชาร์จทิ้งไว้
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                ) : (
-                  <View style={themeStyles.fuelRow}>
-                    {["Empty", "1/4", "1/2", "3/4", "Full"].map((lvl) => (
+                      <Ionicons name="close" size={20} color="#fff" />
+                    </View>
+                  </TouchableOpacity>
+                </View>
+                <View style={themeStyles.modalBody}>
+                  <Text style={themeStyles.inputLabel}>จอดรถไว้ที่ไหน?</Text>
+                  <TextInput
+                    style={themeStyles.input}
+                    value={parkingLoc}
+                    onChangeText={setParkingLoc}
+                    placeholder="ระบุตำแหน่ง"
+                    placeholderTextColor={isDark ? "#94a3b8" : "#9ca3af"}
+                  />
+                  <Text style={themeStyles.inputLabel}>
+                    {isReturnCarEV
+                      ? "แบตเตอรี่คงเหลือ (%)"
+                      : "ปริมาณน้ำมันคงเหลือ"}
+                  </Text>
+                  {isReturnCarEV ? (
+                    <View>
+                      <View style={themeStyles.evInputBox}>
+                        <TextInput
+                          style={themeStyles.evInput}
+                          value={energyLevel}
+                          onChangeText={setEnergyLevel}
+                          keyboardType="numeric"
+                          returnKeyType="done"
+                          blurOnSubmit
+                          onSubmitEditing={Keyboard.dismiss}
+                          placeholder="0"
+                          placeholderTextColor="#047857"
+                        />
+                        <Text style={themeStyles.evUnit}>%</Text>
+                      </View>
                       <TouchableOpacity
-                        key={lvl}
                         style={[
-                          themeStyles.fuelBtn,
-                          energyLevel === lvl && themeStyles.fuelBtnActive,
+                          themeStyles.chargingBox,
+                          isCharging && themeStyles.chargingBoxActive,
                         ]}
-                        onPress={() => setEnergyLevel(lvl)}
+                        onPress={() => setIsCharging(!isCharging)}
+                        activeOpacity={0.7}
                       >
+                        <Ionicons
+                          name="flash"
+                          size={20}
+                          color={
+                            isCharging
+                              ? isDark
+                                ? "#4ade80"
+                                : "#15803d"
+                              : isDark
+                                ? "#94a3b8"
+                                : "#6b7280"
+                          }
+                          style={{ marginRight: 8 }}
+                        />
                         <Text
                           style={[
-                            themeStyles.fuelText,
-                            energyLevel === lvl && themeStyles.fuelTextActive,
+                            themeStyles.chargingText,
+                            isCharging && themeStyles.chargingTextActive,
                           ]}
                         >
-                          {lvl}
+                          เสียบสายชาร์จทิ้งไว้
                         </Text>
                       </TouchableOpacity>
-                    ))}
-                  </View>
-                )}
-                <Text style={themeStyles.inputLabel}>หมายเหตุ (ถ้ามี)</Text>
-                <TextInput
-                  style={themeStyles.input}
-                  value={issue}
-                  onChangeText={setIssue}
-                  placeholder="เช่น ยางแบน"
-                  placeholderTextColor={isDark ? "#94a3b8" : "#9ca3af"}
-                />
-                <TouchableOpacity
-                  style={themeStyles.confirmReturnBtn}
-                  onPress={handleReturnPress}
-                >
-                  <Text style={themeStyles.confirmReturnText}>
-                    ยืนยันการคืนรถ
-                  </Text>
-                </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <View style={themeStyles.fuelRow}>
+                      {["Empty", "1/4", "1/2", "3/4", "Full"].map((lvl) => (
+                        <TouchableOpacity
+                          key={lvl}
+                          style={[
+                            themeStyles.fuelBtn,
+                            energyLevel === lvl && themeStyles.fuelBtnActive,
+                          ]}
+                          onPress={() => setEnergyLevel(lvl)}
+                        >
+                          <Text
+                            style={[
+                              themeStyles.fuelText,
+                              energyLevel === lvl && themeStyles.fuelTextActive,
+                            ]}
+                          >
+                            {lvl}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
+                  <Text style={themeStyles.inputLabel}>หมายเหตุ (ถ้ามี)</Text>
+                  <TextInput
+                    style={themeStyles.input}
+                    value={issue}
+                    onChangeText={setIssue}
+                    placeholder="เช่น ยางแบน"
+                    placeholderTextColor={isDark ? "#94a3b8" : "#9ca3af"}
+                  />
+                  <TouchableOpacity
+                    style={themeStyles.confirmReturnBtn}
+                    onPress={() => {
+                      Keyboard.dismiss();
+                      handleReturnPress();
+                    }}
+                  >
+                    <Text style={themeStyles.confirmReturnText}>
+                      ยืนยันการคืนรถ
+                    </Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             </View>
-          </View>
+          </TouchableWithoutFeedback>
+
+          {/* alert ต้องอยู่ในชั้นเดียวกับฟอร์มคืนรถ ไม่งั้น Android ไม่แสดง */}
+          {showReturnModal && renderAlert()}
         </Modal>
 
         {/* 🔥 Modal ตารางงาน */}
@@ -2332,30 +3252,31 @@ export default function CarBookingScreen() {
           onRequestClose={() => setScheduleModalVisible(false)}
         >
           {renderScheduleModal()}
+
+          {/* 🔥 Modal รายละเอียด — เปิดจากรายการในปฏิทิน จึงต้องอยู่ในชั้นเดียวกับ
+              Modal ตารางงาน ไม่งั้น Android จะไม่ยกขึ้นมาแสดง (ดูเหมือนกดไม่ติด) */}
+          <Modal
+            transparent={true}
+            visible={detailModalVisible}
+            animationType="fade"
+            onRequestClose={() => setDetailModalVisible(false)}
+          >
+            <View style={themeStyles.modalOverlay}>{renderDetailModal()}</View>
+          </Modal>
         </Modal>
 
-        {/* 🔥 Modal แสดงรายละเอียดเมื่อกดรายการในปฏิทิน */}
+        {/* 👥 Modal เลือกผู้ใช้รถ (โหมด group) */}
         <Modal
           transparent={true}
-          visible={detailModalVisible}
+          visible={driverPickerCarId != null}
           animationType="fade"
-          onRequestClose={() => setDetailModalVisible(false)}
+          onRequestClose={() => setDriverPickerCarId(null)}
         >
-          <View style={themeStyles.modalOverlay}>{renderDetailModal()}</View>
+          {renderDriverPicker()}
         </Modal>
       </KeyboardAvoidingView>
-      <CustomAlertModal
-        visible={alertConfig.visible}
-        type={alertConfig.type}
-        title={alertConfig.title}
-        message={alertConfig.message}
-        onConfirm={alertConfig.onConfirm}
-        onCancel={alertConfig.onCancel}
-        showCancel={alertConfig.showCancel}
-        showConfirm={alertConfig.showConfirm}
-        themeColors={themeColors}
-        isDark={isDark}
-      />
+      {/* ตอนฟอร์มคืนรถเปิดอยู่ alert ถูก render อยู่ข้างในนั้นแล้ว */}
+      {!showReturnModal && renderAlert()}
       {showScrollTop && (
         <TouchableOpacity
           style={themeStyles.scrollTopBtn}
@@ -2542,9 +3463,10 @@ const getStyles = (isDark: boolean) => {
     timeText: { fontSize: 16, fontWeight: "bold", color: "#2563eb" },
     divider: { height: 1, backgroundColor: colors.border, marginVertical: 15 },
     grid: { flexDirection: "column" },
+    // กรอบนอกของการ์ดรถ — ไม่ใช่ปุ่ม เพื่อให้วางฟอร์มกรอกรายคันไว้ข้างในได้
+    // โดยการแตะช่องกรอกไม่ทะลุไปสั่งยกเลิกเลือกรถ
     carCard: {
       width: "100%",
-      flexDirection: "row",
       backgroundColor: colors.card,
       borderRadius: 12,
       marginBottom: 15,
@@ -2555,6 +3477,10 @@ const getStyles = (isDark: boolean) => {
       shadowRadius: 5,
       elevation: 2,
       overflow: "hidden",
+    },
+    // แถวข้อมูลรถ (รูป + ชื่อ + สถานะ) — ส่วนที่แตะเพื่อเลือก/ยกเลิกเลือก
+    carCardRow: {
+      flexDirection: "row",
       padding: 10,
     },
     carCardSelected: {
@@ -2650,6 +3576,233 @@ const getStyles = (isDark: boolean) => {
       elevation: 5,
     },
     submitBtnText: { color: "#fff", fontSize: 18, fontWeight: "bold" },
+
+    // --- 👥 โหมดจองให้ตัวเอง + คนอื่น ---
+    modeToggleRow: {
+      flexDirection: "row",
+      backgroundColor: isDark ? "#0f172a" : "#f1f5f9",
+      borderRadius: 12,
+      padding: 4,
+      gap: 4,
+      marginBottom: 5,
+    },
+    modeBtn: {
+      flex: 1,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 5,
+      paddingVertical: 9,
+      paddingHorizontal: 6,
+      borderRadius: 9,
+    },
+    modeBtnActive: { backgroundColor: "#2563eb" },
+    modeBtnText: {
+      fontSize: 12,
+      fontWeight: "bold",
+      color: colors.subText,
+      flexShrink: 1,
+    },
+    modeBtnTextActive: { color: "#fff" },
+    groupHint: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+      gap: 8,
+      backgroundColor: isDark ? "rgba(37, 99, 235, 0.12)" : "#eff6ff",
+      borderWidth: 1,
+      borderColor: isDark ? "#1e40af" : "#bfdbfe",
+      borderRadius: 10,
+      padding: 10,
+      marginTop: 12,
+    },
+    groupHintText: {
+      flex: 1,
+      fontSize: 11,
+      lineHeight: 17,
+      color: isDark ? "#93c5fd" : "#1e40af",
+    },
+    copyTimeBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 6,
+      backgroundColor: isDark ? "#172554" : "#eff6ff",
+      borderWidth: 1,
+      borderColor: isDark ? "#1e40af" : "#bfdbfe",
+      borderRadius: 10,
+      paddingVertical: 10,
+      marginTop: 15,
+    },
+    copyTimeBtnText: { color: "#2563eb", fontSize: 12, fontWeight: "bold" },
+    orderBadge: {
+      position: "absolute",
+      top: 0,
+      right: 0,
+      minWidth: 22,
+      height: 22,
+      borderRadius: 11,
+      backgroundColor: "#2563eb",
+      alignItems: "center",
+      justifyContent: "center",
+      paddingHorizontal: 5,
+    },
+    orderBadgeText: { color: "#fff", fontSize: 11, fontWeight: "bold" },
+    // ฟอร์มรายคันที่กางอยู่ในกล่องรถ
+    entryInline: {
+      paddingHorizontal: 12,
+      paddingBottom: 14,
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+      backgroundColor: isDark ? "rgba(37, 99, 235, 0.06)" : "#f8fbff",
+    },
+    entryInlineHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      paddingTop: 12,
+      paddingBottom: 4,
+    },
+    entryInlineTitle: {
+      flex: 1,
+      fontSize: 12,
+      fontWeight: "bold",
+      color: isDark ? "#93c5fd" : "#1e40af",
+    },
+    entryLabel: {
+      fontSize: 13,
+      color: colors.subText,
+      marginBottom: 5,
+      fontWeight: "600",
+      marginTop: 12,
+    },
+    entryOrderCircle: {
+      width: 26,
+      height: 26,
+      borderRadius: 13,
+      backgroundColor: "#2563eb",
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    entryOrderText: { color: "#fff", fontSize: 12, fontWeight: "bold" },
+    entryRemoveBtn: {
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: isDark ? "rgba(239, 68, 68, 0.15)" : "#fef2f2",
+    },
+    emptyEntryBox: {
+      alignItems: "center",
+      gap: 8,
+      padding: 25,
+      borderRadius: 14,
+      borderWidth: 1,
+      borderStyle: "dashed",
+      borderColor: colors.border,
+      backgroundColor: colors.card,
+    },
+    emptyEntryText: {
+      fontSize: 12,
+      color: colors.subText,
+      textAlign: "center",
+      lineHeight: 18,
+    },
+    driverSelectBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: colors.inputBg,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 10,
+      padding: 12,
+    },
+    driverSelectText: {
+      flex: 1,
+      fontSize: 15,
+      color: colors.text,
+      fontWeight: "600",
+    },
+    driverModalCard: {
+      backgroundColor: colors.card,
+      borderRadius: 18,
+      overflow: "hidden",
+      maxHeight: "85%",
+    },
+    driverModalHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingHorizontal: 15,
+      paddingVertical: 14,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    driverModalTitle: {
+      fontSize: 16,
+      fontWeight: "bold",
+      color: colors.text,
+    },
+    driverSearchBox: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      backgroundColor: isDark ? "#0f172a" : "#f1f5f9",
+      borderRadius: 10,
+      paddingHorizontal: 12,
+    },
+    driverSearchInput: {
+      flex: 1,
+      paddingVertical: 10,
+      fontSize: 15,
+      color: colors.text,
+    },
+    driverMeRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      paddingHorizontal: 15,
+      paddingVertical: 14,
+      marginTop: 12,
+      backgroundColor: isDark ? "rgba(245, 158, 11, 0.12)" : "#fffbeb",
+      borderTopWidth: 1,
+      borderBottomWidth: 1,
+      borderColor: colors.border,
+    },
+    driverMeText: {
+      flex: 1,
+      fontSize: 15,
+      fontWeight: "bold",
+      color: colors.text,
+    },
+    driverRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 10,
+      paddingHorizontal: 15,
+      paddingVertical: 13,
+    },
+    driverRowName: { flex: 1, fontSize: 15, color: colors.text },
+    driverRowPhone: { fontSize: 12, color: colors.subText },
+    proxyBadge: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 5,
+      alignSelf: "center",
+      backgroundColor: isDark ? "rgba(37, 99, 235, 0.15)" : "#eff6ff",
+      borderWidth: 1,
+      borderColor: isDark ? "#1e40af" : "#bfdbfe",
+      borderRadius: 20,
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+      marginBottom: 10,
+    },
+    proxyBadgeText: {
+      fontSize: 11,
+      fontWeight: "bold",
+      color: isDark ? "#93c5fd" : "#1e40af",
+    },
     activeCard: {
       backgroundColor: colors.card,
       borderRadius: 20,

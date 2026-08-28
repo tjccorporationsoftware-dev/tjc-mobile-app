@@ -109,6 +109,7 @@ export default function DriverTasks() {
         }
       }
 
+      
       setTasks(fetchedTasks);
     } catch (error) {
       console.error("Fetch Tasks Error:", error);
