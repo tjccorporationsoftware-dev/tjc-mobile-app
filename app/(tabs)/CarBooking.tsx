@@ -3,6 +3,8 @@ import DateTimePicker, {
   DateTimePickerAndroid,
 } from "@react-native-community/datetimepicker";
 import axios from "axios";
+import * as DocumentPicker from "expo-document-picker";
+import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect } from "expo-router";
 import React, {
   useCallback,
@@ -19,6 +21,7 @@ import {
   Image,
   Keyboard,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   RefreshControl,
@@ -94,6 +97,17 @@ interface Employee {
   phone: string | null;
 }
 
+// --- 🧭 กติกาการเดินทาง (เซิร์ฟเวอร์ส่งค่าจริงมาใน get_booking_data ใช้ค่านี้เป็นค่าตั้งต้น) ---
+const DEFAULT_MAX_PASSENGERS = 3;
+const PLAN_REQUIRED_OVER_DAYS = 2; // เกินกี่วันถึงต้องแนบไฟล์แผนงาน
+
+// ไฟล์แผนงานที่เลือกไว้ในเครื่อง (ยังไม่อัปโหลด)
+interface PlanFile {
+  uri: string;
+  name: string;
+  type: string;
+}
+
 // ข้อมูลที่กรอกแยกต่อรถ 1 คัน (ใช้เฉพาะโหมด group)
 interface CarEntry {
   driverId: number | string | null;
@@ -103,7 +117,27 @@ interface CarEntry {
   reason: string;
   startDate: Date;
   endDate: Date;
+  // 👥 ผู้ร่วมเดินทาง / คนขับ / แผนงาน
+  passengerIds: (number | string)[];
+  wheelId: number | string | null; // คนขับ — ต้องเป็นผู้ใช้รถ หรือหนึ่งในผู้ร่วมเดินทาง
+  planFiles: PlanFile[];
 }
+
+// นับวันปฏิทินรวมหัวท้าย (29→31 = 3 วัน) — ต้องตรงกับ CarManager::tripDays() ฝั่ง PHP
+const tripDaysBetween = (start: Date | string, end: Date | string) => {
+  const toDay = (v: Date | string) => {
+    const d = typeof v === "string" ? new Date(v.replace(" ", "T")) : new Date(v);
+    if (isNaN(d.getTime())) return null;
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  };
+  const s = toDay(start);
+  const e = toDay(end);
+  if (s == null || e == null || e < s) return 1;
+  return Math.round((e - s) / 86400000) + 1;
+};
+
+const needsPlanFile = (start: Date | string, end: Date | string) =>
+  tripDaysBetween(start, end) > PLAN_REQUIRED_OVER_DAYS;
 
 // ข้อความจาก createBooking() ฝั่ง PHP มี <br> ติดมา ต้องแปลงก่อนแสดงในแอป
 const stripHtml = (s: string) =>
@@ -425,6 +459,17 @@ export default function CarBookingScreen() {
   );
   const [driverSearch, setDriverSearch] = useState("");
 
+  // 👥 ผู้ร่วมเดินทาง / คนขับ / ไฟล์แผนงาน (โหมดจองเอง — โหมด group เก็บใน carEntries)
+  const [passengerIds, setPassengerIds] = useState<(number | string)[]>([]);
+  const [wheelId, setWheelId] = useState<number | string | null>(null);
+  const [planFiles, setPlanFiles] = useState<PlanFile[]>([]);
+  const [maxPassengers, setMaxPassengers] = useState(DEFAULT_MAX_PASSENGERS);
+  // "self" = ฟอร์มจองเอง, ตัวเลข = รหัสรถในโหมด group
+  const [passengerPickerFor, setPassengerPickerFor] = useState<
+    "self" | number | null
+  >(null);
+  const [passengerSearch, setPassengerSearch] = useState("");
+
   const isDark = colorScheme === "dark";
   const themeColors = isDark ? DarkColors : LightColors;
   const themeStyles = useMemo(() => getStyles(isDark), [isDark]);
@@ -574,6 +619,134 @@ export default function CarBookingScreen() {
       return next;
     });
   };
+
+  // =====================================================================
+  // 👥 ผู้ร่วมเดินทาง / คนขับ / ไฟล์แผนงาน
+  // =====================================================================
+  const empName = useCallback(
+    (id: number | string | null | undefined) => {
+      if (id == null || id === "") return "";
+      if (String(id) === String(user?.id))
+        return user?.fullname || "ตัวฉัน";
+      const e = employees.find((x) => String(x.id) === String(id));
+      return e?.fullname || `user #${id}`;
+    },
+    [employees, user?.id, user?.fullname],
+  );
+
+  // ผู้ร่วมเดินทางของฟอร์มที่กำลังเปิดอยู่ (จองเอง หรือรถคันหนึ่งในโหมด group)
+  const passengersOf = (target: "self" | number): (number | string)[] =>
+    target === "self" ? passengerIds : (carEntries[target]?.passengerIds ?? []);
+
+  const setPassengersOf = (
+    target: "self" | number,
+    ids: (number | string)[],
+  ) => {
+    if (target === "self") {
+      setPassengerIds(ids);
+      // คนขับที่เลือกไว้หลุดออกจากกลุ่มแล้ว → กลับไปเป็นผู้ใช้รถขับเอง
+      if (wheelId != null && !ids.some((i) => String(i) === String(wheelId)))
+        setWheelId(null);
+    } else {
+      const e = carEntries[target];
+      const patch: Partial<CarEntry> = { passengerIds: ids };
+      if (e?.wheelId != null && !ids.some((i) => String(i) === String(e.wheelId)))
+        patch.wheelId = null;
+      updateEntry(target, patch);
+    }
+  };
+
+  const togglePassenger = (target: "self" | number, id: number | string) => {
+    const current = passengersOf(target);
+    const exists = current.some((i) => String(i) === String(id));
+    if (exists) {
+      setPassengersOf(
+        target,
+        current.filter((i) => String(i) !== String(id)),
+      );
+      return;
+    }
+    if (current.length >= maxPassengers) {
+      showAlert(
+        "warning",
+        "เลือกได้ไม่เกิน " + maxPassengers + " คน",
+        `ผู้ร่วมเดินทางสูงสุด ${maxPassengers} คน ถ้าจะเปลี่ยนคน ให้เอาคนเดิมออกก่อน`,
+      );
+      return;
+    }
+    setPassengersOf(target, [...current, id]);
+  };
+
+  // เจ้าของรถของฟอร์มนั้น ๆ (จองเอง = ตัวเรา, group = ผู้ใช้รถของคันนั้น)
+  const ownerOf = (target: "self" | number): (number | string) | null =>
+    target === "self" ? (user?.id ?? null) : (carEntries[target]?.driverId ?? null);
+
+  const wheelOf = (target: "self" | number) =>
+    target === "self" ? wheelId : (carEntries[target]?.wheelId ?? null);
+
+  const setWheelOf = (target: "self" | number, id: number | string | null) => {
+    if (target === "self") setWheelId(id);
+    else updateEntry(target, { wheelId: id });
+  };
+
+  const planFilesOf = (target: "self" | number): PlanFile[] =>
+    target === "self" ? planFiles : (carEntries[target]?.planFiles ?? []);
+
+  const setPlanFilesOf = (target: "self" | number, files: PlanFile[]) => {
+    if (target === "self") setPlanFiles(files);
+    else updateEntry(target, { planFiles: files });
+  };
+
+  const removePlanFile = (target: "self" | number, index: number) => {
+    setPlanFilesOf(
+      target,
+      planFilesOf(target).filter((_, i) => i !== index),
+    );
+  };
+
+  // แนบรูป (ถ่ายเอกสารแผนงานมาก็ได้)
+  const pickPlanImages = async (target: "self" | number) => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsMultipleSelection: true,
+        quality: 0.7,
+      });
+      if (result.canceled) return;
+      const picked: PlanFile[] = result.assets.map((a, i) => ({
+        uri: a.uri,
+        name: a.fileName || `plan_${Date.now()}_${i}.jpg`,
+        type: a.mimeType || "image/jpeg",
+      }));
+      setPlanFilesOf(target, [...planFilesOf(target), ...picked]);
+    } catch (e) {
+      console.log("Plan image picker error:", e);
+    }
+  };
+
+  // แนบไฟล์ (PDF / Word / Excel)
+  const pickPlanDocs = async (target: "self" | number) => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: "*/*",
+        multiple: true,
+        copyToCacheDirectory: true,
+      });
+      if (result.canceled) return;
+      const picked: PlanFile[] = result.assets.map((a, i) => ({
+        uri: a.uri,
+        name: a.name || `plan_${Date.now()}_${i}`,
+        type: a.mimeType || "application/octet-stream",
+      }));
+      setPlanFilesOf(target, [...planFilesOf(target), ...picked]);
+    } catch (e) {
+      console.log("Plan document picker error:", e);
+    }
+  };
+
+  // ลิงก์เปิดไฟล์แผนงานที่อัปโหลดแล้ว (API คืนมาแค่ชื่อไฟล์)
+  const planFileUrl = (fileName: string) =>
+    `${API_BASE}/uploads/carplans/${encodeURIComponent(fileName)}`;
 
   // ถ้าสิทธิ์ถูกถอนระหว่างที่ผู้ใช้ค้างอยู่ในโหมด group ต้องเด้งกลับโหมด self ไม่ให้ค้าง
   useEffect(() => {
@@ -752,6 +925,9 @@ export default function CarBookingScreen() {
         // → แอดมินแก้สิทธิ์ใน ManagePermissions แล้วเห็นผลทันทีแค่ pull-to-refresh
         setCanBookForOthers(data.can_book_for_others === true);
         setEmployees(Array.isArray(data.employees) ? data.employees : []);
+        // กติกาจำนวนผู้ร่วมเดินทาง ให้เซิร์ฟเวอร์เป็นคนกำหนด
+        if (Number(data.max_passengers) > 0)
+          setMaxPassengers(Number(data.max_passengers));
       }
     } catch (error) {
       console.error("❌ Fetch Error:", error);
@@ -883,22 +1059,24 @@ export default function CarBookingScreen() {
 
   const submitBooking = async () => {
     try {
-      const params = new URLSearchParams({
-        action: "book_car",
-        user_id: String(user?.id),
-        car_id: String(selectedCarId),
-        phone_number: phone,
-        start_datetime: formatDT(startDate) + ":00",
-        end_datetime: formatDT(endDate) + ":00",
-        destination,
-        reason,
-        passenger_count: "1",
-      });
+      // multipart เพราะต้องแนบไฟล์แผนงานไปด้วย (ทริปเกิน 2 วัน)
+      const form = new FormData();
+      form.append("action", "book_car");
+      form.append("user_id", String(user?.id));
+      form.append("car_id", String(selectedCarId));
+      form.append("phone_number", phone);
+      form.append("start_datetime", formatDT(startDate) + ":00");
+      form.append("end_datetime", formatDT(endDate) + ":00");
+      form.append("destination", destination);
+      form.append("reason", reason);
+      form.append("passenger_ids", passengerIds.join(","));
+      form.append("driver_choice", String(wheelId ?? user?.id ?? ""));
+      planFiles.forEach((f) => form.append("plan_files[]", f as any));
 
       const response = await axios.post(
         `${API_BASE}/api_carboooking_mobile.php`,
-        params.toString(),
-        { headers: { "Content-Type": "application/x-www-form-urlencoded" } },
+        form,
+        { headers: { "Content-Type": "multipart/form-data" } },
       );
 
       let data = response.data;
@@ -930,6 +1108,9 @@ export default function CarBookingScreen() {
             setDestination("");
             setReason("");
             setSelectedCarId(null);
+            setPassengerIds([]);
+            setWheelId(null);
+            setPlanFiles([]);
             await fetchData();
             scrollToTop();
           },
@@ -966,19 +1147,26 @@ export default function CarBookingScreen() {
         reason: e.reason.trim(),
         start: formatDT(e.startDate) + ":00",
         end: formatDT(e.endDate) + ":00",
+        passenger_ids: e.passengerIds,
+        driver_choice: e.wheelId ?? e.driverId,
       }));
 
-      const params = new URLSearchParams({
-        action: "book_car",
-        booking_type: "group",
-        user_id: String(user?.id),
-        items: JSON.stringify(items),
+      // multipart: ไฟล์แผนงานแยกรายคัน → plan_files_<รหัสรถ>[]
+      const form = new FormData();
+      form.append("action", "book_car");
+      form.append("booking_type", "group");
+      form.append("user_id", String(user?.id));
+      form.append("items", JSON.stringify(items));
+      Object.entries(carEntries).forEach(([cid, e]) => {
+        e.planFiles.forEach((f) =>
+          form.append(`plan_files_${cid}[]`, f as any),
+        );
       });
 
       const response = await axios.post(
         `${API_BASE}/api_carboooking_mobile.php`,
-        params.toString(),
-        { headers: { "Content-Type": "application/x-www-form-urlencoded" } },
+        form,
+        { headers: { "Content-Type": "multipart/form-data" } },
       );
 
       // PHP อาจแทรก warning ก่อน JSON — ใช้ตัวแยกแบบเดียวกับ submitBooking()
@@ -1084,6 +1272,18 @@ export default function CarBookingScreen() {
         if (!e.reason.trim()) problems.push(`${label}: ยังไม่กรอกภารกิจ`);
         if (e.endDate <= e.startDate)
           problems.push(`${label}: เวลาคืนรถต้องหลังเวลารับรถ`);
+        // 👥 ผู้ร่วมเดินทาง + แผนงาน
+        if (e.passengerIds.length > maxPassengers)
+          problems.push(`${label}: ผู้ร่วมเดินทางได้ไม่เกิน ${maxPassengers} คน`);
+        if (
+          e.driverId &&
+          e.passengerIds.some((p) => String(p) === String(e.driverId))
+        )
+          problems.push(`${label}: ผู้ใช้รถถูกเลือกเป็นผู้ร่วมเดินทางซ้ำ`);
+        if (needsPlanFile(e.startDate, e.endDate) && e.planFiles.length === 0)
+          problems.push(
+            `${label}: เดินทาง ${tripDaysBetween(e.startDate, e.endDate)} วัน ต้องแนบไฟล์แผนงาน`,
+          );
       });
       if (problems.length)
         return showAlert("warning", "ข้อมูลไม่ครบ", problems.join("\n"));
@@ -1134,10 +1334,28 @@ export default function CarBookingScreen() {
           : "ไม่ว่างช่วงนี้",
         "รถคันนี้ถูกจองหรือซ่อมบำรุงแล้ว",
       );
+
+    // 👥 ผู้ร่วมเดินทาง + แผนงาน (เกิน 2 วันต้องแนบไฟล์)
+    const days = tripDaysBetween(startDate, endDate);
+    if (passengerIds.length > maxPassengers)
+      return showAlert(
+        "warning",
+        "ผู้ร่วมเดินทางเกินกำหนด",
+        `เลือกผู้ร่วมเดินทางได้ไม่เกิน ${maxPassengers} คน`,
+      );
+    if (needsPlanFile(startDate, endDate) && planFiles.length === 0)
+      return showAlert(
+        "warning",
+        "ยังไม่ได้แนบแผนงาน",
+        `เดินทาง ${days} วัน (เกิน ${PLAN_REQUIRED_OVER_DAYS} วัน) ต้องแนบไฟล์แผนงานว่าไปทำอะไร ที่ไหน เวลาใดบ้าง`,
+      );
+
+    const wheelName = empName(wheelId ?? user?.id);
     showAlert(
       "question",
       "ยืนยันการจอง",
-      "ตรวจสอบข้อมูลครบถ้วนแล้ว?",
+      `ไปกัน ${1 + passengerIds.length} คน · ${days} วัน\nคนขับ: ${wheelName}` +
+        (planFiles.length ? `\nแผนงาน ${planFiles.length} ไฟล์` : ""),
       true,
       submitBooking,
     );
@@ -1437,6 +1655,49 @@ export default function CarBookingScreen() {
             >
               {selectedDetail.reason || "-"}
             </Text>
+          </View>
+
+          {/* 👥 ผู้เดินทาง / คนขับ / แผนงาน */}
+          <View style={{ marginBottom: 15 }}>
+            <Text
+              style={{
+                fontSize: 12,
+                color: themeColors.subText,
+                marginBottom: 2,
+              }}
+            >
+              ผู้เดินทาง ({selectedDetail.passenger_count || 1} คน ·{" "}
+              {tripDaysBetween(selectedDetail.start, selectedDetail.end)} วัน)
+            </Text>
+            <Text
+              style={{
+                fontSize: 14,
+                color: themeColors.text,
+                fontWeight: "500",
+              }}
+            >
+              คนขับ: {selectedDetail.wheel_driver_name || selectedDetail.fullname || "-"}
+            </Text>
+            {!!selectedDetail.passenger_list && (
+              <Text style={{ fontSize: 12, color: themeColors.subText }}>
+                ร่วมเดินทาง: {selectedDetail.passenger_list}
+              </Text>
+            )}
+            {Array.isArray(selectedDetail.plan_files) &&
+              selectedDetail.plan_files.length > 0 &&
+              selectedDetail.plan_files.map((f: any) => (
+                <TouchableOpacity
+                  key={String(f.id)}
+                  style={themeStyles.planFileLink}
+                  onPress={() => Linking.openURL(planFileUrl(f.file_name))}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="attach" size={14} color="#f59e0b" />
+                  <Text style={themeStyles.planFileLinkText} numberOfLines={1}>
+                    {f.original_name || f.file_name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
           </View>
 
           <View
@@ -1948,6 +2209,9 @@ export default function CarBookingScreen() {
             // เพื่อไม่เขียนทับค่าที่ผู้ใช้ปรับรายคันไปแล้ว)
             startDate: new Date(startDate),
             endDate: new Date(endDate),
+            passengerIds: [],
+            wheelId: null,
+            planFiles: [],
           },
         }));
       } else {
@@ -2291,6 +2555,57 @@ export default function CarBookingScreen() {
                   คืน: {formatDateDisplay(new Date(b.end_date))}{" "}
                   {formatTimeDisplay(new Date(b.end_date))} น.
                 </Text>
+
+                {/* 👥 ผู้เดินทาง / คนขับ / แผนงาน */}
+                <View style={themeStyles.tripSummaryBox}>
+                  <Text style={themeStyles.tripSummaryText}>
+                    👥 ไปกัน {b.people_count ?? b.passenger_count ?? 1} คน
+                  </Text>
+                  <Text style={themeStyles.tripSummaryText}>
+                    🗓️ {b.trip_days ?? tripDaysBetween(b.start_date, b.end_date)}{" "}
+                    วัน
+                  </Text>
+                </View>
+                <Text style={{ color: themeColors.subText, marginTop: 6 }}>
+                  คนขับ: {b.wheel_driver_name || b.driver_name || "-"}
+                </Text>
+                {Array.isArray(b.passengers) && b.passengers.length > 0 && (
+                  <Text
+                    style={{ color: themeColors.subText, fontSize: 12 }}
+                    numberOfLines={2}
+                  >
+                    ร่วมเดินทาง:{" "}
+                    {b.passengers.map((p: any) => p.fullname).join(", ")}
+                  </Text>
+                )}
+                {Array.isArray(b.plan_files) && b.plan_files.length > 0
+                  ? b.plan_files.map((f: any) => (
+                      <TouchableOpacity
+                        key={String(f.id)}
+                        style={themeStyles.planFileLink}
+                        onPress={() =>
+                          Linking.openURL(planFileUrl(f.file_name))
+                        }
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons name="attach" size={14} color="#f59e0b" />
+                        <Text
+                          style={themeStyles.planFileLinkText}
+                          numberOfLines={1}
+                        >
+                          {f.original_name || f.file_name}
+                        </Text>
+                      </TouchableOpacity>
+                    ))
+                  : (b.trip_days ??
+                      tripDaysBetween(b.start_date, b.end_date)) >
+                      PLAN_REQUIRED_OVER_DAYS && (
+                      <Text
+                        style={{ color: "#ef4444", fontSize: 12, marginTop: 6 }}
+                      >
+                        ⚠️ ยังไม่มีไฟล์แผนงาน
+                      </Text>
+                    )}
                 <View style={{ flexDirection: "row", marginTop: 15, gap: 10 }}>
                   {(b.status === "active" || b.status === "approved") && (
                     <TouchableOpacity
@@ -2362,6 +2677,193 @@ export default function CarBookingScreen() {
 
   // --- 👥 การ์ดกรอกรายละเอียดรายคัน (โหมด group) ---
   // --- 👥 ฟอร์มกรอกรายละเอียดของรถคันนั้น (กางอยู่ในกล่องรถ) ---
+  // =====================================================================
+  // 👥 บล็อก "ผู้เดินทาง + คนขับ + แผนงาน" — ใช้ทั้งโหมดจองเองและรายคันในโหมด group
+  // =====================================================================
+  const renderTravelSection = (
+    target: "self" | number,
+    tripStart: Date,
+    tripEnd: Date,
+  ) => {
+    const pIds = passengersOf(target);
+    const owner = ownerOf(target);
+    const wheel = wheelOf(target) ?? owner;
+    const files = planFilesOf(target);
+    const days = tripDaysBetween(tripStart, tripEnd);
+    const mustAttach = needsPlanFile(tripStart, tripEnd);
+    const ownerLabel =
+      target === "self"
+        ? `ตัวฉัน (${user?.fullname || "ฉัน"})`
+        : carEntries[target]?.driverName || "ผู้ใช้รถ";
+
+    return (
+      <>
+        {/* ผู้ร่วมเดินทาง */}
+        <Text style={themeStyles.entryLabel}>
+          ผู้ร่วมเดินทาง{" "}
+          <Text style={{ color: themeColors.subText, fontWeight: "normal" }}>
+            (ไม่เกิน {maxPassengers} คน · ไม่ต้องเลือกตัวเอง)
+          </Text>
+        </Text>
+        <TouchableOpacity
+          style={themeStyles.driverSelectBtn}
+          onPress={() => {
+            setPassengerSearch("");
+            setPassengerPickerFor(target);
+          }}
+          activeOpacity={0.8}
+        >
+          <Ionicons
+            name={pIds.length ? "people" : "people-outline"}
+            size={16}
+            color={pIds.length ? "#2563eb" : themeColors.subText}
+            style={{ marginRight: 8 }}
+          />
+          <Text
+            style={[
+              themeStyles.driverSelectText,
+              !pIds.length && { color: isDark ? "#94a3b8" : "#9ca3af" },
+            ]}
+            numberOfLines={1}
+          >
+            {pIds.length
+              ? `เลือกแล้ว ${pIds.length} คน`
+              : "ไปคนเดียว (แตะเพื่อเพิ่มคน)"}
+          </Text>
+          <Ionicons name="chevron-down" size={16} color={themeColors.subText} />
+        </TouchableOpacity>
+
+        {pIds.length > 0 && (
+          <View style={themeStyles.chipWrap}>
+            {pIds.map((pid) => (
+              <View key={String(pid)} style={themeStyles.passengerChip}>
+                <Text style={themeStyles.passengerChipText} numberOfLines={1}>
+                  {empName(pid)}
+                </Text>
+                <TouchableOpacity
+                  onPress={() => togglePassenger(target, pid)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons name="close-circle" size={15} color="#2563eb" />
+                </TouchableOpacity>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {/* คนขับ — เลือกได้จากผู้ใช้รถ + ผู้ร่วมเดินทาง */}
+        <Text style={themeStyles.entryLabel}>ใครเป็นคนขับ</Text>
+        <View style={themeStyles.chipWrap}>
+          {[
+            { id: owner, label: ownerLabel },
+            ...pIds.map((pid) => ({ id: pid, label: empName(pid) })),
+          ].map((opt) => {
+            const active = String(opt.id ?? "") === String(wheel ?? "");
+            return (
+              <TouchableOpacity
+                key={`wheel-${String(opt.id)}`}
+                style={[
+                  themeStyles.wheelChip,
+                  active && themeStyles.wheelChipActive,
+                ]}
+                onPress={() =>
+                  setWheelOf(
+                    target,
+                    String(opt.id) === String(owner) ? null : opt.id,
+                  )
+                }
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name={active ? "car-sport" : "car-sport-outline"}
+                  size={13}
+                  color={active ? "#fff" : themeColors.subText}
+                />
+                <Text
+                  style={[
+                    themeStyles.wheelChipText,
+                    active && { color: "#fff" },
+                  ]}
+                  numberOfLines={1}
+                >
+                  {opt.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        {/* สรุปจำนวนคน / จำนวนวัน */}
+        <View style={themeStyles.tripSummaryBox}>
+          <Text style={themeStyles.tripSummaryText}>
+            👥 ไปกัน {1 + pIds.length} คน
+          </Text>
+          <Text style={themeStyles.tripSummaryText}>🗓️ {days} วัน</Text>
+        </View>
+
+        {/* แผนงาน — บังคับเมื่อเกิน 2 วัน */}
+        {mustAttach && (
+          <>
+            <Text style={[themeStyles.entryLabel, { color: "#ef4444" }]}>
+              ไฟล์แผนงาน <Text style={{ color: "red" }}>*</Text>{" "}
+              <Text style={{ fontWeight: "normal" }}>
+                (เดินทางเกิน {PLAN_REQUIRED_OVER_DAYS} วัน)
+              </Text>
+            </Text>
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <TouchableOpacity
+                style={themeStyles.attachBtn}
+                onPress={() => pickPlanImages(target)}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="image-outline" size={16} color="#2563eb" />
+                <Text style={themeStyles.attachBtnText}>แนบรูป</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={themeStyles.attachBtn}
+                onPress={() => pickPlanDocs(target)}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="document-outline" size={16} color="#2563eb" />
+                <Text style={themeStyles.attachBtnText}>แนบไฟล์</Text>
+              </TouchableOpacity>
+            </View>
+
+            {files.length === 0 ? (
+              <Text style={themeStyles.planHintText}>
+                แนบแผนงานว่าไปทำอะไร ที่ไหน เวลาใดบ้าง — รูป / PDF / Word /
+                Excel แนบได้หลายไฟล์ (ไฟล์ละไม่เกิน 10MB)
+              </Text>
+            ) : (
+              files.map((f, idx) => (
+                <View key={`${f.uri}-${idx}`} style={themeStyles.planFileRow}>
+                  <Ionicons
+                    name={
+                      f.type?.startsWith("image")
+                        ? "image"
+                        : "document-text-outline"
+                    }
+                    size={15}
+                    color="#f59e0b"
+                  />
+                  <Text style={themeStyles.planFileName} numberOfLines={1}>
+                    {f.name}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => removePlanFile(target, idx)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons name="trash-outline" size={15} color="#ef4444" />
+                  </TouchableOpacity>
+                </View>
+              ))
+            )}
+          </>
+        )}
+      </>
+    );
+  };
+
   const renderCarEntryForm = (cid: number, e: CarEntry) => {
     const orderNo = selectedCarIds.indexOf(cid) + 1;
 
@@ -2530,6 +3032,9 @@ export default function CarBookingScreen() {
           placeholder="รายละเอียดเพิ่มเติม..."
           placeholderTextColor={isDark ? "#94a3b8" : "#9ca3af"}
         />
+
+        {/* 👥 ผู้ร่วมเดินทาง / คนขับ / แผนงาน ของคันนี้ */}
+        {renderTravelSection(cid, e.startDate, e.endDate)}
       </View>
     );
   };
@@ -2574,6 +3079,120 @@ export default function CarBookingScreen() {
   };
 
   // --- 👥 Modal เลือกผู้ใช้รถ ---
+  // --- 👥 Modal เลือกผู้ร่วมเดินทาง (เลือกได้หลายคน สูงสุด maxPassengers) ---
+  const renderPassengerPicker = () => {
+    const target = passengerPickerFor;
+    if (target == null) return null;
+
+    const chosen = passengersOf(target);
+    const owner = ownerOf(target);
+    const q = passengerSearch.trim().toLowerCase();
+    // ผู้ใช้รถของคันนั้นเป็นผู้เดินทางอยู่แล้ว จึงไม่ให้เลือกซ้ำ
+    const list = employees.filter((e) => {
+      if (String(e.id) === String(owner)) return false;
+      return q ? (e.fullname || "").toLowerCase().includes(q) : true;
+    });
+
+    const close = () => {
+      setPassengerPickerFor(null);
+      setPassengerSearch("");
+    };
+
+    return (
+      <View style={themeStyles.modalOverlay}>
+        <View style={themeStyles.driverModalCard}>
+          <View style={themeStyles.driverModalHeader}>
+            <Text style={themeStyles.driverModalTitle}>
+              ผู้ร่วมเดินทาง ({chosen.length}/{maxPassengers})
+            </Text>
+            <TouchableOpacity
+              onPress={close}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Ionicons name="close" size={22} color={themeColors.text} />
+            </TouchableOpacity>
+          </View>
+
+          <View style={{ paddingHorizontal: 15, paddingTop: 12 }}>
+            <View style={themeStyles.driverSearchBox}>
+              <Ionicons name="search" size={16} color={themeColors.subText} />
+              <TextInput
+                style={themeStyles.driverSearchInput}
+                value={passengerSearch}
+                onChangeText={setPassengerSearch}
+                placeholder="ค้นหาชื่อ..."
+                placeholderTextColor={isDark ? "#94a3b8" : "#9ca3af"}
+              />
+              {passengerSearch !== "" && (
+                <TouchableOpacity onPress={() => setPassengerSearch("")}>
+                  <Ionicons
+                    name="close-circle"
+                    size={16}
+                    color={themeColors.subText}
+                  />
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+
+          <FlatList
+            data={list}
+            keyExtractor={(item) => String(item.id)}
+            style={{ maxHeight: 330 }}
+            keyboardShouldPersistTaps="handled"
+            ItemSeparatorComponent={() => (
+              <View
+                style={{ height: 1, backgroundColor: themeColors.border }}
+              />
+            )}
+            ListEmptyComponent={
+              <View style={{ padding: 25, alignItems: "center" }}>
+                <Text style={{ color: themeColors.subText }}>
+                  ไม่พบพนักงานที่ค้นหา
+                </Text>
+              </View>
+            }
+            renderItem={({ item }) => {
+              const picked = chosen.some(
+                (i) => String(i) === String(item.id),
+              );
+              return (
+                <TouchableOpacity
+                  style={themeStyles.driverRow}
+                  onPress={() => togglePassenger(target, item.id)}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons
+                    name={picked ? "checkbox" : "square-outline"}
+                    size={18}
+                    color={picked ? "#2563eb" : themeColors.subText}
+                    style={{ marginRight: 10 }}
+                  />
+                  <Text style={themeStyles.driverRowName} numberOfLines={1}>
+                    {item.fullname || "-"}
+                  </Text>
+                  <Text style={themeStyles.driverRowPhone}>
+                    {item.phone || "-"}
+                  </Text>
+                </TouchableOpacity>
+              );
+            }}
+          />
+
+          <TouchableOpacity
+            style={themeStyles.passengerDoneBtn}
+            onPress={close}
+            activeOpacity={0.85}
+          >
+            <Text style={themeStyles.passengerDoneText}>
+              เสร็จสิ้น ({1 + chosen.length} คน)
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
+
   const renderDriverPicker = () => {
     const cid = driverPickerCarId;
     if (cid == null) return null;
@@ -2977,6 +3596,10 @@ export default function CarBookingScreen() {
                     placeholder="รายละเอียดเพิ่มเติม..."
                     placeholderTextColor={isDark ? "#94a3b8" : "#9ca3af"}
                   />
+
+                  {/* 👥 ผู้ร่วมเดินทาง / คนขับ / แผนงาน */}
+                  {renderTravelSection("self", startDate, endDate)}
+
                   <TouchableOpacity
                     style={themeStyles.submitBtn}
                     onPress={handleBookingPress}
@@ -3274,9 +3897,21 @@ export default function CarBookingScreen() {
         >
           {renderDriverPicker()}
         </Modal>
+
+        {/* 👥 Modal เลือกผู้ร่วมเดินทาง (ใช้ได้ทั้ง 2 โหมด) */}
+        <Modal
+          transparent={true}
+          visible={passengerPickerFor != null}
+          animationType="fade"
+          onRequestClose={() => setPassengerPickerFor(null)}
+        >
+          {renderPassengerPicker()}
+          {/* Android: alert ต้องอยู่ใน Modal ที่เปิดอยู่ ไม่งั้นจะไม่แสดง */}
+          {renderAlert()}
+        </Modal>
       </KeyboardAvoidingView>
-      {/* ตอนฟอร์มคืนรถเปิดอยู่ alert ถูก render อยู่ข้างในนั้นแล้ว */}
-      {!showReturnModal && renderAlert()}
+      {/* ตอนฟอร์มคืนรถ / ตัวเลือกผู้ร่วมเดินทางเปิดอยู่ alert ถูก render อยู่ข้างในนั้นแล้ว */}
+      {!showReturnModal && passengerPickerFor == null && renderAlert()}
       {showScrollTop && (
         <TouchableOpacity
           style={themeStyles.scrollTopBtn}
@@ -3675,6 +4310,135 @@ const getStyles = (isDark: boolean) => {
       fontWeight: "600",
       marginTop: 12,
     },
+    // 👥 ผู้ร่วมเดินทาง / คนขับ / แผนงาน
+    chipWrap: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 6,
+      marginTop: 8,
+    },
+    passengerChip: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      paddingVertical: 5,
+      paddingHorizontal: 10,
+      borderRadius: 999,
+      maxWidth: "100%",
+      backgroundColor: isDark ? "rgba(37, 99, 235, 0.18)" : "#eff6ff",
+      borderWidth: 1,
+      borderColor: isDark ? "rgba(37, 99, 235, 0.5)" : "#bfdbfe",
+    },
+    passengerChipText: {
+      fontSize: 12,
+      color: isDark ? "#93c5fd" : "#1d4ed8",
+      fontWeight: "600",
+      flexShrink: 1,
+    },
+    wheelChip: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 5,
+      paddingVertical: 6,
+      paddingHorizontal: 11,
+      borderRadius: 999,
+      maxWidth: "100%",
+      backgroundColor: colors.card,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    wheelChipActive: {
+      backgroundColor: "#2563eb",
+      borderColor: "#2563eb",
+    },
+    wheelChipText: {
+      fontSize: 12,
+      color: colors.subText,
+      fontWeight: "600",
+      flexShrink: 1,
+    },
+    tripSummaryBox: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginTop: 12,
+      paddingVertical: 9,
+      paddingHorizontal: 12,
+      borderRadius: 10,
+      backgroundColor: isDark ? "rgba(148, 163, 184, 0.12)" : "#f8fafc",
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    tripSummaryText: {
+      fontSize: 13,
+      fontWeight: "bold",
+      color: colors.text,
+    },
+    attachBtn: {
+      flex: 1,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 6,
+      paddingVertical: 10,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderStyle: "dashed",
+      borderColor: "#2563eb",
+      backgroundColor: isDark ? "rgba(37, 99, 235, 0.12)" : "#eff6ff",
+    },
+    attachBtnText: { fontSize: 13, fontWeight: "600", color: "#2563eb" },
+    planHintText: {
+      fontSize: 11,
+      color: colors.subText,
+      marginTop: 6,
+      lineHeight: 16,
+    },
+    planFileRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      marginTop: 8,
+      paddingVertical: 8,
+      paddingHorizontal: 10,
+      borderRadius: 10,
+      backgroundColor: isDark ? "rgba(245, 158, 11, 0.12)" : "#fffbeb",
+      borderWidth: 1,
+      borderColor: isDark ? "rgba(245, 158, 11, 0.4)" : "#fde68a",
+    },
+    planFileName: {
+      flex: 1,
+      fontSize: 12,
+      color: colors.text,
+    },
+    planFileLink: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      marginTop: 6,
+      paddingVertical: 6,
+      paddingHorizontal: 10,
+      borderRadius: 999,
+      alignSelf: "flex-start",
+      maxWidth: "100%",
+      backgroundColor: isDark ? "rgba(245, 158, 11, 0.15)" : "#fffbeb",
+      borderWidth: 1,
+      borderColor: isDark ? "rgba(245, 158, 11, 0.45)" : "#fde68a",
+    },
+    planFileLinkText: {
+      fontSize: 12,
+      fontWeight: "600",
+      color: isDark ? "#fbbf24" : "#b45309",
+      flexShrink: 1,
+    },
+    passengerDoneBtn: {
+      margin: 15,
+      paddingVertical: 12,
+      borderRadius: 12,
+      backgroundColor: "#2563eb",
+      alignItems: "center",
+    },
+    passengerDoneText: { color: "#fff", fontWeight: "bold", fontSize: 14 },
     entryOrderCircle: {
       width: 26,
       height: 26,

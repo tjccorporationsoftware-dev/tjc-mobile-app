@@ -12,6 +12,7 @@ import {
   Dimensions,
   FlatList,
   Image,
+  Linking,
   Modal,
   Platform,
   RefreshControl,
@@ -33,6 +34,26 @@ import { API_BASE } from "../../constants/config";
 
 // ✅ 2. Import Auth Context
 import { useAuth } from "../_layout";
+
+// --- 🧭 กติกาการเดินทาง (ต้องตรงกับ CarManager::tripDays() ฝั่ง PHP) ---
+const PLAN_REQUIRED_OVER_DAYS = 2;
+
+// นับวันปฏิทินรวมหัวท้าย (29→31 = 3 วัน)
+const tripDaysBetween = (start: string, end: string) => {
+  const toDay = (v: string) => {
+    const d = new Date((v || "").replace(" ", "T"));
+    if (isNaN(d.getTime())) return null;
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  };
+  const s = toDay(start);
+  const e = toDay(end);
+  if (s == null || e == null || e < s) return 1;
+  return Math.round((e - s) / 86400000) + 1;
+};
+
+// ลิงก์เปิดไฟล์แผนงาน (API คืนมาแค่ชื่อไฟล์)
+const planFileUrl = (fileName: string) =>
+  `${API_BASE}/uploads/carplans/${encodeURIComponent(fileName)}`;
 
 // --- ตั้งค่าภาษาไทยให้ปฏิทิน ---
 LocaleConfig.locales["th"] = {
@@ -1012,6 +1033,17 @@ export default function CarDashboardScreen() {
     );
     const isActiveRow = text === "ใช้อยู่" || text === "เกินกำหนด";
 
+    // 👥 ผู้เดินทาง / จำนวนวัน / ไฟล์แผนงาน (ส่งมาจาก get_car_dashboard_data)
+    const peopleCount = Number(
+      item.people_count ?? item.passenger_count ?? 1,
+    );
+    const tripDays = Number(
+      item.trip_days ?? tripDaysBetween(item.start_date, item.end_date),
+    );
+    const planFiles: any[] = Array.isArray(item.plan_files)
+      ? item.plan_files
+      : [];
+
     return (
       <View
         style={[
@@ -1131,6 +1163,74 @@ export default function CarDashboardScreen() {
             </View>
           </View>
         </View>
+        {/* 👥 ไปกันกี่คน / กี่วัน / ไฟล์แผนงานที่แนบมา */}
+        <View style={styles.tripInfoRow}>
+          <View
+            style={[
+              styles.tripChip,
+              {
+                backgroundColor:
+                  peopleCount > 1 ? colors.primary : colors.border,
+              },
+            ]}
+          >
+            <Ionicons
+              name="people"
+              size={11}
+              color={peopleCount > 1 ? "#fff" : colors.textSub}
+            />
+            <Text
+              style={[
+                styles.tripChipText,
+                { color: peopleCount > 1 ? "#fff" : colors.textSub },
+              ]}
+            >
+              {peopleCount} คน
+            </Text>
+          </View>
+          <View style={[styles.tripChip, { backgroundColor: colors.border }]}>
+            <Ionicons name="calendar" size={11} color={colors.textSub} />
+            <Text style={[styles.tripChipText, { color: colors.textSub }]}>
+              {tripDays} วัน
+            </Text>
+          </View>
+          {tripDays > PLAN_REQUIRED_OVER_DAYS && planFiles.length === 0 && (
+            <View style={[styles.tripChip, { backgroundColor: colors.danger }]}>
+              <Ionicons name="warning" size={11} color="#fff" />
+              <Text style={[styles.tripChipText, { color: "#fff" }]}>
+                ไม่มีแผนงาน
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {planFiles.map((f: any) => (
+          <TouchableOpacity
+            key={String(f.id)}
+            style={[
+              styles.planFileLink,
+              {
+                backgroundColor: isDarkMode
+                  ? "rgba(245, 158, 11, 0.15)"
+                  : "#fffbeb",
+                borderColor: isDarkMode
+                  ? "rgba(245, 158, 11, 0.45)"
+                  : "#fde68a",
+              },
+            ]}
+            onPress={() => Linking.openURL(planFileUrl(f.file_name))}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="attach" size={13} color={colors.warning} />
+            <Text
+              style={[styles.planFileLinkText, { color: colors.warning }]}
+              numberOfLines={1}
+            >
+              {f.original_name || f.file_name}
+            </Text>
+          </TouchableOpacity>
+        ))}
+
         <TouchableOpacity
           style={{ alignSelf: "flex-end", marginTop: 8 }}
           onPress={() => openDetail(item)}
@@ -1457,6 +1557,66 @@ export default function CarDashboardScreen() {
           <Text style={{ color: colors.textMain }}>
             {selectedDetail.reason || "-"}
           </Text>
+        </View>
+
+        {/* 👥 ผู้เดินทาง / คนขับ / แผนงาน */}
+        <View style={{ marginBottom: 15 }}>
+          <Text
+            style={{ fontSize: 12, color: colors.textSub, fontWeight: "bold" }}
+          >
+            ผู้เดินทาง (
+            {selectedDetail.people_count ??
+              selectedDetail.passenger_count ??
+              1}{" "}
+            คน ·{" "}
+            {selectedDetail.trip_days ??
+              tripDaysBetween(startTime, endTime)}{" "}
+            วัน)
+          </Text>
+          <Text style={{ color: colors.textMain }}>
+            คนขับ: {selectedDetail.wheel_driver_name || userName}
+          </Text>
+          {!!selectedDetail.passenger_list && (
+            <Text style={{ color: colors.textSub, fontSize: 12 }}>
+              ร่วมเดินทาง: {selectedDetail.passenger_list}
+            </Text>
+          )}
+
+          {Array.isArray(selectedDetail.plan_files) &&
+          selectedDetail.plan_files.length > 0 ? (
+            selectedDetail.plan_files.map((f: any) => (
+              <TouchableOpacity
+                key={String(f.id)}
+                style={[
+                  styles.planFileLink,
+                  {
+                    backgroundColor: isDarkMode
+                      ? "rgba(245, 158, 11, 0.15)"
+                      : "#fffbeb",
+                    borderColor: isDarkMode
+                      ? "rgba(245, 158, 11, 0.45)"
+                      : "#fde68a",
+                  },
+                ]}
+                onPress={() => Linking.openURL(planFileUrl(f.file_name))}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="attach" size={13} color={colors.warning} />
+                <Text
+                  style={[styles.planFileLinkText, { color: colors.warning }]}
+                  numberOfLines={1}
+                >
+                  {f.original_name || f.file_name}
+                </Text>
+              </TouchableOpacity>
+            ))
+          ) : (selectedDetail.trip_days ??
+              tripDaysBetween(startTime, endTime)) >
+            PLAN_REQUIRED_OVER_DAYS ? (
+            <Text style={{ color: colors.danger, fontSize: 12, marginTop: 4 }}>
+              เดินทางเกิน {PLAN_REQUIRED_OVER_DAYS} วัน แต่ไม่มีไฟล์แผนงานแนบไว้
+            </Text>
+          ) : null}
         </View>
         <View
           style={{
@@ -2621,6 +2781,30 @@ const styles = StyleSheet.create({
   userName: { fontSize: 12, fontWeight: "bold" },
   badge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
   badgeText: { color: "#fff", fontSize: 10, fontWeight: "bold" },
+  // 👥 ผู้เดินทาง / แผนงาน
+  tripInfoRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 10 },
+  tripChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+  },
+  tripChipText: { fontSize: 10, fontWeight: "bold" },
+  planFileLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    alignSelf: "flex-start",
+    maxWidth: "100%",
+    marginTop: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  planFileLinkText: { fontSize: 11, fontWeight: "600", flexShrink: 1 },
   maintCard: {
     marginHorizontal: 15,
     marginBottom: 10,
