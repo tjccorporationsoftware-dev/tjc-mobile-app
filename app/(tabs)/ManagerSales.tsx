@@ -1,7 +1,7 @@
 import { FontAwesome5, Ionicons } from "@expo/vector-icons";
 import axios from "axios";
 import { useFocusEffect, useRouter } from "expo-router";
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -40,6 +40,26 @@ const TH_MONTHS_FULL = [
   "ธันวาคม",
 ];
 
+const TH_MONTHS_SHORT = [
+  "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.",
+  "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค.",
+];
+
+// ===== Design tokens: สี/ระยะ/ขนาดตัวอักษร ใช้ทั้งหน้าให้เป็นชุดเดียว =====
+const T = {
+  bg: "#f1f5f9",
+  surface: "#ffffff",
+  line: "#e2e8f0",
+  lineSoft: "#f1f5f9",
+  text: "#0f172a",
+  textSub: "#475569",
+  textMute: "#94a3b8",
+  radius: 14,
+  pad: 16,
+  gap: 12,
+};
+const FS = { xs: 11, sm: 12, md: 14, lg: 16, xl: 20, hero: 30 };
+
 export default function ManagerSales() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -47,12 +67,18 @@ export default function ManagerSales() {
 
   // Data States
   const [summary, setSummary] = useState({
-    total: 0,
+    total: 0, // จำนวน "รายงาน"
+    jobs: 0, // จำนวน "งาน" (1 รายงานมีได้หลายงาน)
     expense: 0,
     sales: 0,
     target: 0,
     yearly_target: 0,
   });
+  // ยอดขายสะสมทั้งปี — แยกจาก summary.sales ที่ผูกกับช่วงวันที่ที่กรองอยู่
+  const [yearSales, setYearSales] = useState(0);
+  const [yearSalesByName, setYearSalesByName] = useState<{
+    [name: string]: number;
+  }>({});
   const [successKeyword, setSuccessKeyword] = useState("เซ็นสัญญา"); // ➕ เก็บคำว่าสถานะไหนคือได้งาน
   const [kpiList, setKpiList] = useState<any[]>([]);
   const [recentList, setRecentList] = useState<any[]>([]);
@@ -259,6 +285,82 @@ export default function ManagerSales() {
     return "pricetag";
   };
 
+  // ชื่อที่ใช้แสดง/จัดกลุ่ม: ทีมประมูลใช้ชื่อทีม นอกนั้นใช้ชื่อผู้รายงาน
+  const displayNameOf = (item: any) =>
+    item.team_type === "bidding" && item.bidding_team_name
+      ? item.bidding_team_name
+      : item.reporter_name || "ไม่ระบุชื่อ";
+
+  // แตก 1 รายงาน -> หลายงาน (backend ส่ง work_result/project_name/job_status
+  // มาเป็น string คั่นคอมมา แล้วจับคู่กันด้วย index)
+  const jobsOf = (item: any) => {
+    const customers = cleanSplit(item.work_result);
+    const projects = cleanSplit(item.project_name);
+    const statuses = cleanSplit(item.job_status);
+    const len = Math.max(customers.length, projects.length, statuses.length);
+    const jobs: { cus: string; proj: string; stat: string }[] = [];
+    for (let i = 0; i < len; i++) {
+      const cus = customers[i] || "";
+      if (!cus || cus === "-") continue;
+      jobs.push({ cus, proj: projects[i] || "", stat: statuses[i] || "-" });
+    }
+    return jobs;
+  };
+
+  // รวมมูลค่าโครงการเฉพาะงานที่ปิดได้
+  const sumSales = (list: any[], keyword: string) => {
+    let total = 0;
+    list.forEach((item) => {
+      const projects = cleanSplit(item.project_name);
+      const statuses = cleanSplit(item.job_status);
+      projects.forEach((p, idx) => {
+        if ((statuses[idx] || "").includes(keyword)) {
+          total += parseCurrency(parseProjectData(p).value) || 0;
+        }
+      });
+    });
+    return total;
+  };
+
+  // ข้อมูลทั้งปีโหลดครั้งเดียวแล้วแคชไว้ เปลี่ยนตัวกรองไม่ต้องยิงใหม่
+  // (ล้างแคชตอนดึงลงรีเฟรช)
+  const yearCache = useRef<{ list: any[]; keyword: string } | null>(null);
+
+  // ยอดขายสะสมทั้งปีปฏิทิน ใช้กับการ์ด "เป้าทั้งปี" เท่านั้น
+  // (เดิมการ์ดนี้เอา summary.sales ของเดือนที่กรองอยู่ไปหารเป้าปี % จึงผิดตลอด)
+  const fetchYearSales = async (overrideReporter?: string) => {
+    try {
+      if (!yearCache.current) {
+        const y = new Date().getFullYear();
+        const res = await axios.get(
+          `${API_BASE}/api_mobile.php?action=get_dashboard_stats&tab=sales&start_date=${y}-01-01&end_date=${y}-12-31`,
+        );
+        yearCache.current = {
+          list: res.data?.recent || [],
+          keyword: res.data?.success_keyword || successKeyword,
+        };
+      }
+      const { list, keyword } = yearCache.current;
+      const who =
+        overrideReporter !== undefined ? overrideReporter : filterReporter;
+      const scoped = who
+        ? list.filter((i: any) => displayNameOf(i) === who)
+        : list;
+      setYearSales(sumSales(scoped, keyword));
+
+      // แยกยอดสะสมรายคน/รายทีม ไว้ให้การ์ดสถิติรายบุคคลใช้ (ไม่ผูกกับตัวกรอง)
+      const byName: { [name: string]: number } = {};
+      list.forEach((i: any) => {
+        const n = displayNameOf(i);
+        byName[n] = (byName[n] || 0) + sumSales([i], keyword);
+      });
+      setYearSalesByName(byName);
+    } catch (e) {
+      setYearSales(0);
+      setYearSalesByName({});
+    }
+  };
+
   const fetchData = async (
     overrideReporter?: string,
     overrideStatus?: string,
@@ -307,14 +409,9 @@ export default function ManagerSales() {
         // ----------------------------------------------------
         let filteredByReporter = rawList;
         if (targetReporter) {
-          filteredByReporter = filteredByReporter.filter((i: any) => {
-            const isBidding = i.team_type === "bidding";
-            const recordName =
-              isBidding && i.bidding_team_name
-                ? i.bidding_team_name
-                : i.reporter_name;
-            return recordName === targetReporter;
-          });
+          filteredByReporter = filteredByReporter.filter(
+            (i: any) => displayNameOf(i) === targetReporter,
+          );
         }
 
         // อัปเดต Status Breakdown (ใช้ข้อมูลที่กรองแค่พนักงาน เพื่อให้เห็นปุ่มสถานะอื่นๆ ให้กดสลับได้)
@@ -334,26 +431,23 @@ export default function ManagerSales() {
         // ----------------------------------------------------
         // 🟢 STEP 3: คำนวณ KPI และการ์ดพนักงาน จากข้อมูลที่กรองแล้ว 100%
         // ----------------------------------------------------
-        let totalSalesCalculated = 0;
         let totalExpenseCalculated = 0;
+        let totalJobs = 0;
 
         finalFilteredData.forEach((item: any) => {
           totalExpenseCalculated += parseFloat(
             String(item.total_expense).replace(/,/g, "") || "0",
           );
-
-          const projects = cleanSplit(item.project_name);
-          const statuses = cleanSplit(item.job_status);
-
-          projects.forEach((p: string, idx: number) => {
-            const currentStatus = statuses[idx] || "";
-            // บวกยอดขายเฉพาะรายการที่สำเร็จ
-            if (currentStatus.includes(dynamicSuccessKeyword)) {
-              const { value } = parseProjectData(p);
-              totalSalesCalculated += parseCurrency(value);
-            }
-          });
+          // นับ "งาน" แยกจาก "รายงาน" เพื่อไม่ให้ตัวเลขสองหน่วยปนกันบนหน้าจอ
+          totalJobs += jobsOf(item).filter(
+            (j) => !targetStatus || j.stat === targetStatus,
+          ).length;
         });
+
+        const totalSalesCalculated = sumSales(
+          finalFilteredData,
+          dynamicSuccessKeyword,
+        );
 
         // ดึงสถิติรายบุคคล (ประมวลผลจากข้อมูลที่ผ่านตัวกรองแล้วเท่านั้น)
         const empStats = processEmployeeStats(
@@ -377,6 +471,7 @@ export default function ManagerSales() {
         // อัปเดต Summary หลัก (ด้านบนสุด) ให้ตัวเลขขยับตามข้อมูลในตารางเป๊ะๆ
         setSummary({
           total: finalFilteredData.length,
+          jobs: totalJobs,
           expense: totalExpenseCalculated,
           sales: totalSalesCalculated,
           target: globalTarget,
@@ -386,6 +481,7 @@ export default function ManagerSales() {
         // นำข้อมูลไปแสดงในรายการตารางด้านล่างสุด
         setRecentList(finalFilteredData);
         fetchFilterOptions();
+        fetchYearSales(targetReporter);
       }
     } catch (error) {
       console.log("Fetch Error:", error);
@@ -402,6 +498,18 @@ export default function ManagerSales() {
       );
       if (Array.isArray(res.data)) setReporters(res.data);
     } catch (e) { }
+  };
+
+  // ล้างตัวกรองทั้งหมด กลับไปเดือนปัจจุบัน (ใช้ร่วมกันทั้งแถบ chip / ปุ่มรีเซ็ต / empty state)
+  const resetFilters = () => {
+    const now = new Date();
+    const s = new Date(now.getFullYear(), now.getMonth(), 1);
+    const e = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    setFilterReporter("");
+    setFilterStatus("");
+    setStartDate(s);
+    setEndDate(e);
+    fetchData("", "", s, e);
   };
 
   const fetchCustomerHistory = async (customerName: string) => {
@@ -548,9 +656,11 @@ export default function ManagerSales() {
   const renderEmployeeCard = ({ item }: { item: any }) => {
     const isBidding = item.teamType === "bidding";
     const themeColor = isBidding ? "#7c3aed" : PRIMARY_COLOR;
+    const yearActual = yearSalesByName[item.name] || 0;
 
     return (
       <TouchableOpacity
+        activeOpacity={0.85}
         style={[styles.empCard, { borderLeftColor: themeColor }]}
         onPress={() => {
           setFilterReporter(item.name);
@@ -562,384 +672,336 @@ export default function ManagerSales() {
         <View style={styles.empHeader}>
           <View style={[styles.avatar, { backgroundColor: themeColor }]}>
             {isBidding ? (
-              <Ionicons name="people" size={20} color="#fff" />
+              <Ionicons name="people" size={18} color="#fff" />
             ) : (
-              <Text style={styles.avatarText}>{item.name.charAt(0)}</Text>
+              <Text style={styles.avatarText}>
+                {String(item.name || "?").charAt(0)}
+              </Text>
             )}
           </View>
-          <View>
-            <Text style={styles.empName}>{item.name}</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.empName} numberOfLines={1}>
+              {item.name}
+            </Text>
             <Text style={styles.empReportCount}>
-              📄 {item.totalReports} รายงาน
+              {item.totalReports} รายงานในช่วงที่เลือก
             </Text>
           </View>
         </View>
 
-        {/* ส่วนแสดงเป้าหมายและ Progress Bar (รายเดือน และ รายปี) */}
-        {(() => {
-          const target = item.targetAmount || 0;
-          const yearlyTarget = item.yearlyTargetAmount || 0; // รับมาจาก API
-          const actual = item.totalProjectValue;
+        {/* ใช้แถบเป้าชุดเดียวกับหน้าหลัก: ยอดเดือนเทียบเป้าเดือน, ยอดสะสมทั้งปีเทียบเป้าปี */}
+        <View style={styles.empGoals}>
+          {renderGoal(
+            "เป้าเดือนนี้",
+            item.totalProjectValue,
+            item.targetAmount || 0,
+            WARNING_COLOR,
+          )}
+          <View style={styles.heroGoalSep} />
+          {renderGoal(
+            "เป้าทั้งปี (สะสม)",
+            yearActual,
+            item.yearlyTargetAmount || 0,
+            "#0284c7",
+          )}
+        </View>
 
-          // คำนวณรายเดือน
-          const percent = target > 0 ? (actual / target) * 100 : 0;
-          const percentCap = Math.min(percent, 100);
-          const diff = actual - target;
-          const barColor = percent >= 100 ? SUCCESS_COLOR : WARNING_COLOR;
-
-          // คำนวณรายปี
-          const yPercent = yearlyTarget > 0 ? (actual / yearlyTarget) * 100 : 0;
-          const yPercentCap = Math.min(yPercent, 100);
-          const yDiff = actual - yearlyTarget;
-          const yBarColor = yPercent >= 100 ? SUCCESS_COLOR : "#0284c7"; // สีฟ้า
-
-          return (
-            <View
-              style={{
-                backgroundColor: "#f8fafc",
-                padding: 10,
-                borderRadius: 10,
-                marginTop: 10,
-                borderWidth: 1,
-                borderColor: "#e2e8f0",
-                borderStyle: "dashed",
-              }}
-            >
-              {/* 1. รายเดือน */}
-              <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 5 }}>
-                <Text style={{ fontSize: 11, color: "#64748b", fontWeight: "bold" }}>
-                  📅 เป้าเดือน: {target > 0 ? target.toLocaleString() : "-"}
-                </Text>
-                <Text style={{ fontSize: 11, color: "#334155", fontWeight: "900" }}>{percent.toFixed(1)}%</Text>
-              </View>
-              <View style={{ height: 6, backgroundColor: "#e2e8f0", borderRadius: 3, overflow: "hidden", marginBottom: 6 }}>
-                <View style={{ width: `${percentCap}%`, height: "100%", backgroundColor: barColor, borderRadius: 3 }} />
-              </View>
-              <View style={{ alignItems: "flex-end", marginBottom: 10 }}>
-                {diff >= 0 ? (
-                  <Text style={{ fontSize: 10, color: SUCCESS_COLOR, fontWeight: "bold" }}>▲ เกินเป้า: {diff.toLocaleString()}</Text>
-                ) : (
-                  <Text style={{ fontSize: 10, color: DANGER_COLOR, fontWeight: "bold" }}>▼ ขาดอีก: {Math.abs(diff).toLocaleString()}</Text>
-                )}
-              </View>
-
-              {/* 2. รายปี */}
-              <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 5 }}>
-                <Text style={{ fontSize: 11, color: "#64748b", fontWeight: "bold" }}>
-                  🏆 เป้ารายปี: {yearlyTarget > 0 ? yearlyTarget.toLocaleString() : "-"}
-                </Text>
-                <Text style={{ fontSize: 11, color: "#334155", fontWeight: "900" }}>{yPercent.toFixed(1)}%</Text>
-              </View>
-              <View style={{ height: 6, backgroundColor: "#e0f2fe", borderRadius: 3, overflow: "hidden", marginBottom: 6 }}>
-                <View style={{ width: `${yPercentCap}%`, height: "100%", backgroundColor: yBarColor, borderRadius: 3 }} />
-              </View>
-              <View style={{ alignItems: "flex-end" }}>
-                {yDiff >= 0 ? (
-                  <Text style={{ fontSize: 10, color: SUCCESS_COLOR, fontWeight: "bold" }}>▲ เกินเป้า: {yDiff.toLocaleString()}</Text>
-                ) : (
-                  <Text style={{ fontSize: 10, color: DANGER_COLOR, fontWeight: "bold" }}>▼ ขาดอีก: {Math.abs(yDiff).toLocaleString()}</Text>
-                )}
-              </View>
-            </View>
-          );
-        })()}
-
-        <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
+        <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
           <View style={[styles.moneyBox, { backgroundColor: "#eff6ff" }]}>
-            <Text style={{ fontSize: 10, color: INFO_COLOR }}>ยอดขายทำได้</Text>
-            <Text style={{ fontSize: 13, fontWeight: "bold", color: "#1d4ed8" }} numberOfLines={1}>
+            <Text style={styles.moneyLabel}>ยอดขายทำได้</Text>
+            <Text
+              style={[styles.moneyValue, { color: "#1d4ed8" }]}
+              numberOfLines={1}
+            >
               ฿{item.totalProjectValue.toLocaleString()}
             </Text>
           </View>
           <View style={[styles.moneyBox, { backgroundColor: "#fef2f2" }]}>
-            <Text style={{ fontSize: 10, color: "#991b1b" }}>รวมเบิกจ่าย</Text>
-            <Text style={{ fontSize: 13, fontWeight: "bold", color: "#b91c1c" }} numberOfLines={1}>
+            <Text style={[styles.moneyLabel, { color: "#991b1b" }]}>
+              รวมเบิกจ่าย
+            </Text>
+            <Text
+              style={[styles.moneyValue, { color: "#b91c1c" }]}
+              numberOfLines={1}
+            >
               ฿{item.totalExpense.toLocaleString()}
             </Text>
           </View>
         </View>
 
-        <View
-          style={{
-            flexDirection: "row",
-            flexWrap: "wrap",
-            gap: 5,
-            marginTop: 10,
-          }}
-        >
-          {Object.keys(item.statusCounts).map((status, idx) => (
-            <TouchableOpacity
-              key={idx}
-              style={[
-                styles.statusTag,
-                { borderColor: getStatusColor(status) },
-              ]}
-              onPress={() => {
-                // กดสถานะ = กรองคนนี้ + สถานะนี้
-                setFilterReporter(item.name);
-                setFilterStatus(status);
-                fetchData(item.name, status);
-              }}
-            >
-              <Text
-                style={{
-                  fontSize: 12,
-                  fontWeight: "bold",
-                  color: getStatusColor(status),
+        <View style={styles.empStatusWrap}>
+          {Object.keys(item.statusCounts).map((status, idx) => {
+            const color = getStatusColor(status);
+            return (
+              <TouchableOpacity
+                key={idx}
+                style={[styles.statusTag, { borderColor: color + "55" }]}
+                onPress={() => {
+                  setFilterReporter(item.name);
+                  setFilterStatus(status);
+                  fetchData(item.name, status);
+                  setEmpModalVisible(false);
                 }}
               >
-                {item.statusCounts[status]}
-              </Text>
-              <Text style={{ fontSize: 10, color: "#666", marginLeft: 4 }}>
-                {status}
-              </Text>
-            </TouchableOpacity>
-          ))}
+                <Text style={[styles.statusTagCount, { color }]}>
+                  {item.statusCounts[status]}
+                </Text>
+                <Text style={styles.statusTagLabel} numberOfLines={1}>
+                  {status}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
       </TouchableOpacity>
     );
   };
 
-  // ================= RENDER ITEM (MAIN LIST - กลับไปใช้ Table Style ที่พี่ชอบ) =================
-  const renderRecentItem = ({ item, index }: { item: any; index: number }) => {
-    const customersRaw = cleanSplit(item.work_result);
-    const projectsRaw = cleanSplit(item.project_name);
-    const statusesRaw = cleanSplit(item.job_status);
-
-    const validJobs: any[] = [];
-    const maxLen = Math.max(
-      customersRaw.length,
-      projectsRaw.length,
-      statusesRaw.length,
+  // ================= แถบความคืบหน้าเทียบเป้า =================
+  const renderGoal = (
+    label: string,
+    actual: number,
+    target: number,
+    tone: string,
+  ) => {
+    const pct = target > 0 ? (actual / target) * 100 : 0;
+    const done = pct >= 100;
+    const color = done ? SUCCESS_COLOR : tone;
+    return (
+      <View style={{ flex: 1 }}>
+        <View style={styles.goalTop}>
+          <Text style={styles.goalLabel}>{label}</Text>
+          <Text style={[styles.goalPct, { color }]}>
+            {target > 0 ? pct.toFixed(0) + "%" : "—"}
+          </Text>
+        </View>
+        <View style={styles.goalTrack}>
+          <View
+            style={[
+              styles.goalFill,
+              {
+                width: `${Math.min(pct, 100) || 0}%`,
+                backgroundColor: color,
+              },
+            ]}
+          />
+        </View>
+        <Text style={styles.goalFoot} numberOfLines={1}>
+          {target > 0
+            ? (done ? "เกินเป้า " : "ขาดอีก ") +
+              Math.abs(actual - target).toLocaleString() +
+              "  ·  เป้า " +
+              target.toLocaleString()
+            : "ยังไม่ได้ตั้งเป้า"}
+        </Text>
+      </View>
     );
+  };
 
-    for (let i = 0; i < maxLen; i++) {
-      const cus = customersRaw[i] || "";
-      const proj = projectsRaw[i] || "";
-      const stat = statusesRaw[i] || "";
-      if (!cus || cus === "" || cus === "-") continue;
-      validJobs.push({ cus, proj, stat });
-    }
-
-    if (validJobs.length === 0 && maxLen > 0) {
-      validJobs.push({ cus: "-", proj: "-", stat: "-" });
-    }
-
-    // ✅ ส่วนที่เพิ่ม: กรองข้อมูลตาม filterStatus (ถ้ามี)
-    const displayedJobs = filterStatus
-      ? validJobs.filter((job) => job.stat === filterStatus)
-      : validJobs;
-
-    // ถ้ากรองแล้วไม่มีงานใน Card นี้เลย ให้ซ่อน Card นี้ไปเลย (return null)
-    if (displayedJobs.length === 0) return null;
-
-    const mainStatusColor = getStatusColor(displayedJobs[0]?.stat || "");
-    const hasFuel = !!item.fuel_receipt;
-    const hasHotel = !!item.accommodation_receipt;
-    const hasOther = !!item.other_receipt;
+  // ================= การ์ดรายงาน: 1 การ์ด = 1 รายงาน, ข้างในบล็อกละ 1 งาน =================
+  const renderRecentItem = (
+    row: { item: any; jobs: { cus: string; proj: string; stat: string }[] },
+    index: number,
+  ) => {
+    const { item, jobs } = row;
+    const expense = parseFloat(item.total_expense) || 0;
+    const isOffice = item.gps === "Office";
+    const receipts = [
+      {
+        on: !!item.fuel_receipt,
+        icon: "gas-pump",
+        color: "#c2410c",
+        bg: "#fff7ed",
+      },
+      {
+        on: !!item.accommodation_receipt,
+        icon: "bed",
+        color: "#1d4ed8",
+        bg: "#eff6ff",
+      },
+      {
+        on: !!item.other_receipt,
+        icon: "receipt",
+        color: "#a16207",
+        bg: "#fefce8",
+      },
+    ].filter((r) => r.on);
 
     return (
-      <Animated.View entering={FadeInDown.delay(index * 50).duration(500)}>
-        <View style={[styles.card, { borderLeftColor: mainStatusColor }]}>
-          {/* Header */}
+      <Animated.View
+        key={index}
+        entering={FadeInDown.delay(Math.min(index, 8) * 40).duration(320)}
+      >
+        <TouchableOpacity
+          activeOpacity={0.85}
+          style={styles.card}
+          onPress={() => {
+            setSelectedItem(item);
+            setDetailModalVisible(true);
+          }}
+        >
+          {/* ใคร - เมื่อไหร่ - เบิกเท่าไหร่ */}
           <View style={styles.cardHeader}>
-            <View>
-              <Text style={styles.dateText}>
-                {new Date(item.report_date).toLocaleDateString("th-TH", {
-                  day: "2-digit",
-                  month: "2-digit",
-                  year: "2-digit",
-                })}
-                <Text style={{ fontWeight: "normal", color: "#999" }}>
-                  {" "}
-                  •{" "}
+            <View style={{ flex: 1, paddingRight: 8 }}>
+              <Text style={styles.cardName} numberOfLines={1}>
+                {displayNameOf(item)}
+              </Text>
+              <View style={styles.cardMetaRow}>
+                <Text style={styles.cardMeta}>
+                  {new Date(item.report_date).toLocaleDateString("th-TH", {
+                    day: "numeric",
+                    month: "short",
+                  })}
+                  {"  ·  "}
                   {new Date(item.created_at).toLocaleTimeString("th-TH", {
                     hour: "2-digit",
                     minute: "2-digit",
-                  })}{" "}
-                  น.
+                  })}
+                  {" น."}
                 </Text>
-              </Text>
-              <View
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  marginTop: 2,
-                }}
-              >
-                <Text style={styles.reporterName}>{item.reporter_name}</Text>
-                {item.gps === "Office" ? (
-                  <View style={styles.tagOffice}>
-                    <Text style={styles.tagTextOffice}>🏢 ออฟฟิศ</Text>
-                  </View>
-                ) : (
-                  <View style={styles.tagOutside}>
-                    <Text style={styles.tagTextOutside}>🚗 นอกสถานที่</Text>
-                  </View>
-                )}
+                <View
+                  style={[
+                    styles.placeTag,
+                    { backgroundColor: isOffice ? T.lineSoft : "#eff6ff" },
+                  ]}
+                >
+                  <Ionicons
+                    name={isOffice ? "business" : "car"}
+                    size={10}
+                    color={isOffice ? T.textSub : PRIMARY_COLOR}
+                  />
+                  <Text
+                    style={[
+                      styles.placeText,
+                      { color: isOffice ? T.textSub : PRIMARY_COLOR },
+                    ]}
+                  >
+                    {isOffice ? "ออฟฟิศ" : "นอกสถานที่"}
+                  </Text>
+                </View>
               </View>
             </View>
-            {parseFloat(item.total_expense) > 0 && (
+            {expense > 0 && (
               <View style={{ alignItems: "flex-end" }}>
-                <Text style={{ fontSize: 10, color: "#999" }}>รวมเบิก</Text>
+                <Text style={styles.cardMetaSm}>เบิก</Text>
                 <Text style={styles.expenseText}>
-                  -{parseFloat(item.total_expense).toLocaleString()}
+                  -{expense.toLocaleString()}
                 </Text>
               </View>
             )}
           </View>
 
-          {/* Body: Job List (Table Style) */}
-          <View style={styles.cardBody}>
-            {/* หัวตาราง */}
-            <View
-              style={{
-                flexDirection: "row",
-                borderBottomWidth: 1,
-                borderBottomColor: "#f1f5f9",
-                paddingBottom: 6,
-                marginBottom: 6,
-              }}
-            >
-              <Text style={[styles.tableHead, { flex: 1.1 }]}>ลูกค้า</Text>
-              <Text style={[styles.tableHead, { flex: 1.1 }]}>โครงการ</Text>
-              <Text style={[styles.tableHead, { flex: 1, textAlign: "right" }]}>
-                มูลค่า
-              </Text>
-              <Text
-                style={[styles.tableHead, { width: 65, textAlign: "right" }]}
-              >
-                สถานะ
-              </Text>
-            </View>
-
-            {/* ✅ ใช้ displayedJobs แทน validJobs เพื่อแสดงเฉพาะงานที่กรอง */}
-            {displayedJobs.map((job, i) => {
-              const { name: pjName, value: pjValue } = parseProjectData(
-                job.proj,
-              );
-              const stColor = getStatusColor(job.stat);
-              const displayValue = pjValue
-                ? parseCurrency(pjValue).toLocaleString() + " ฿"
-                : "-";
-
-              return (
-                <View
-                  key={i}
-                  style={{
-                    flexDirection: "row",
-                    paddingVertical: 8,
-                    borderBottomWidth: i === displayedJobs.length - 1 ? 0 : 1,
-                    borderBottomColor: "#f8fafc",
-                    alignItems: "flex-start",
-                  }}
-                >
-                  {/* 1. ลูกค้า */}
-                  <View style={{ flex: 1.2, paddingRight: 4 }}>
-                    <TouchableOpacity
-                      onPress={() => fetchCustomerHistory(job.cus)}
-                    >
-                      <Text style={styles.customerLinkTable} numberOfLines={2}>
-                        {job.cus || "-"}
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-
-                  {/* 2. โครงการ */}
-                  <View style={{ flex: 1.2, paddingRight: 4 }}>
-                    <Text style={styles.projectTextTable} numberOfLines={2}>
-                      {pjName}
+          {/* งานแต่ละรายการ */}
+          {jobs.map((job, i) => {
+            const { name: pjName, value: pjValue } = parseProjectData(job.proj);
+            const stColor = getStatusColor(job.stat);
+            const money = parseCurrency(pjValue) || 0;
+            return (
+              <View key={i} style={[styles.jobRow, i > 0 && styles.jobDivider]}>
+                <View style={{ flex: 1, paddingRight: 10 }}>
+                  <TouchableOpacity
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                    onPress={() => fetchCustomerHistory(job.cus)}
+                  >
+                    <Text style={styles.jobCustomer} numberOfLines={1}>
+                      {job.cus}
                     </Text>
-                  </View>
-
-                  {/* 3. มูลค่า (แยกคอลัมน์) */}
+                  </TouchableOpacity>
+                  <Text style={styles.jobProject} numberOfLines={2}>
+                    {pjName && pjName !== "-" ? pjName : "ไม่ระบุโครงการ"}
+                  </Text>
+                </View>
+                <View style={{ alignItems: "flex-end", minWidth: 104 }}>
                   <View
-                    style={{ flex: 1, alignItems: "flex-end", paddingRight: 4 }}
+                    style={[
+                      styles.statusPill,
+                      { backgroundColor: stColor + "18" },
+                    ]}
                   >
                     <Text
-                      style={{
-                        fontSize: 11,
-                        color: pjValue ? SUCCESS_COLOR : "#e2e8f0",
-                        fontWeight: "700",
-                      }}
+                      style={[styles.statusPillText, { color: stColor }]}
                       numberOfLines={1}
                     >
-                      {displayValue}
+                      {job.stat}
                     </Text>
                   </View>
-
-                  {/* 4. สถานะ */}
-                  <View style={{ width: 65, alignItems: "flex-end" }}>
-                    <View
-                      style={[
-                        styles.statusBadgeSmall,
-                        {
-                          borderColor: stColor,
-                          backgroundColor: stColor + "10",
-                          marginBottom: 4,
-                        },
-                      ]}
-                    >
-                      <Text
-                        style={{
-                          color: stColor,
-                          fontSize: 9,
-                          fontWeight: "700",
-                        }}
-                        numberOfLines={1}
-                      >
-                        {job.stat || "-"}
-                      </Text>
-                    </View>
-                  </View>
+                  <Text
+                    style={[
+                      styles.jobMoney,
+                      !money && { color: T.textMute, fontWeight: "500" },
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {money ? "฿" + money.toLocaleString() : "ไม่ระบุมูลค่า"}
+                  </Text>
                 </View>
-              );
-            })}
-          </View>
+              </View>
+            );
+          })}
 
-          {/* Footer */}
+          {/* หลักฐานแนบ + ทางเข้ารายละเอียด */}
           <View style={styles.cardFooter}>
             <View
-              style={{ flexDirection: "row", gap: 8, alignItems: "center" }}
+              style={{ flexDirection: "row", gap: 6, alignItems: "center" }}
             >
-              <Text style={{ fontSize: 10, color: "#aaa" }}>หลักฐาน:</Text>
-              {hasFuel && (
-                <View style={[styles.evIcon, { backgroundColor: "#fff7ed" }]}>
-                  <FontAwesome5 name="gas-pump" size={12} color="#c2410c" />
-                </View>
-              )}
-              {hasHotel && (
-                <View style={[styles.evIcon, { backgroundColor: "#eff6ff" }]}>
-                  <FontAwesome5 name="bed" size={12} color="#1d4ed8" />
-                </View>
-              )}
-              {hasOther && (
-                <View style={[styles.evIcon, { backgroundColor: "#fefce8" }]}>
-                  <FontAwesome5 name="receipt" size={12} color="#a16207" />
-                </View>
-              )}
-              {!hasFuel && !hasHotel && !hasOther && (
-                <Text style={{ fontSize: 10, color: "#ccc" }}>-</Text>
+              {receipts.length > 0 ? (
+                receipts.map((r, i) => (
+                  <View
+                    key={i}
+                    style={[styles.evIcon, { backgroundColor: r.bg }]}
+                  >
+                    <FontAwesome5
+                      name={r.icon as any}
+                      size={11}
+                      color={r.color}
+                    />
+                  </View>
+                ))
+              ) : (
+                <Text style={styles.cardMetaSm}>ไม่มีหลักฐานแนบ</Text>
               )}
             </View>
-            <TouchableOpacity
-              style={styles.viewBtn}
-              onPress={() => {
-                setSelectedItem(item);
-                setDetailModalVisible(true);
-              }}
-            >
-              <Text
-                style={{ fontSize: 12, color: "#2563eb", fontWeight: "bold" }}
-              >
-                รายละเอียด <Ionicons name="chevron-forward" size={12} />
-              </Text>
-            </TouchableOpacity>
+            <View style={styles.detailLinkRow}>
+              <Text style={styles.detailLink}>รายละเอียด</Text>
+              <Ionicons
+                name="chevron-forward"
+                size={13}
+                color={PRIMARY_COLOR}
+              />
+            </View>
           </View>
-        </View>
+        </TouchableOpacity>
       </Animated.View>
     );
   };
+
+  // รายการที่จะแสดงจริง - กรองสถานะที่ระดับ "งาน" ครั้งเดียวที่นี่
+  // (เดิมกรองซ้ำในตัว render แล้ว return null ทำให้ empty state ไม่เคยขึ้น)
+  const visibleList = React.useMemo(() => {
+    return recentList
+      .map((item: any) => {
+        const jobs = jobsOf(item);
+        const shown = filterStatus
+          ? jobs.filter((j) => j.stat === filterStatus)
+          : jobs;
+        return { item, jobs: shown };
+      })
+      .filter((row) => row.jobs.length > 0);
+  }, [recentList, filterStatus]);
+
+  const fmtShort = (d: Date | null) =>
+    d
+      ? d.getDate() +
+        " " +
+        TH_MONTHS_SHORT[d.getMonth()] +
+        " " +
+        String(d.getFullYear() + 543).slice(-2)
+      : "";
+  const rangeLabel =
+    startDate && endDate
+      ? fmtShort(startDate) + " – " + fmtShort(endDate)
+      : "ทุกช่วงเวลา";
+  const activeFilterCount = (filterReporter ? 1 : 0) + (filterStatus ? 1 : 0);
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
@@ -948,11 +1010,11 @@ export default function ManagerSales() {
           onPress={() => router.replace("/(tabs)/manager_dashboard")}
           style={styles.backBtn}
         >
-          <Ionicons name="arrow-back" size={24} color="#333" />
+          <Ionicons name="arrow-back" size={22} color={T.text} />
         </TouchableOpacity>
-        <View>
-          <Text style={styles.headerTitle}>Sales Dashboard</Text>
-          <Text style={styles.headerSub}>ภาพรวมฝ่ายขาย</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.headerTitle}>ภาพรวมฝ่ายขาย</Text>
+          <Text style={styles.headerSub}>{rangeLabel}</Text>
         </View>
         <TouchableOpacity
           onPress={() => setShowFilter(!showFilter)}
@@ -962,12 +1024,70 @@ export default function ManagerSales() {
           ]}
         >
           <Ionicons
-            name="options"
-            size={22}
-            color={showFilter ? "white" : "#333"}
+            name="options-outline"
+            size={20}
+            color={showFilter ? "#fff" : T.text}
           />
+          {activeFilterCount > 0 && !showFilter && (
+            <View style={styles.filterDot}>
+              <Text style={styles.filterDotText}>{activeFilterCount}</Text>
+            </View>
+          )}
         </TouchableOpacity>
       </View>
+
+      {/* ตัวกรองที่ใช้อยู่ รวมไว้ที่เดียว กดกากบาทเพื่อล้างทีละอัน */}
+      {activeFilterCount > 0 && (
+        <View style={styles.chipBar}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.chipBarInner}
+          >
+            {filterReporter !== "" && (
+              <TouchableOpacity
+                style={styles.chip}
+                onPress={() => {
+                  setFilterReporter("");
+                  fetchData("", filterStatus);
+                }}
+              >
+                <Ionicons name="person" size={12} color={PRIMARY_COLOR} />
+                <Text style={styles.chipText} numberOfLines={1}>
+                  {filterReporter}
+                </Text>
+                <Ionicons name="close" size={13} color={T.textMute} />
+              </TouchableOpacity>
+            )}
+            {filterStatus !== "" && (
+              <TouchableOpacity
+                style={styles.chip}
+                onPress={() => {
+                  setFilterStatus("");
+                  fetchData(undefined, "");
+                }}
+              >
+                <View
+                  style={[
+                    styles.chipDot,
+                    { backgroundColor: getStatusColor(filterStatus) },
+                  ]}
+                />
+                <Text style={styles.chipText} numberOfLines={1}>
+                  {filterStatus}
+                </Text>
+                <Ionicons name="close" size={13} color={T.textMute} />
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              onPress={resetFilters}
+              hitSlop={{ top: 8, bottom: 8 }}
+            >
+              <Text style={styles.chipClear}>ล้างทั้งหมด</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        </View>
+      )}
 
       <ScrollView
         contentContainerStyle={{ paddingBottom: 100 }}
@@ -975,6 +1095,7 @@ export default function ManagerSales() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={() => {
+              yearCache.current = null;
               setRefreshing(true);
               fetchData();
             }}
@@ -1047,27 +1168,7 @@ export default function ManagerSales() {
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
-                onPress={() => {
-                  setFilterReporter("");
-                  setFilterStatus("");
-
-                  // รีเซ็ตวันที่กลับมาเป็นเดือนปัจจุบัน
-                  const resetStart = new Date(
-                    new Date().getFullYear(),
-                    new Date().getMonth(),
-                    1,
-                  );
-                  const resetEnd = new Date(
-                    new Date().getFullYear(),
-                    new Date().getMonth() + 1,
-                    0,
-                  );
-                  setStartDate(resetStart);
-                  setEndDate(resetEnd);
-
-                  // บังคับส่งค่าใหม่เข้าไปในฟังก์ชันดึงข้อมูลทันที
-                  fetchData("", "", resetStart, resetEnd);
-                }}
+                onPress={resetFilters}
                 style={styles.resetBtn}
               >
                 <Ionicons name="refresh" size={18} color="#666" />
@@ -1076,255 +1177,129 @@ export default function ManagerSales() {
           </Animated.View>
         )}
 
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.kpiGrid}
-        >
-          <TouchableOpacity
-            style={[
-              styles.kpiCard,
-              { borderLeftColor: "#64748b", minWidth: 130 },
-              filterStatus !== "" && { opacity: 0.5 },
-            ]}
-            onPress={() => setFilterStatus("")}
-          >
-            <Text style={[styles.kpiLabel, { color: "#64748b" }]}>
-              รายงานทั้งหมด
-            </Text>
-            <Text style={styles.kpiValue} numberOfLines={1}>
-              {summary.total}
-            </Text>
-          </TouchableOpacity>
-
-          {/* ➕ ปรับการ์ดมูลค่าโครงการให้มีหลอด Progress แบบเว็บ */}
-          <View
-            style={[
-              styles.kpiCard,
-              { borderLeftColor: "#8b5cf6", minWidth: 180 },
-            ]}
-          >
-            <Text style={[styles.kpiLabel, { color: "#8b5cf6" }]}>
-              ยอดขาย vs เป้ารายเดือน
-            </Text>
-            <View style={{ flexDirection: "row", alignItems: "baseline" }}>
-              <Text
-                style={[styles.kpiValue, { color: "#1e293b" }]}
-                numberOfLines={1}
-              >
-                ฿{parseFloat(summary.sales.toString()).toLocaleString()}
-              </Text>
-              <Text style={{ fontSize: 10, color: "#64748b", marginLeft: 4 }}>
-                / {summary.target > 0 ? summary.target.toLocaleString() : "-"}
+        {/* ===== สรุปยอดขายเทียบเป้า ===== */}
+        <View style={styles.hero}>
+          <View style={styles.heroTop}>
+            <Text style={styles.heroLabel}>ยอดขายที่ปิดได้</Text>
+            <View style={styles.heroTag}>
+              <Ionicons
+                name="checkmark-circle"
+                size={11}
+                color={SUCCESS_COLOR}
+              />
+              <Text style={styles.heroTagText} numberOfLines={1}>
+                {successKeyword}
               </Text>
             </View>
-
-            {(() => {
-              const gPercent =
-                summary.target > 0 ? (summary.sales / summary.target) * 100 : 0;
-              const gCap = Math.min(gPercent, 100);
-              const gColor = gPercent >= 100 ? SUCCESS_COLOR : WARNING_COLOR;
-              return (
-                <View style={{ marginTop: 5 }}>
-                  <View
-                    style={{
-                      height: 4,
-                      backgroundColor: "#e2e8f0",
-                      borderRadius: 2,
-                      overflow: "hidden",
-                    }}
-                  >
-                    <View
-                      style={{
-                        width: `${gCap}%`,
-                        height: "100%",
-                        backgroundColor: gColor,
-                        borderRadius: 2,
-                      }}
-                    />
-                  </View>
-                  <Text
-                    style={{
-                      textAlign: "right",
-                      fontSize: 10,
-                      color: gColor,
-                      fontWeight: "bold",
-                      marginTop: 2,
-                    }}
-                  >
-                    {gPercent.toFixed(1)}%
-                  </Text>
-                </View>
-              );
-            })()}
           </View>
+          <Text style={styles.heroValue} numberOfLines={1} adjustsFontSizeToFit>
+            ฿{summary.sales.toLocaleString()}
+          </Text>
 
-          <View
-            style={[
-              styles.kpiCard,
-              { borderLeftColor: "#0284c7", minWidth: 180 },
-            ]}
-          >
-            <Text style={[styles.kpiLabel, { color: "#0284c7" }]}>
-              ยอดขาย vs เป้ารายปี
-            </Text>
-            <View style={{ flexDirection: "row", alignItems: "baseline" }}>
-              <Text
-                style={[styles.kpiValue, { color: "#1e293b" }]}
-                numberOfLines={1}
-              >
-                ฿{parseFloat(summary.sales.toString()).toLocaleString()}
-              </Text>
-              <Text style={{ fontSize: 10, color: "#64748b", marginLeft: 4 }}>
-                /{" "}
-                {summary.yearly_target > 0
-                  ? summary.yearly_target.toLocaleString()
-                  : "-"}
-              </Text>
-            </View>
-
-            {(() => {
-              const gyPercent =
-                summary.yearly_target > 0
-                  ? (summary.sales / summary.yearly_target) * 100
-                  : 0;
-              const gyCap = Math.min(gyPercent, 100);
-              const gyColor = gyPercent >= 100 ? SUCCESS_COLOR : "#0284c7";
-              return (
-                <View style={{ marginTop: 5 }}>
-                  <View
-                    style={{
-                      height: 4,
-                      backgroundColor: "#e0f2fe",
-                      borderRadius: 2,
-                      overflow: "hidden",
-                    }}
-                  >
-                    <View
-                      style={{
-                        width: `${gyCap}%`,
-                        height: "100%",
-                        backgroundColor: gyColor,
-                        borderRadius: 2,
-                      }}
-                    />
-                  </View>
-                  <Text
-                    style={{
-                      textAlign: "right",
-                      fontSize: 10,
-                      color: gyColor,
-                      fontWeight: "bold",
-                      marginTop: 2,
-                    }}
-                  >
-                    {gyPercent.toFixed(1)}%
-                  </Text>
-                </View>
-              );
-            })()}
+          <View style={styles.heroGoals}>
+            {renderGoal(
+              "เป้าเดือนนี้",
+              summary.sales,
+              summary.target,
+              WARNING_COLOR,
+            )}
+            <View style={styles.heroGoalSep} />
+            {renderGoal(
+              "เป้าทั้งปี (สะสม)",
+              yearSales,
+              summary.yearly_target,
+              "#0284c7",
+            )}
           </View>
-
-          <View
-            style={[
-              styles.kpiCard,
-              { borderLeftColor: DANGER_COLOR, minWidth: 140 },
-            ]}
-          >
-            <Text style={[styles.kpiLabel, { color: DANGER_COLOR }]}>
-              ยอดเบิกสะสมรวม
-            </Text>
-            <Text
-              style={[styles.kpiValue, { color: "#1e293b" }]}
-              numberOfLines={1}
-            >
-              ฿{parseFloat(summary.expense.toString()).toLocaleString()}
-            </Text>
-          </View>
-        </ScrollView>
-
-        {/* Status Breakdown (ใช้ processStatusBreakdown ที่มีอยู่แล้ว) */}
-        <View style={styles.statusGrid}>
-          {kpiList.map((item, idx) => {
-            const color = getStatusColor(item.status);
-            const isSelected = filterStatus === item.status;
-            return (
-              <TouchableOpacity
-                key={idx}
-                onPress={() => {
-                  const newStatus = isSelected ? "" : item.status;
-                  setFilterStatus(newStatus);
-                  fetchData(undefined, newStatus);
-                }}
-                style={[
-                  styles.statusCard,
-                  {
-                    backgroundColor: color + "15",
-                    borderColor: color,
-                    borderWidth: isSelected ? 2 : 1,
-                    opacity: filterStatus === "" || isSelected ? 1 : 0.4,
-                  },
-                ]}
-              >
-                <Text
-                  style={{
-                    color: color,
-                    fontWeight: "bold",
-                    fontSize: 12,
-                    textAlign: "center",
-                  }}
-                >
-                  {item.status}
-                </Text>
-                <Text
-                  style={{
-                    color: "#333",
-                    fontWeight: "800",
-                    fontSize: 16,
-                    marginTop: 4,
-                  }}
-                >
-                  {item.count}
-                </Text>
-                {isSelected && (
-                  <View
-                    style={[styles.activeDot, { backgroundColor: color }]}
-                  />
-                )}
-              </TouchableOpacity>
-            );
-          })}
         </View>
 
-        {/* ✅ ปุ่มเปิด Popup รายละเอียดรายบุคคล */}
-        <View
-          style={{ paddingHorizontal: 15, marginBottom: 20, marginTop: 10 }}
-        >
-          <View
-            style={{
-              flexDirection: "row",
-              justifyContent: "space-between",
-              alignItems: "center",
-              marginBottom: 10,
-            }}
-          >
-            <Text style={styles.sectionHeader}>👥 รายละเอียดรายบุคคล</Text>
-            {filterReporter ? (
-              <TouchableOpacity
-                onPress={() => {
-                  setFilterReporter("");
-                  fetchData("", filterStatus);
-                }}
-              >
-                <Text style={{ fontSize: 12, color: DANGER_COLOR }}>
-                  ล้างตัวกรองคน
-                </Text>
-              </TouchableOpacity>
-            ) : null}
+        {/* ===== ตัวเลขรวม: แยกหน่วย "รายงาน" กับ "งาน" ให้ชัด ===== */}
+        <View style={styles.statRow}>
+          <View style={styles.statTile}>
+            <Text style={styles.statValue}>
+              {summary.total.toLocaleString()}
+            </Text>
+            <Text style={styles.statLabel}>รายงาน</Text>
           </View>
+          <View style={styles.statTile}>
+            <Text style={styles.statValue}>
+              {summary.jobs.toLocaleString()}
+            </Text>
+            <Text style={styles.statLabel}>งาน</Text>
+          </View>
+          <View style={styles.statTile}>
+            <Text
+              style={[styles.statValue, { color: DANGER_COLOR }]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+            >
+              ฿{summary.expense.toLocaleString()}
+            </Text>
+            <Text style={styles.statLabel}>เบิกจ่าย</Text>
+          </View>
+        </View>
 
+        {/* ===== สถานะงาน ===== */}
+        <View style={styles.section}>
+          <View style={styles.sectionRow}>
+            <Text style={styles.sectionHeader}>สถานะงาน</Text>
+            {kpiList.length > 0 && (
+              <Text style={styles.sectionHint}>แตะเพื่อกรอง</Text>
+            )}
+          </View>
+          {kpiList.length === 0 ? (
+            <Text style={styles.mutedText}>ไม่มีข้อมูลสถานะในช่วงนี้</Text>
+          ) : (
+            <View style={styles.chipWrap}>
+              {kpiList.map((it, idx) => {
+                const color = getStatusColor(it.status);
+                const isSelected = filterStatus === it.status;
+                return (
+                  <TouchableOpacity
+                    key={idx}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      const next = isSelected ? "" : it.status;
+                      setFilterStatus(next);
+                      fetchData(undefined, next);
+                    }}
+                    style={[
+                      styles.statusChip,
+                      {
+                        borderColor: isSelected ? color : T.line,
+                        backgroundColor: isSelected ? color + "14" : T.surface,
+                      },
+                    ]}
+                  >
+                    <View
+                      style={[styles.chipDot, { backgroundColor: color }]}
+                    />
+                    <Text
+                      style={[
+                        styles.statusChipText,
+                        isSelected && { color, fontWeight: "700" },
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {it.status}
+                    </Text>
+                    <Text style={[styles.statusChipCount, { color }]}>
+                      {it.count}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
+        </View>
+
+        {/* ===== ทีมเซลส์ ===== */}
+        <View style={styles.section}>
+          <Text style={styles.sectionHeader}>ทีมเซลส์</Text>
           <TouchableOpacity
             style={styles.empModalBtn}
+            activeOpacity={0.85}
+            disabled={employeeStats.length === 0}
             onPress={() => setEmpModalVisible(true)}
           >
             <View style={{ flexDirection: "row", alignItems: "center" }}>
@@ -1338,54 +1313,58 @@ export default function ManagerSales() {
                     ]}
                   >
                     <Text style={styles.avatarMicroText}>
-                      {emp.name.charAt(0)}
+                      {String(emp.name || "?").charAt(0)}
                     </Text>
                   </View>
                 ))}
               </View>
-              <Text
-                style={{
-                  marginLeft: 12,
-                  fontWeight: "bold",
-                  color: PRIMARY_COLOR,
-                  fontSize: 14,
-                }}
-              >
-                ดูสถิติทีมเซลส์ ({employeeStats.length} คน)
+              <Text style={styles.empModalBtnText}>
+                {employeeStats.length > 0
+                  ? "ดูสถิติรายบุคคล (" + employeeStats.length + " คน)"
+                  : "ยังไม่มีข้อมูลรายบุคคล"}
               </Text>
             </View>
-            <Ionicons name="chevron-forward" size={20} color={PRIMARY_COLOR} />
+            <Ionicons name="chevron-forward" size={18} color={PRIMARY_COLOR} />
           </TouchableOpacity>
         </View>
 
-        <View style={{ paddingHorizontal: 15 }}>
-          <Text style={styles.sectionHeader}>
-            📋 รายการล่าสุด
-            {filterStatus !== "" && (
-              <Text
-                style={{ fontSize: 14, fontWeight: "normal", color: "#666" }}
-              >
-                {" "}
-                (สถานะ: {filterStatus})
+        {/* ===== รายการล่าสุด ===== */}
+        <View style={styles.section}>
+          <View style={styles.sectionRow}>
+            <Text style={styles.sectionHeader}>รายการล่าสุด</Text>
+            {!loading && visibleList.length > 0 && (
+              <Text style={styles.sectionHint}>
+                {visibleList.length} รายงาน
               </Text>
             )}
-          </Text>
+          </View>
+
           {loading ? (
-            <ActivityIndicator size="large" color={PRIMARY_COLOR} />
-          ) : (
-            <FlatList
-              data={recentList}
-              keyExtractor={(item, index) => index.toString()}
-              renderItem={renderRecentItem}
-              scrollEnabled={false}
-              ListEmptyComponent={
-                <Text
-                  style={{ textAlign: "center", marginTop: 20, color: "#999" }}
-                >
-                  ไม่พบข้อมูล
-                </Text>
-              }
+            <ActivityIndicator
+              size="large"
+              color={PRIMARY_COLOR}
+              style={{ marginTop: 28 }}
             />
+          ) : visibleList.length === 0 ? (
+            <View style={styles.empty}>
+              <Ionicons
+                name="document-text-outline"
+                size={30}
+                color={T.textMute}
+              />
+              <Text style={styles.emptyText}>
+                {activeFilterCount > 0
+                  ? "ไม่พบรายงานตามตัวกรองนี้"
+                  : "ยังไม่มีรายงานในช่วงวันที่ที่เลือก"}
+              </Text>
+              {activeFilterCount > 0 && (
+                <TouchableOpacity style={styles.emptyBtn} onPress={resetFilters}>
+                  <Text style={styles.emptyBtnText}>ล้างตัวกรอง</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          ) : (
+            visibleList.map((row, i) => renderRecentItem(row, i))
           )}
         </View>
       </ScrollView>
@@ -2147,56 +2126,103 @@ export default function ManagerSales() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#f1f5f9" },
+  container: { flex: 1, backgroundColor: T.bg },
+
+  // ===== Header + แถบตัวกรองที่ใช้อยู่ =====
   header: {
     flexDirection: "row",
     alignItems: "center",
-    padding: 20,
-    backgroundColor: "#fff",
+    paddingHorizontal: T.pad,
+    paddingVertical: 12,
+    backgroundColor: T.surface,
     borderBottomWidth: 1,
-    borderBottomColor: "#eee",
+    borderBottomColor: T.line,
   },
   backBtn: {
-    width: 40,
-    height: 40,
+    width: 38,
+    height: 38,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#f8fafc",
+    backgroundColor: T.bg,
     borderRadius: 10,
-    marginRight: 15,
+    marginRight: 12,
   },
-  headerTitle: { fontSize: 20, fontWeight: "800", color: "#1e293b" },
-  headerSub: { fontSize: 13, color: "#64748b" },
+  headerTitle: { fontSize: FS.xl, fontWeight: "800", color: T.text },
+  headerSub: { fontSize: FS.sm, color: T.textSub, marginTop: 1 },
   filterBtn: {
-    marginLeft: "auto",
-    width: 40,
-    height: 40,
+    width: 38,
+    height: 38,
     justifyContent: "center",
     alignItems: "center",
     borderRadius: 10,
-    backgroundColor: "#f1f5f9",
+    backgroundColor: T.bg,
+  },
+  filterDot: {
+    position: "absolute",
+    top: -2,
+    right: -2,
+    minWidth: 16,
+    height: 16,
+    paddingHorizontal: 4,
+    borderRadius: 8,
+    backgroundColor: PRIMARY_COLOR,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: T.surface,
+  },
+  filterDotText: { color: "#fff", fontSize: 9, fontWeight: "800" },
+  chipBar: {
+    backgroundColor: T.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: T.line,
+    paddingVertical: 8,
+  },
+  chipBarInner: {
+    gap: 8,
+    alignItems: "center",
+    paddingHorizontal: T.pad,
+  },
+  chip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    maxWidth: 200,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: T.line,
+    backgroundColor: T.bg,
+  },
+  chipText: { fontSize: FS.sm, color: T.text, fontWeight: "600", flexShrink: 1 },
+  chipDot: { width: 7, height: 7, borderRadius: 4 },
+  chipClear: {
+    fontSize: FS.sm,
+    color: DANGER_COLOR,
+    fontWeight: "600",
+    paddingHorizontal: 4,
   },
 
-  // Filter Section
+  // ===== แผงตัวกรอง =====
   filterSection: {
-    backgroundColor: "#fff",
-    padding: 20,
-    margin: 15,
-    borderRadius: 16,
-    elevation: 4,
-    shadowColor: "#000",
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
+    backgroundColor: T.surface,
+    padding: T.pad,
+    margin: T.pad,
+    marginBottom: 0,
+    borderRadius: T.radius,
+    borderWidth: 1,
+    borderColor: T.line,
   },
   sectionTitle: {
-    fontSize: 16,
-    fontWeight: "bold",
-    color: "#1e293b",
-    marginBottom: 15,
+    fontSize: FS.lg,
+    fontWeight: "700",
+    color: T.text,
+    marginBottom: 14,
   },
   inputLabel: {
-    fontSize: 13,
-    color: "#64748b",
+    fontSize: FS.sm,
+    color: T.textSub,
     marginBottom: 6,
     fontWeight: "600",
   },
@@ -2206,201 +2232,302 @@ const styles = StyleSheet.create({
     alignItems: "center",
     padding: 12,
     borderWidth: 1,
-    borderColor: "#e2e8f0",
+    borderColor: T.line,
     borderRadius: 10,
-    backgroundColor: "#f8fafc",
+    backgroundColor: T.bg,
   },
-  dateRow: { flexDirection: "row", gap: 15, marginBottom: 20 },
+  dateRow: { flexDirection: "row", gap: 12, marginBottom: 16 },
   dateInput: {
     flexDirection: "row",
     alignItems: "center",
     padding: 12,
     borderWidth: 1,
-    borderColor: "#e2e8f0",
+    borderColor: T.line,
     borderRadius: 10,
-    backgroundColor: "#f8fafc",
-  },
-  showAllBtn: {
-    padding: 12,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: 10,
-    backgroundColor: PRIMARY_COLOR + "15",
-    marginBottom: 15,
-    borderWidth: 1,
-    borderColor: PRIMARY_COLOR + "30",
+    backgroundColor: T.bg,
   },
   filterActions: { flexDirection: "row", gap: 10 },
   searchBtn: {
     flex: 1,
     flexDirection: "row",
     backgroundColor: PRIMARY_COLOR,
-    padding: 14,
+    paddingVertical: 13,
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-    shadowColor: PRIMARY_COLOR,
-    shadowOpacity: 0.3,
-    shadowRadius: 5,
   },
   resetBtn: {
     width: 50,
-    backgroundColor: "#f1f5f9",
+    backgroundColor: T.bg,
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-  },
-
-  // KPI & Status Cards
-  kpiGrid: {
-    flexDirection: "row",
-    gap: 10,
-    paddingHorizontal: 15,
-    marginBottom: 10,
-    flexGrow: 1,
-  },
-  kpiCard: {
-    backgroundColor: "#fff",
-    padding: 15,
-    borderRadius: 12,
-    borderLeftWidth: 4,
-    elevation: 2,
-    flexGrow: 1,
-  },
-  kpiLabel: { fontSize: 11, fontWeight: "bold", marginBottom: 5 },
-  kpiValue: { fontSize: 18, fontWeight: "800", color: "#333" },
-  statusGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    paddingHorizontal: 15,
-    gap: 10,
-    marginBottom: 20,
-  },
-  statusCard: {
-    width: "30%",
-    flexGrow: 1,
-    padding: 12,
-    borderRadius: 10,
     borderWidth: 1,
+    borderColor: T.line,
+  },
+
+  // ===== Hero: ยอดขายเทียบเป้า =====
+  hero: {
+    backgroundColor: T.surface,
+    margin: T.pad,
+    marginBottom: T.gap,
+    padding: T.pad,
+    borderRadius: T.radius,
+    borderWidth: 1,
+    borderColor: T.line,
+  },
+  heroTop: {
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 0,
+    justifyContent: "space-between",
+    gap: 8,
   },
-  activeDot: { width: 6, height: 6, borderRadius: 3, marginTop: 5 },
+  heroLabel: { fontSize: FS.sm, color: T.textSub, fontWeight: "600" },
+  heroTag: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    maxWidth: 150,
+    backgroundColor: SUCCESS_COLOR + "14",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+  },
+  heroTagText: {
+    fontSize: FS.xs,
+    color: "#047857",
+    fontWeight: "700",
+    flexShrink: 1,
+  },
+  heroValue: {
+    fontSize: FS.hero,
+    fontWeight: "800",
+    color: T.text,
+    marginTop: 4,
+    letterSpacing: -0.5,
+  },
+  heroGoals: {
+    flexDirection: "row",
+    marginTop: 16,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: T.lineSoft,
+  },
+  heroGoalSep: { width: 1, backgroundColor: T.lineSoft, marginHorizontal: 14 },
+  goalTop: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+  goalLabel: { fontSize: FS.xs, color: T.textSub, fontWeight: "600" },
+  goalPct: { fontSize: FS.sm, fontWeight: "800" },
+  goalTrack: {
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: T.line,
+    overflow: "hidden",
+  },
+  goalFill: { height: "100%", borderRadius: 3 },
+  goalFoot: { fontSize: 10, color: T.textMute, marginTop: 5 },
 
-  // Recent List & Cards
+  // ===== ตัวเลขรวม 3 ช่อง =====
+  statRow: {
+    flexDirection: "row",
+    gap: T.gap,
+    paddingHorizontal: T.pad,
+    marginBottom: 4,
+  },
+  statTile: {
+    flex: 1,
+    backgroundColor: T.surface,
+    borderRadius: T.radius,
+    borderWidth: 1,
+    borderColor: T.line,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    alignItems: "center",
+  },
+  statValue: { fontSize: FS.lg, fontWeight: "800", color: T.text },
+  statLabel: { fontSize: FS.xs, color: T.textMute, marginTop: 2 },
+
+  // ===== Section ทั่วไป =====
+  section: { paddingHorizontal: T.pad, marginTop: 20 },
+  sectionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
   sectionHeader: {
-    fontSize: 16,
-    fontWeight: "bold",
-    color: "#333",
+    fontSize: FS.lg,
+    fontWeight: "700",
+    color: T.text,
     marginBottom: 10,
-    marginTop: 10,
   },
-  card: {
-    backgroundColor: "#fff",
-    padding: 15,
-    borderRadius: 12,
-    marginBottom: 12,
-    borderLeftWidth: 4,
-    elevation: 2,
-  },
+  sectionHint: { fontSize: FS.sm, color: T.textMute, marginBottom: 10 },
+  mutedText: { fontSize: FS.sm, color: T.textMute },
 
+  // ===== ชิปสถานะ =====
+  chipWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  statusChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  statusChipText: {
+    fontSize: FS.sm,
+    color: T.textSub,
+    fontWeight: "600",
+    maxWidth: 140,
+  },
+  statusChipCount: { fontSize: FS.sm, fontWeight: "800" },
+
+  // ===== การ์ดรายงาน =====
+  card: {
+    backgroundColor: T.surface,
+    borderRadius: T.radius,
+    borderWidth: 1,
+    borderColor: T.line,
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 4,
+    marginBottom: T.gap,
+  },
   cardHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "flex-start",
-    marginBottom: 12,
     paddingBottom: 10,
     borderBottomWidth: 1,
-    borderBottomColor: "#f1f5f9",
+    borderBottomColor: T.lineSoft,
   },
-  cardBody: { marginBottom: 10 },
+  cardName: { fontSize: FS.md, fontWeight: "700", color: T.text },
+  cardMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 3,
+  },
+  cardMeta: { fontSize: FS.xs, color: T.textMute },
+  cardMetaSm: { fontSize: 10, color: T.textMute },
+  placeTag: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 5,
+  },
+  placeText: { fontSize: 10, fontWeight: "600" },
+  expenseText: { color: DANGER_COLOR, fontWeight: "700", fontSize: FS.md },
+
+  // งาน 1 บล็อก
+  jobRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    paddingVertical: 11,
+  },
+  jobDivider: { borderTopWidth: 1, borderTopColor: T.lineSoft },
+  jobCustomer: { fontSize: FS.md, fontWeight: "600", color: PRIMARY_COLOR },
+  jobProject: { fontSize: FS.sm, color: T.textSub, marginTop: 2 },
+  statusPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    maxWidth: 104,
+  },
+  statusPillText: { fontSize: FS.xs, fontWeight: "700" },
+  jobMoney: {
+    fontSize: FS.sm,
+    fontWeight: "700",
+    color: SUCCESS_COLOR,
+    marginTop: 4,
+  },
+
   cardFooter: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     borderTopWidth: 1,
-    borderTopColor: "#f1f5f9",
-    paddingTop: 10,
+    borderTopColor: T.lineSoft,
+    paddingVertical: 9,
   },
-
-  // Table Styles inside Card
-  tableHead: { fontSize: 11, color: "#94a3b8", fontWeight: "bold" },
-  customerLinkTable: { color: PRIMARY_COLOR, fontWeight: "bold", fontSize: 12 },
-  projectTextTable: { fontSize: 12, color: "#333" },
-  statusBadgeTable: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    borderWidth: 1,
-  },
-  // ✅ เพิ่ม statusBadgeSmall (แก้จอดำ)
-  statusBadgeSmall: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    borderWidth: 1,
-    justifyContent: "center",
-  },
-  // ✅ เพิ่ม projectValueText (แก้จอดำ)
-  projectValueText: {
-    fontSize: 12,
-    color: SUCCESS_COLOR,
-    fontWeight: "bold",
-    marginTop: 2,
-  },
-
-  dateText: { fontSize: 12, fontWeight: "bold", color: "#333" },
-  reporterName: { fontSize: 13, color: "#333", fontWeight: "600" },
-  tagOffice: {
-    backgroundColor: "#f1f5f9",
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    marginLeft: 6,
-  },
-  tagTextOffice: { fontSize: 10, color: "#64748b" },
-  tagOutside: {
-    backgroundColor: "#eff6ff",
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    marginLeft: 6,
-  },
-  tagTextOutside: { fontSize: 10, color: PRIMARY_COLOR },
-
-  expenseText: { color: DANGER_COLOR, fontWeight: "bold", fontSize: 13 },
   evIcon: {
-    width: 24,
-    height: 24,
+    width: 22,
+    height: 22,
     borderRadius: 6,
     justifyContent: "center",
     alignItems: "center",
   },
-  viewBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    padding: 6,
-    backgroundColor: "#f1f5f9",
-    borderRadius: 6,
-  },
+  detailLinkRow: { flexDirection: "row", alignItems: "center", gap: 2 },
+  detailLink: { fontSize: FS.sm, color: PRIMARY_COLOR, fontWeight: "700" },
 
-  // Modals
+  // ===== Empty state =====
+  empty: {
+    alignItems: "center",
+    paddingVertical: 36,
+    backgroundColor: T.surface,
+    borderRadius: T.radius,
+    borderWidth: 1,
+    borderColor: T.line,
+    borderStyle: "dashed",
+  },
+  emptyText: { fontSize: FS.sm, color: T.textMute, marginTop: 8 },
+  emptyBtn: {
+    marginTop: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: PRIMARY_COLOR + "14",
+  },
+  emptyBtnText: { fontSize: FS.sm, color: PRIMARY_COLOR, fontWeight: "700" },
+
+  // ===== ปุ่มเปิดสถิติทีม =====
+  empModalBtn: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: T.surface,
+    padding: 14,
+    borderRadius: T.radius,
+    borderWidth: 1,
+    borderColor: T.line,
+  },
+  empModalBtnText: {
+    marginLeft: 12,
+    fontWeight: "700",
+    color: PRIMARY_COLOR,
+    fontSize: FS.md,
+  },
+  avatarMicroGroup: { flexDirection: "row" },
+  avatarMicro: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: PRIMARY_COLOR,
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: T.surface,
+  },
+  avatarMicroText: { color: "#fff", fontSize: FS.xs, fontWeight: "700" },
+
+  // ===== Modal =====
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
+    backgroundColor: "rgba(15,23,42,0.55)",
     justifyContent: "center",
     alignItems: "center",
   },
   modalContent: {
     width: "90%",
     maxHeight: "80%",
-    backgroundColor: "#fff",
-    borderRadius: 16,
+    backgroundColor: T.surface,
+    borderRadius: T.radius + 2,
     padding: 20,
   },
   modalHeader: {
@@ -2409,127 +2536,116 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 15,
     borderBottomWidth: 1,
-    borderBottomColor: "#eee",
+    borderBottomColor: T.line,
     paddingBottom: 10,
   },
-  modalTitle: { fontSize: 18, fontWeight: "bold", color: "#333" },
-  detailRow: { flexDirection: "row", marginBottom: 8 },
-  detailLabel: { width: 80, fontSize: 13, color: "#64748b", fontWeight: "600" },
-  detailValue: { flex: 1, fontSize: 13, color: "#333" },
-  divider: { height: 1, backgroundColor: "#eee", marginVertical: 12 },
+  modalTitle: { fontSize: FS.lg + 2, fontWeight: "700", color: T.text },
+  detailLabel: {
+    fontSize: FS.xs,
+    color: T.textMute,
+    fontWeight: "600",
+    marginBottom: 2,
+  },
+  detailValue: { fontSize: FS.sm, color: T.text },
+  divider: { height: 1, backgroundColor: T.line, marginVertical: 14 },
   detailSectionTitle: {
-    fontSize: 14,
-    fontWeight: "bold",
-    color: "#333",
+    fontSize: FS.md,
+    fontWeight: "700",
+    color: T.text,
     marginBottom: 8,
   },
-  costGrid: { flexDirection: "row", gap: 10, marginBottom: 10 },
-  costBox: {
-    flex: 1,
-    backgroundColor: "#f8fafc",
-    padding: 10,
-    borderRadius: 8,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-  },
-  costLabel: { fontSize: 10, color: "#64748b" },
-  costNum: { fontSize: 14, fontWeight: "bold", color: "#333" },
-  gpsBox: {
+  metaChip: {
     flexDirection: "row",
-    backgroundColor: "#eff6ff",
-    padding: 10,
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: T.bg,
     borderRadius: 8,
-    marginTop: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderWidth: 1,
+    borderColor: T.line,
+  },
+  metaChipText: { fontSize: FS.sm, color: T.textSub },
+  jobDetailCard: {
+    backgroundColor: T.bg,
+    borderRadius: 12,
+    padding: 12,
     marginBottom: 10,
+    borderWidth: 1,
+    borderColor: T.line,
+  },
+  statusBadgeSmall: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  noteBlue: {
+    borderLeftWidth: 3,
+    borderLeftColor: "#85B7EB",
+    backgroundColor: "#E6F1FB",
+    borderRadius: 8,
+    padding: 9,
+    marginTop: 8,
+  },
+  noteLabelBlue: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#185FA5",
+    marginBottom: 3,
+  },
+  noteTextBlue: { fontSize: FS.sm, color: "#0C447C" },
+  expenseCard: {
+    backgroundColor: T.bg,
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: T.line,
+  },
+  expenseRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: T.lineSoft,
   },
   evBtn: {
     flexDirection: "row",
     gap: 5,
-    padding: 6,
-    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 8,
     borderWidth: 1,
     alignItems: "center",
-    backgroundColor: "#fff",
+    backgroundColor: T.surface,
   },
-  noteBox: {
-    backgroundColor: "#f9f9f9",
-    padding: 10,
-    borderRadius: 8,
-    minHeight: 60,
-  },
-
-  // History & Selector
   historyItem: {
-    padding: 12,
+    paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: "#f1f5f9",
+    borderBottomColor: T.lineSoft,
   },
   selectorItem: {
     flexDirection: "row",
     justifyContent: "space-between",
     paddingVertical: 15,
     borderBottomWidth: 1,
-    borderBottomColor: "#f1f5f9",
+    borderBottomColor: T.lineSoft,
   },
 
-  // Custom Calendar
-  calHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: 15,
-    backgroundColor: PRIMARY_COLOR,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-  },
-  calTitle: { color: "#fff", fontSize: 18, fontWeight: "bold" },
-  calNavBtn: { padding: 5 },
-  calWeekRow: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    marginBottom: 5,
-  },
-  calWeekText: { color: "#666", fontSize: 14, width: 35, textAlign: "center" },
-  calGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    justifyContent: "flex-start",
-  },
-  calDay: {
-    width: "14.28%",
-    height: 40,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  calDayText: { fontSize: 16, color: "#333" },
-  calDayEmpty: { width: "14.28%", height: 40 },
-  calDaySelected: { backgroundColor: PRIMARY_COLOR, borderRadius: 20 },
-  calDayTextSelected: { color: "#fff", fontWeight: "bold" },
-  calCloseBtn: { alignSelf: "center", padding: 10, marginTop: 10 },
-  yearGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    justifyContent: "center",
-    gap: 10,
-  },
-  yearItem: {
-    padding: 15,
-    width: "30%",
-    alignItems: "center",
-    backgroundColor: "#f9f9f9",
-    borderRadius: 8,
-  },
-  yearText: { fontSize: 16, color: "#333" },
+  // ===== การ์ดพนักงานใน Modal สถิติทีม =====
   empCard: {
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 15,
-    width: "100%", // ✅ เปลี่ยนจาก minWidth เป็น 100%
-    marginBottom: 15, // ✅ ปรับระยะห่างด้านล่าง
+    backgroundColor: T.surface,
+    borderRadius: T.radius,
+    padding: 14,
+    width: "100%",
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: T.line,
     borderLeftWidth: 4,
-    borderColor: PRIMARY_COLOR,
-    elevation: 3,
   },
   empHeader: { flexDirection: "row", alignItems: "center", marginBottom: 8 },
   avatar: {
@@ -2541,96 +2657,95 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginRight: 10,
   },
-  avatarText: { color: "#fff", fontWeight: "bold", fontSize: 16 },
-  empName: { fontSize: 14, fontWeight: "bold", color: "#333" },
-  empReportCount: { fontSize: 12, color: "#666" },
+  avatarText: { color: "#fff", fontWeight: "700", fontSize: FS.lg },
+  empName: { fontSize: FS.md, fontWeight: "700", color: T.text },
+  empReportCount: { fontSize: FS.sm, color: T.textMute },
+  empGoals: {
+    flexDirection: "row",
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: T.lineSoft,
+  },
   moneyBox: {
-    flexGrow: 1,
-    minWidth: 120,
-    padding: 8,
-    borderRadius: 8,
+    flex: 1,
+    padding: 9,
+    borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
+  },
+  moneyLabel: { fontSize: 10, color: INFO_COLOR },
+  moneyValue: { fontSize: FS.md, fontWeight: "700", marginTop: 1 },
+  empStatusWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    marginTop: 12,
   },
   statusTag: {
     flexDirection: "row",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    borderWidth: 1,
-    alignItems: "center",
-    backgroundColor: "#fff",
-  },
-  empModalBtn: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    backgroundColor: "#eff6ff",
-    padding: 15,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#bfdbfe",
-  },
-  avatarMicroGroup: { flexDirection: "row" },
-  avatarMicro: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: PRIMARY_COLOR,
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 2,
-    borderColor: "#eff6ff",
-  },
-  avatarMicroText: { color: "#fff", fontSize: 12, fontWeight: "bold" },
-  metaChip: {
-    flexDirection: "row",
     alignItems: "center",
     gap: 5,
-    backgroundColor: "#f1f5f9",
-    borderRadius: 8,
-    paddingHorizontal: 10,
+    paddingHorizontal: 9,
     paddingVertical: 5,
-    borderWidth: 0.5,
-    borderColor: "#e2e8f0",
+    borderRadius: 999,
+    borderWidth: 1,
+    backgroundColor: T.surface,
   },
-  metaChipText: { fontSize: 12, color: "#334155" },
-  jobDetailCard: {
-    backgroundColor: "#f8fafc",
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 10,
-    borderWidth: 0.5,
-    borderColor: "#e2e8f0",
-  },
-  noteBlue: {
-    borderLeftWidth: 2,
-    borderLeftColor: "#85B7EB",
-    backgroundColor: "#E6F1FB",
-    borderRadius: 6,
-    padding: 8,
-    marginTop: 8,
-  },
-  noteLabelBlue: {
-    fontSize: 10,
-    fontWeight: "bold",
-    color: "#185FA5",
-    marginBottom: 3,
-  },
-  noteTextBlue: { fontSize: 12, color: "#0C447C" },
-  expenseCard: {
-    backgroundColor: "#f8fafc",
-    borderRadius: 12,
-    padding: 12,
-    borderWidth: 0.5,
-    borderColor: "#e2e8f0",
-  },
-  expenseRow: {
+  statusTagCount: { fontSize: FS.sm, fontWeight: "800" },
+  statusTagLabel: { fontSize: FS.xs, color: T.textSub, maxWidth: 130 },
+
+  // ===== ปฏิทินเลือกวันที่ =====
+  calHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingVertical: 6,
-    borderBottomWidth: 0.5,
-    borderColor: "#f1f5f9",
+    padding: 15,
+    backgroundColor: PRIMARY_COLOR,
+    borderTopLeftRadius: T.radius + 2,
+    borderTopRightRadius: T.radius + 2,
   },
+  calTitle: { color: "#fff", fontSize: FS.lg + 2, fontWeight: "700" },
+  calNavBtn: { padding: 5 },
+  calWeekRow: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    marginBottom: 5,
+  },
+  calWeekText: {
+    color: T.textSub,
+    fontSize: FS.md,
+    width: 35,
+    textAlign: "center",
+  },
+  calGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "flex-start",
+  },
+  calDay: {
+    width: "14.28%",
+    height: 40,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  calDayText: { fontSize: FS.lg, color: T.text },
+  calDayEmpty: { width: "14.28%", height: 40 },
+  calDaySelected: { backgroundColor: PRIMARY_COLOR, borderRadius: 20 },
+  calDayTextSelected: { color: "#fff", fontWeight: "700" },
+  calCloseBtn: { alignSelf: "center", padding: 10, marginTop: 10 },
+  yearGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    gap: 10,
+  },
+  yearItem: {
+    padding: 15,
+    width: "30%",
+    alignItems: "center",
+    backgroundColor: T.bg,
+    borderRadius: 8,
+  },
+  yearText: { fontSize: FS.lg, color: T.text },
 });
