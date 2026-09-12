@@ -1,7 +1,7 @@
 import { useAuth } from "../_layout";
 import { DeviceEventEmitter, ActivityIndicator, Dimensions, Image, Modal, Platform, RefreshControl, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, useColorScheme, View } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect } from "expo-router/react-navigation";
 import axios from 'axios';
 import { BlurView } from 'expo-blur';
 import * as ImagePicker from 'expo-image-picker';
@@ -424,7 +424,7 @@ export default function DashboardScreen() {
     return (
         <View style={styles.container}>
             <StatusBar barStyle={isDark ? "light-content" : "dark-content"} backgroundColor="transparent" translucent />
-            
+
             {/* Ambient Background Blobs (Premium Glass Effect) */}
             <View style={StyleSheet.absoluteFillObject}>
                 <View style={[styles.ambientBlob, { top: -100, left: -50, backgroundColor: 'rgba(59, 130, 246, 0.15)' }]} />
@@ -590,33 +590,33 @@ export default function DashboardScreen() {
                                 else if (item.status === 'approved') gradientAvatar = { bg: '#10B981', text: '#FFFFFF' };
 
                                 return (
-                                <TouchableOpacity key={index} style={styles.reportCardGrand} onPress={() => openModal(item)} activeOpacity={0.9}>
-                                    <View style={styles.reportHeaderGrand}>
-                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, flex: 1 }}>
-                                            <View style={[styles.avatarCircleGrand, { backgroundColor: gradientAvatar.bg }]}><Text style={[styles.avatarTextGrand, { color: gradientAvatar.text }]}>{item.assigner_name.charAt(0).toUpperCase()}</Text></View>
-                                            <View style={{ flex: 1 }}>
-                                                <Text style={styles.reportNameGrand} numberOfLines={1}>{item.assigner_name}</Text>
-                                                <Text style={styles.reportCompanyGrand}>{item.company ? item.company.replace(/,\s*/g, ', ') : '-'}</Text>
+                                    <TouchableOpacity key={index} style={styles.reportCardGrand} onPress={() => openModal(item)} activeOpacity={0.9}>
+                                        <View style={styles.reportHeaderGrand}>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, flex: 1 }}>
+                                                <View style={[styles.avatarCircleGrand, { backgroundColor: gradientAvatar.bg }]}><Text style={[styles.avatarTextGrand, { color: gradientAvatar.text }]}>{item.assigner_name.charAt(0).toUpperCase()}</Text></View>
+                                                <View style={{ flex: 1 }}>
+                                                    <Text style={styles.reportNameGrand} numberOfLines={1}>{item.assigner_name}</Text>
+                                                    <Text style={styles.reportCompanyGrand}>{item.company ? item.company.replace(/,\s*/g, ', ') : '-'}</Text>
+                                                </View>
+                                            </View>
+                                            <StatusBadge status={item.status} isDark={isDark} />
+                                        </View>
+                                        <View style={styles.reportBodyGrand}>
+                                            <Text style={styles.reportActivityGrand} numberOfLines={2}>{item.activity}</Text>
+                                            <View style={styles.reportLocationRow}>
+                                                <MapPin size={16} color="#FB7185" />
+                                                <Text style={styles.reportLocationGrand} numberOfLines={1}>{item.location}</Text>
                                             </View>
                                         </View>
-                                        <StatusBadge status={item.status} isDark={isDark} />
-                                    </View>
-                                    <View style={styles.reportBodyGrand}>
-                                        <Text style={styles.reportActivityGrand} numberOfLines={2}>{item.activity}</Text>
-                                        <View style={styles.reportLocationRow}>
-                                            <MapPin size={16} color="#FB7185" />
-                                            <Text style={styles.reportLocationGrand} numberOfLines={1}>{item.location}</Text>
+                                        <View style={styles.reportFooterGrand}>
+                                            <View style={styles.reportDateBadge}>
+                                                <Calendar size={14} color={theme.textSecondary} />
+                                                <Text style={styles.reportDateText}>{formatDate(item.work_date)}</Text>
+                                            </View>
+                                            <Text style={styles.reportCostGrand}>{item.final_cost ? `${Number(item.final_cost).toLocaleString()} ฿` : <Text style={{color: theme.textSecondary, fontSize: 14}}>- ไม่ระบุยอด -</Text>}</Text>
                                         </View>
-                                    </View>
-                                    <View style={styles.reportFooterGrand}>
-                                        <View style={styles.reportDateBadge}>
-                                            <Calendar size={14} color={theme.textSecondary} />
-                                            <Text style={styles.reportDateText}>{formatDate(item.work_date)}</Text>
-                                        </View>
-                                        <Text style={styles.reportCostGrand}>{item.final_cost ? `${Number(item.final_cost).toLocaleString()} ฿` : <Text style={{color: theme.textSecondary, fontSize: 14}}>- ไม่ระบุยอด -</Text>}</Text>
-                                    </View>
-                                </TouchableOpacity>
-                            )})}
+                                    </TouchableOpacity>
+                                );})}
                         </View>
                     </View>
                 </ScrollView>
