@@ -4,7 +4,8 @@
  * Mobile mockup ของหน้า driver_tasks.php ("ระบบคนรถ - ยืนยันการส่งของ" / งานจัดส่งของฉัน)
  * สำหรับแอป tjc-mobile-app (Expo / React Native)
  *
- * สถานะไฟล์นี้: UI MOCKUP — ข้อมูลทั้งหมดเป็น MOCK_TASKS ด้านล่าง ยังไม่ยิง fetch จริง
+ * สถานะไฟล์นี้: เชื่อม API จริงแล้ว (GET action=get_driver_tasks ผ่าน api_mobile.php) — action/param
+ * name เป็นการเดาตาม pattern ในเอกสารโปรเจกต์ ยังไม่ได้ยืนยันกับ backend จริง
  *
  * ตรงกับพฤติกรรมจริงจาก driver_tasks.php:
  *  - ผู้ใช้ปัจจุบันถ้าอยู่ใน driver_list หรือ helper_list และมีงานสถานะ "กำลังจัดส่ง" ค้างอยู่
@@ -29,9 +30,17 @@
  */
 
 import { FontAwesome5, Ionicons } from '@expo/vector-icons';
+import axios from 'axios';
 import { useRouter } from 'expo-router';
-import React, { useMemo, useState } from 'react';
-import { FlatList, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, FlatList, RefreshControl, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+
+import { useAuth } from '../_layout';
+// ✅ Config
+import { API_BASE } from '../../constants/config';
+
+// action ด้านล่างเป็นการเดาจาก pattern api_mobile.php (driver tasks) ตาม CLAUDE.md — ยังไม่ได้ยืนยันกับ backend จริง
+const API_URL = `${API_BASE}/api_mobile.php`;
 
 // ====================================================================
 // Types
@@ -60,18 +69,23 @@ export interface DriverTasksScreenProps {
 // Mock data
 // ====================================================================
 
-const CURRENT_USER = 'คุณสมพงษ์'; // จำลองผู้ใช้ที่ล็อกอินอยู่ (เป็นคนขับ)
-const DRIVER_LIST = ['คุณสมพงษ์', 'คุณวิชัย', 'คุณประเสริฐ'];
-const HELPER_LIST = ['คุณมานพ', 'คุณสมศักดิ์'];
+const DEFAULT_DRIVER_LIST: string[] = [];
+const DEFAULT_HELPER_LIST: string[] = [];
 
-const MOCK_TASKS: DeliveryTask[] = [
-  { id: 't1', deliveryNo: '69-70-1', deliveryDateShow: '12/09/2569 เวลา 09:30 น.', driverName: 'คุณสมพงษ์', helperName: 'คุณมานพ', receiverName: 'คุณอรทัย (หน้างาน)', totalItems: 5, totalQty: 12, isCompleted: false },
-  { id: 't2', deliveryNo: '69-73-1', deliveryDateShow: '13/09/2569 เวลา 08:00 น.', driverName: 'คุณสมพงษ์', helperName: 'คุณมานพ', receiverName: 'คุณกานดา', totalItems: 4, totalQty: 9, isCompleted: false },
-  { id: 't3', deliveryNo: '69-72-1', deliveryDateShow: '13/09/2569 เวลา 10:15 น.', driverName: 'คุณประเสริฐ', helperName: 'คุณมานพ', receiverName: 'คุณธนา', totalItems: 7, totalQty: 20, isCompleted: false },
-  { id: 't4', deliveryNo: '69-70-2', deliveryDateShow: '12/09/2569 เวลา 14:20 น.', driverName: 'คุณวิชัย', helperName: 'คุณสมศักดิ์', receiverName: 'คุณพิชญ์', totalItems: 3, totalQty: 8, isCompleted: true },
-  { id: 't5', deliveryNo: '69-65-1', deliveryDateShow: '10/09/2569 เวลา 11:00 น.', driverName: 'คุณสมพงษ์', receiverName: 'คุณวรรณา', totalItems: 2, totalQty: 4, isCompleted: true },
-  { id: 't6', deliveryNo: '69-68-1', deliveryDateShow: '08/09/2569 เวลา 13:45 น.', driverName: 'คุณวิชัย', receiverName: 'คุณอรทัย', totalItems: 1, totalQty: 1, isCompleted: true },
-];
+// แปลงข้อมูลดิบจาก backend ให้เข้ารูป DeliveryTask — รองรับหลายชื่อ field เพราะยังไม่มี spec ยืนยัน
+function mapTask(raw: any): DeliveryTask {
+  return {
+    id: String(raw.id ?? raw.delivery_id ?? raw.deliveryNo ?? raw.delivery_no),
+    deliveryNo: String(raw.deliveryNo ?? raw.delivery_no ?? ''),
+    deliveryDateShow: String(raw.deliveryDateShow ?? raw.delivery_date_show ?? raw.delivery_date ?? ''),
+    driverName: String(raw.driverName ?? raw.driver_name ?? ''),
+    helperName: raw.helperName ?? raw.helper_name ?? undefined,
+    receiverName: String(raw.receiverName ?? raw.receiver_name ?? ''),
+    totalItems: Number(raw.totalItems ?? raw.total_items ?? 0),
+    totalQty: Number(raw.totalQty ?? raw.total_qty ?? 0),
+    isCompleted: Boolean(raw.isCompleted ?? raw.is_completed ?? (Number(raw.pending_items ?? 0) === 0)),
+  };
+}
 
 // ====================================================================
 // Helpers
@@ -89,28 +103,66 @@ function senderLabel(task: DeliveryTask): string {
   return task.helperName ? `คนขับ: ${task.driverName} | คนรถ: ${task.helperName}` : `คนขับ: ${task.driverName}`;
 }
 
-// จำลองการเช็คว่าผู้ใช้ปัจจุบันมีงาน "กำลังจัดส่ง" ค้างอยู่หรือไม่ (has_pending_task)
-function currentUserHasPendingTask(): boolean {
-  return MOCK_TASKS.some((t) => !t.isCompleted && (t.driverName === CURRENT_USER || t.helperName === CURRENT_USER));
-}
-
 // ====================================================================
 // Main screen
 // ====================================================================
 
 export default function DriverTasksScreen({ onBack, onOpenConfirmItems }: DriverTasksScreenProps) {
   const router = useRouter();
-
-  // ค่าเริ่มต้นของตัวกรอง: ถ้าผู้ใช้ปัจจุบันมีงานค้างอยู่ ให้พรีเซ็ตเป็นชื่อตัวเอง เหมือนต้นฉบับ
-  const initialHasPending = currentUserHasPendingTask();
+  const { user } = useAuth();
+  const currentUserLabel = user?.fullname || user?.username || '';
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('pending');
-  const [driverFilter, setDriverFilter] = useState(initialHasPending && DRIVER_LIST.includes(CURRENT_USER) ? CURRENT_USER : '');
+  const [driverFilter, setDriverFilter] = useState('');
   const [helperFilter, setHelperFilter] = useState('');
   const [dateFilter, setDateFilter] = useState('');
 
+  const [tasks, setTasks] = useState<DeliveryTask[]>([]);
+  const [driverList, setDriverList] = useState<string[]>(DEFAULT_DRIVER_LIST);
+  const [helperList, setHelperList] = useState<string[]>(DEFAULT_HELPER_LIST);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const presetAppliedRef = useRef(false);
+
+  const loadData = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
+    setError(null);
+    try {
+      const res = await axios.get(API_URL, { params: { action: 'get_driver_tasks', username: user?.username } });
+      const data = res.data;
+      const rawTasks = Array.isArray(data) ? data : data?.tasks ?? data?.data ?? [];
+      const mapped: DeliveryTask[] = rawTasks.map(mapTask);
+      setTasks(mapped);
+      if (Array.isArray(data?.drivers) && data.drivers.length) setDriverList(data.drivers);
+      if (Array.isArray(data?.helpers) && data.helpers.length) setHelperList(data.helpers);
+
+      // ค่าเริ่มต้นของตัวกรอง: ถ้าผู้ใช้ปัจจุบันมีงานค้างอยู่ ให้พรีเซ็ตเป็นชื่อตัวเอง เหมือนต้นฉบับ (has_pending_task)
+      if (!presetAppliedRef.current) {
+        presetAppliedRef.current = true;
+        const hasPending = mapped.some((t) => !t.isCompleted && (t.driverName === currentUserLabel || t.helperName === currentUserLabel));
+        if (hasPending) setDriverFilter(currentUserLabel);
+      }
+    } catch (e) {
+      console.error('load get_driver_tasks failed', e);
+      setError('โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [user?.username, currentUserLabel]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  function onRefresh() {
+    setRefreshing(true);
+    loadData({ silent: true });
+  }
+
   const filtered = useMemo(() => {
-    return MOCK_TASKS.filter((t) => {
+    return tasks.filter((t) => {
       if (statusFilter === 'pending' && t.isCompleted) return false;
       if (statusFilter === 'completed' && !t.isCompleted) return false;
       if (driverFilter && t.driverName !== driverFilter) return false;
@@ -121,7 +173,7 @@ export default function DriverTasksScreen({ onBack, onOpenConfirmItems }: Driver
       }
       return true;
     });
-  }, [statusFilter, driverFilter, helperFilter, dateFilter]);
+  }, [tasks, statusFilter, driverFilter, helperFilter, dateFilter]);
 
   function resetFilters() {
     setStatusFilter('pending');
@@ -153,7 +205,7 @@ export default function DriverTasksScreen({ onBack, onOpenConfirmItems }: Driver
               <FontAwesome5 name="truck-moving" size={15} color="#fff" />
               <Text style={styles.title}>งานจัดส่งของฉัน</Text>
             </View>
-            <Text style={styles.subtitle}>รายการสินค้าที่กำลังนำส่งโดย: {CURRENT_USER}</Text>
+            <Text style={styles.subtitle}>รายการสินค้าที่กำลังนำส่งโดย: {currentUserLabel}</Text>
           </View>
         </View>
 
@@ -180,7 +232,7 @@ export default function DriverTasksScreen({ onBack, onOpenConfirmItems }: Driver
             <TouchableOpacity onPress={() => setDriverFilter('')} style={[styles.chip, driverFilter === '' && styles.chipActive]}>
               <Text style={[styles.chipText, driverFilter === '' && styles.chipTextActive]}>ทั้งหมด</Text>
             </TouchableOpacity>
-            {DRIVER_LIST.map((d) => (
+            {driverList.map((d) => (
               <TouchableOpacity key={d} onPress={() => setDriverFilter(d)} style={[styles.chip, driverFilter === d && styles.chipActive]}>
                 <Text style={[styles.chipText, driverFilter === d && styles.chipTextActive]}>{d}</Text>
               </TouchableOpacity>
@@ -192,7 +244,7 @@ export default function DriverTasksScreen({ onBack, onOpenConfirmItems }: Driver
             <TouchableOpacity onPress={() => setHelperFilter('')} style={[styles.chip, helperFilter === '' && styles.chipActive]}>
               <Text style={[styles.chipText, helperFilter === '' && styles.chipTextActive]}>ทั้งหมด</Text>
             </TouchableOpacity>
-            {HELPER_LIST.map((h) => (
+            {helperList.map((h) => (
               <TouchableOpacity key={h} onPress={() => setHelperFilter(h)} style={[styles.chip, helperFilter === h && styles.chipActive]}>
                 <Text style={[styles.chipText, helperFilter === h && styles.chipTextActive]}>{h}</Text>
               </TouchableOpacity>
@@ -256,6 +308,18 @@ export default function DriverTasksScreen({ onBack, onOpenConfirmItems }: Driver
     );
   }
 
+  if (loading && tasks.length === 0) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="light-content" />
+        <View style={styles.emptyBox}>
+          <ActivityIndicator size="large" color="#334155" />
+          <Text style={styles.emptyText}>กำลังโหลดข้อมูล...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="light-content" />
@@ -264,12 +328,23 @@ export default function DriverTasksScreen({ onBack, onOpenConfirmItems }: Driver
         keyExtractor={(t) => t.id}
         renderItem={renderCard}
         ListHeaderComponent={renderHeader}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#334155']} tintColor="#334155" />}
         ListEmptyComponent={
-          <View style={styles.emptyBox}>
-            <Ionicons name="cube-outline" size={30} color="#cbd5e1" />
-            <Text style={styles.emptyTitle}>ไม่มีงานจัดส่งในหมวดหมู่นี้</Text>
-            <Text style={styles.emptyText}>ลองเปลี่ยนตัวกรองดูนะครับ</Text>
-          </View>
+          error ? (
+            <View style={styles.emptyBox}>
+              <Ionicons name="alert-circle-outline" size={30} color="#ef4444" />
+              <Text style={styles.emptyText}>{error}</Text>
+              <TouchableOpacity style={styles.actionBtn} onPress={() => loadData()}>
+                <Text style={styles.actionBtnText}>ลองใหม่</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={styles.emptyBox}>
+              <Ionicons name="cube-outline" size={30} color="#cbd5e1" />
+              <Text style={styles.emptyTitle}>ไม่มีงานจัดส่งในหมวดหมู่นี้</Text>
+              <Text style={styles.emptyText}>ลองเปลี่ยนตัวกรองดูนะครับ</Text>
+            </View>
+          )
         }
         contentContainerStyle={{ paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}

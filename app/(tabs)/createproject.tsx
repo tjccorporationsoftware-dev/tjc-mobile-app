@@ -4,8 +4,9 @@
  * Mobile mockup ของหน้า create_project.php (สร้าง/แก้ไขโครงการ) — ฟอร์มสุดท้ายของชุด
  * tjc-mobile-app ที่เชื่อมจากปุ่ม "สร้างโครงการ" ในหน้า Dashboard หลัก
  *
- * สถานะไฟล์นี้: UI MOCKUP — ตัวเลือกทั้งหมด (บริษัท/ลูกค้า/ผู้ใช้/ทีม ฯลฯ) เป็นข้อมูลตัวอย่าง
- * ยังไม่ยิง POST action=save_project จริง (ดู TODO ท้ายไฟล์ handleSave)
+ * สถานะไฟล์นี้: ปุ่มบันทึกเชื่อม API จริงแล้ว (POST create_project.php action=save_project) —
+ * param names อ้างอิงจาก TODO เดิม ยังไม่ได้ยืนยันกับ backend จริง ส่วนตัวเลือกดรอปดาวน์
+ * (บริษัท/ลูกค้า/ผู้ใช้/ทีม ฯลฯ) ยังเป็นข้อมูลตัวอย่างในเครื่อง — ยังไม่มี action สำหรับโหลดลิสต์จริง
  *
  * ตรงกับโครงสร้าง/พฤติกรรมจริงจาก create_project.php:
  *  - หัวฟอร์ม: วันที่ลงข้อมูล (อ่านอย่างเดียว), เลขหน้างานอัตโนมัติ (ตัวอย่าง), toggle
@@ -34,9 +35,16 @@
  */
 
 import { Ionicons } from '@expo/vector-icons';
+import axios from 'axios';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { Alert, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+
+// ✅ Config
+import { API_BASE } from '../../constants/config';
+
+// action/param names อ้างอิงจากคอมเมนต์ TODO เดิมของไฟล์นี้ — ยังไม่ได้ยืนยันกับ backend จริง
+const API_URL = `${API_BASE}/create_project.php`;
 
 // ====================================================================
 // Types
@@ -266,6 +274,7 @@ export default function CreateProjectScreen({ onBack, onSaved }: CreateProjectSc
   const editId = params.edit_id;
 
   const [form, setForm] = useState<FormState>(initialForm());
+  const [saving, setSaving] = useState(false);
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -308,14 +317,7 @@ export default function CreateProjectScreen({ onBack, onSaved }: CreateProjectSc
     }));
   }
 
-  function handleSave() {
-    // TODO: ต่อ backend จริง -> POST create_project.php action=save_project (+ edit_id ถ้าแก้ไข)
-    // payload ครอบคลุมทุกฟิลด์ใน `form` ด้านบน ตรงชื่อกับ $_POST[...] ในต้นฉบับ (company_id,
-    // customer_id/new_customer_*, project_name, job_type_id, project_budget, sales_type/user/team,
-    // debt_user, guarantee_type + ฟิลด์เงื่อนไข, warranty_value/unit, delivery_days,
-    // has_technician + req_tech_team[]/tech_display[], is_pc_assembly, contract_no,
-    // purchase_order_no, start_date, contract_duration/unit, end_date, alert_contract_days,
-    // contract_file, bidding_type, bidding_date, quotation_no, quote_creator)
+  async function handleSave() {
     if (!form.isStockSite) {
       if (!form.companyId) return Alert.alert('กรอกข้อมูลไม่ครบ', 'กรุณาเลือกบริษัท');
       if (!form.isNewCustomer && !form.customerId) return Alert.alert('กรอกข้อมูลไม่ครบ', 'กรุณาเลือกลูกค้า หรือติ๊กเพิ่มลูกค้าใหม่');
@@ -326,9 +328,82 @@ export default function CreateProjectScreen({ onBack, onSaved }: CreateProjectSc
       if (form.isPcAssembly === null) return Alert.alert('กรอกข้อมูลไม่ครบ', 'กรุณาระบุว่ามีงานประกอบอุปกรณ์หรือไม่');
       if (form.biddingType === 'ยื่น' && !form.biddingDate.trim()) return Alert.alert('กรอกข้อมูลไม่ครบ', 'กรุณาระบุวันที่ยื่นซอง');
     }
-    Alert.alert('บันทึกสำเร็จ (mock)', editId ? 'แก้ไขข้อมูลโครงการเรียบร้อย!' : 'สร้างโครงการใหม่เรียบร้อย!', [
-      { text: 'ตกลง', onPress: () => (onSaved ? onSaved() : handleBack()) },
-    ]);
+
+    // payload ตรงกับ $_POST[...] ที่ TODO เดิมของไฟล์นี้ระบุไว้ — ยังไม่ได้ยืนยันกับ backend จริง
+    const fd = new FormData();
+    fd.append('action', 'save_project');
+    if (editId) fd.append('edit_id', String(editId));
+    fd.append('is_stock_site', form.isStockSite ? '1' : '0');
+    fd.append('company_id', form.companyId);
+    if (form.isNewCustomer) {
+      fd.append('new_customer_name', form.newCustomer.name);
+      fd.append('new_customer_affiliation', form.newCustomer.affiliation);
+      fd.append('new_customer_contact_person', form.newCustomer.contactPerson);
+      fd.append('new_customer_address', form.newCustomer.address);
+      fd.append('new_customer_province', form.newCustomer.province);
+      fd.append('new_customer_district', form.newCustomer.district);
+      fd.append('new_customer_sub_district', form.newCustomer.subDistrict);
+      fd.append('new_customer_zip_code', form.newCustomer.zipCode);
+      fd.append('new_customer_remark', form.newCustomer.remark);
+    } else {
+      fd.append('customer_id', form.customerId);
+    }
+    fd.append('project_name', form.projectName);
+    fd.append('job_type_id', form.jobTypeId);
+    fd.append('project_budget', form.projectBudget);
+    fd.append('sales_type', form.salesType);
+    fd.append('sales_user', form.salesUser);
+    fd.append('sales_team', form.salesTeam);
+    fd.append('debt_user', form.debtUser);
+    fd.append('guarantee_type', form.guaranteeType);
+    if (showGuaranteeFields) {
+      fd.append('guarantee_amount', form.guaranteeAmount);
+      fd.append('bank_name', form.bankName);
+      fd.append('bank_account', form.bankAccount);
+      fd.append('guarantee_no', form.guaranteeNo);
+      fd.append('guarantee_start_date', form.guaranteeStartDate);
+      fd.append('guarantee_end_date', form.guaranteeEndDate);
+      fd.append('warranty_value', form.warrantyValue);
+      fd.append('warranty_unit', form.warrantyUnit);
+    }
+    fd.append('delivery_days', form.deliveryDays);
+    fd.append('has_technician', form.hasTechnician ? '1' : '0');
+    if (form.hasTechnician) {
+      form.techTeams.forEach((t) => {
+        fd.append('req_tech_team[]', t.teamName);
+        fd.append('tech_display[]', t.technicians.filter((n) => n.trim()).join(', '));
+      });
+    }
+    fd.append('is_pc_assembly', form.isPcAssembly ? '1' : '0');
+    fd.append('contract_no', form.contractNo);
+    fd.append('purchase_order_no', form.purchaseOrderNo);
+    fd.append('start_date', form.startDate);
+    fd.append('contract_duration', form.contractDuration);
+    fd.append('contract_unit', form.contractUnit);
+    fd.append('end_date', computedEndDate);
+    fd.append('alert_contract_days', form.alertContractDays);
+    fd.append('bidding_type', form.biddingType);
+    fd.append('bidding_date', form.biddingDate);
+    fd.append('quotation_no', form.quotationNo);
+    fd.append('quote_creator', form.quoteCreator);
+    // หมายเหตุ: การแนบไฟล์สัญญา (contract_file) ยังเป็น stub — ต้องเพิ่ม expo-document-picker ก่อน
+
+    setSaving(true);
+    try {
+      const res = await axios.post(API_URL, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      if (res.data?.status === 'success' || res.data?.success) {
+        Alert.alert('บันทึกสำเร็จ', editId ? 'แก้ไขข้อมูลโครงการเรียบร้อย!' : 'สร้างโครงการใหม่เรียบร้อย!', [
+          { text: 'ตกลง', onPress: () => (onSaved ? onSaved() : handleBack()) },
+        ]);
+      } else {
+        Alert.alert('บันทึกไม่สำเร็จ', res.data?.message || 'กรุณาลองใหม่อีกครั้ง');
+      }
+    } catch (e) {
+      console.error('save_project failed', e);
+      Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถบันทึกข้อมูลได้ กรุณาลองใหม่อีกครั้ง');
+    } finally {
+      setSaving(false);
+    }
   }
 
   const today = new Date();
@@ -632,9 +707,9 @@ export default function CreateProjectScreen({ onBack, onSaved }: CreateProjectSc
               <Ionicons name="close" size={16} color="#475569" />
               <Text style={styles.cancelBtnText}>ยกเลิก</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
-              <Ionicons name="save-outline" size={17} color="#fff" />
-              <Text style={styles.saveBtnText}>บันทึกข้อมูลโครงการ</Text>
+            <TouchableOpacity style={[styles.saveBtn, saving && { opacity: 0.7 }]} onPress={handleSave} disabled={saving}>
+              {saving ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="save-outline" size={17} color="#fff" />}
+              <Text style={styles.saveBtnText}>{saving ? 'กำลังบันทึก...' : 'บันทึกข้อมูลโครงการ'}</Text>
             </TouchableOpacity>
           </View>
         </View>

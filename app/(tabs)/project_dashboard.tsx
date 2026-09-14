@@ -40,6 +40,9 @@ import { FontAwesome5, Ionicons, MaterialCommunityIcons } from '@expo/vector-ico
 import React, { useMemo, useState } from 'react';
 import { Alert, FlatList, Modal, ScrollView, StatusBar, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+
+// ✅ Config
+import { API_BASE } from '../../constants/config';
 // ปรับ path นี้ให้ตรงกับตำแหน่งไฟล์จริงในโปรเจกต์ ถ้าไม่ได้วางไว้โฟลเดอร์เดียวกัน
 import AccountingDashboard from './accounting_dashboard';
 import CheckIncompleteProjectsScreen from './Checkincompleteproject';
@@ -915,14 +918,10 @@ export default function ProjectDashboardScreen({ onNavigate }: ProjectDashboardS
   }
   if (activeScreen === 'accounting') {
     return (
-      <AccountingDashboard
-        onBackToMain={() => setActiveScreen('dashboard')}
-        // onViewCompanyBreakdown: ไม่ส่ง prop นี้ตั้งใจ — AccountingDashboard.tsx จัดการเอง
-        // ภายใน (toggle ส่วน "ดูข้อมูลบัญชีแยกตามบริษัท" ในหน้าเดียวกัน ไม่ใช่หน้าแยก)
-        onViewProject={(p) => Alert.alert('ดูข้อมูล', `จะเปิดรายละเอียดโครงการ "${p.projectName}" (หน้านี้ยังไม่ได้สร้าง)`)}
-        onFollowProject={(p) => Alert.alert('ติดตาม', `จะเปิดฟอร์มบันทึกการติดตามของงาน ${p.jobNo} (หน้านี้ยังไม่ได้สร้าง)`)}
-        onRecordProject={(p) => Alert.alert('ลงบัญชี', `จะเปิดฟอร์มลงบัญชีของงาน ${p.jobNo} (หน้านี้ยังไม่ได้สร้าง)`)}
-      />
+      <AccountingDashboard onBackToMain={() => setActiveScreen('dashboard')} />
+      // onViewCompanyBreakdown/onViewProject/onFollowProject/onRecordProject: ไม่ส่ง prop เหล่านี้ตั้งใจ —
+      // AccountingDashboard.tsx จัดการเอง (modal "ดูข้อมูล" ในตัว + สลับไป ProjectFollowupScreen/
+      // ProjectAccountingScreen ที่ import ไว้แล้ว ซึ่งตอนนี้เชื่อม API จริงแล้วทั้งคู่)
     );
   }
   if (activeScreen === 'incomplete') {

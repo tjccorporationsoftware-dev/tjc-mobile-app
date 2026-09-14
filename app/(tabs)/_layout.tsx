@@ -805,7 +805,7 @@ export default function DrawerLayout() {
       <Drawer.Screen name="checkcost" options={{ drawerItemStyle: { display: "none" } }} />
       <Drawer.Screen name="Guaranteetracking" options={{ drawerItemStyle: { display: "none" } }} />
       <Drawer.Screen name="Guaranteeupdate" options={{ drawerItemStyle: { display: "none" } }} />
-      <Drawer.Screen name="Checkincompleteprojects" options={{ drawerItemStyle: { display: "none" } }} />
+      <Drawer.Screen name="Checkincompleteproject" options={{ drawerItemStyle: { display: "none" } }} />
       <Drawer.Screen name="createproject" options={{ drawerItemStyle: { display: "none" } }} />
       {/* 9. หมวดบัญชี-การเงิน (โครงการ) */}
       <Drawer.Screen
@@ -830,10 +830,6 @@ export default function DrawerLayout() {
       <Drawer.Screen name="submitdocument" options={{ drawerItemStyle: { display: "none" } }} />
 
       {/* หน้าที่ซ่อน */}
-      <Drawer.Screen
-        name="index"
-        options={{ drawerItemStyle: { display: "none" }, headerShown: false }}
-      />
       <Drawer.Screen
         name="AdminDashboard"
         options={{ drawerItemStyle: { display: "none" } }}

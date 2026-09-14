@@ -11,7 +11,7 @@
 //
 // ═══════════════════════════════════════════════════════════════
 
-const USE_PRODUCTION = false; // true = เซิร์ฟเวอร์จริง, false = เครื่อง dev ในออฟฟิศ
+const USE_PRODUCTION = true; // true = เซิร์ฟเวอร์จริง, false = เครื่อง dev ในออฟฟิศ
 
 /** เซิร์ฟเวอร์จริง — ไฟล์อยู่ที่ root ของโดเมน ไม่มีโฟลเดอร์คั่น */
 const PROD_HOST = "https://tjcgroup.tjc.co.th";

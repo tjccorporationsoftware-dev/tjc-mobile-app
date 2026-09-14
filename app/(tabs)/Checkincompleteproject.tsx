@@ -4,8 +4,8 @@
  * Mobile mockup ของหน้า check_incomplete_projects.php (ตรวจสอบข้อมูลตกหล่น)
  * สำหรับแอป tjc-mobile-app (Expo / React Native)
  *
- * สถานะไฟล์นี้: UI MOCKUP — ข้อมูลทั้งหมดเป็น MOCK_PROJECTS ด้านล่าง (คำนวณ missing/severity
- * ไว้ล่วงหน้าแทนการรันเงื่อนไข SQL 20 กว่าเงื่อนไขจริง เพราะเป็นข้อมูลจากฐานข้อมูลอื่น)
+ * สถานะไฟล์นี้: เชื่อม API จริงแล้ว (GET action=get_incomplete_projects) — action/param name เป็นการเดา
+ * ยังไม่ได้ยืนยันกับ backend จริง (คำนวณ missing/severity ฝั่ง client จาก field ที่ backend ส่งมา)
  *
  * ตรงกับพฤติกรรม/สูตรจริงจาก check_incomplete_projects.php:
  *  - 4 การ์ดสรุป: โครงการไม่ครบ / ระดับวิกฤต (ขาด≥5) / ระดับปานกลาง (ขาด 3-4) / จุดรวมที่ต้องกรอก
@@ -23,9 +23,17 @@
  */
 
 import { Ionicons } from '@expo/vector-icons';
+import axios from 'axios';
 import { useRouter } from 'expo-router';
-import React, { useMemo, useState } from 'react';
-import { FlatList, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, FlatList, RefreshControl, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+
+// ✅ Config
+import { API_BASE } from '../../constants/config';
+
+// action ด้านล่างเป็นการเดาจากชื่อไฟล์ check_incomplete_projects.php — ยังไม่ได้ยืนยันกับ backend จริง
+// ปรับ action/param ให้ตรงถ้าไม่ตรง
+const API_URL = `${API_BASE}/check_incomplete_projects.php`;
 
 // ====================================================================
 // Types
@@ -88,83 +96,26 @@ const SORT_OPTIONS: { key: SortKey; label: string }[] = [
   { key: 'code_desc', label: 'รหัสใหม่สุดขึ้นก่อน' },
 ];
 
-const MOCK_PROJECTS: IncompleteProject[] = [
-  {
-    id: 1,
-    code: 'TJC69-014',
-    display: '014',
-    name: 'ติดตั้งระบบกล้องวงจรปิดอาคาร A',
-    customer: 'เทศบาลนครสมมติ',
-    company: 'ทีเจซี',
-    total: 6,
+// แปลงข้อมูลดิบจาก backend ให้เข้ารูป IncompleteProject — รองรับหลายชื่อ field เพราะยังไม่มี spec ยืนยัน
+function mapProject(raw: any): IncompleteProject {
+  const code = String(raw.code ?? raw.project_code ?? '');
+  const missingRaw = raw.missing ?? {};
+  return {
+    id: Number(raw.id ?? raw.project_id ?? 0),
+    code,
+    display: String(raw.display ?? code.split('-')[1] ?? raw.id ?? ''),
+    name: String(raw.name ?? raw.project_name ?? ''),
+    customer: String(raw.customer ?? raw.customer_name ?? ''),
+    company: String(raw.company ?? raw.company_name ?? ''),
+    total: Number(raw.total ?? raw.missing_total ?? 0),
     missing: {
-      main: ['ยอดงบประมาณ'],
-      contract: ['เลขที่สัญญา', 'เลขที่ใบสั่งซื้อ', 'ไฟล์สัญญา (PDF)'],
-      guarantee: ['ธนาคารผู้ออกหนังสือ', 'เลขที่หนังสือค้ำ'],
-      bidding: [],
+      main: missingRaw.main ?? raw.missing_main ?? [],
+      contract: missingRaw.contract ?? raw.missing_contract ?? [],
+      guarantee: missingRaw.guarantee ?? raw.missing_guarantee ?? [],
+      bidding: missingRaw.bidding ?? raw.missing_bidding ?? [],
     },
-  },
-  {
-    id: 2,
-    code: 'ABC69-002',
-    display: '002',
-    name: 'จัดหาและติดตั้งเครื่องปรับอากาศห้องเซิร์ฟเวอร์',
-    customer: 'โรงพยาบาลสมมติ',
-    company: 'เอบีซี',
-    total: 3,
-    missing: {
-      main: [],
-      contract: ['วันที่สิ้นสุดสัญญา'],
-      guarantee: [],
-      bidding: ['เลขที่ใบเสนอราคา', 'ผู้เปิดใบเสนอราคา'],
-    },
-  },
-  {
-    id: 3,
-    code: 'XYZ69-021',
-    display: '021',
-    name: 'ติดตั้งลิฟต์โดยสารอาคารสำนักงาน',
-    customer: 'เทศบาลนครสมมติ',
-    company: 'เอ็กซ์วายแซด',
-    total: 8,
-    missing: {
-      main: ['บริษัท', 'ประเภทงาน', 'ผู้รับผิดชอบ (บุคคล)'],
-      contract: ['เลขที่สัญญา', 'วันที่เริ่มสัญญา'],
-      guarantee: ['ยอดเงินค้ำประกัน', 'วันเริ่มค้ำประกัน'],
-      bidding: ['เลขที่ใบเสนอราคา'],
-    },
-  },
-  {
-    id: 4,
-    code: 'ABC69-003',
-    display: '003',
-    name: 'บำรุงรักษาระบบโครงข่ายไฟเบอร์ออปติก',
-    customer: 'โรงพยาบาลสมมติ',
-    company: 'เอบีซี',
-    total: 2,
-    missing: {
-      main: [],
-      contract: ['เลขที่ใบสั่งซื้อ'],
-      guarantee: [],
-      bidding: ['ผู้เปิดใบเสนอราคา'],
-    },
-  },
-  {
-    id: 5,
-    code: 'TJC69-030',
-    display: '030',
-    name: 'ติดตั้งระบบโซลาร์เซลล์บนหลังคา',
-    customer: 'บริษัท สมมติ จำกัด',
-    company: 'ทีเจซี',
-    total: 5,
-    missing: {
-      main: ['ชื่อลูกค้า', 'ยอดงบประมาณ'],
-      contract: ['ไฟล์สัญญา (PDF)'],
-      guarantee: [],
-      bidding: ['วันที่ยื่นซอง', 'เลขที่ใบเสนอราคา'],
-    },
-  },
-];
+  };
+}
 
 // ====================================================================
 // Helpers
@@ -199,16 +150,47 @@ export default function CheckIncompleteProjectsScreen({ onBack }: CheckIncomplet
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [allExpanded, setAllExpanded] = useState(false);
 
+  const [projects, setProjects] = useState<IncompleteProject[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadData = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
+    setError(null);
+    try {
+      const res = await axios.get(API_URL, { params: { action: 'get_incomplete_projects', year: selectedYear } });
+      const raw = res.data;
+      const list = Array.isArray(raw) ? raw : raw?.data ?? [];
+      setProjects(list.map(mapProject));
+    } catch (e) {
+      console.error('load check_incomplete_projects failed', e);
+      setError('โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [selectedYear]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  function onRefresh() {
+    setRefreshing(true);
+    loadData({ silent: true });
+  }
+
   const stats = useMemo(() => {
-    const total = MOCK_PROJECTS.length;
-    const high = MOCK_PROJECTS.filter((p) => p.total >= 5).length;
-    const mid = MOCK_PROJECTS.filter((p) => p.total >= 3 && p.total < 5).length;
-    const pts = MOCK_PROJECTS.reduce((sum, p) => sum + p.total, 0);
+    const total = projects.length;
+    const high = projects.filter((p) => p.total >= 5).length;
+    const mid = projects.filter((p) => p.total >= 3 && p.total < 5).length;
+    const pts = projects.reduce((sum, p) => sum + p.total, 0);
     return { total, high, mid, pts };
-  }, []);
+  }, [projects]);
 
   const filtered = useMemo(() => {
-    let data = [...MOCK_PROJECTS];
+    let data = [...projects];
     const q = search.trim().toLowerCase();
     if (q) {
       data = data.filter((p) => p.name.toLowerCase().includes(q) || p.customer.toLowerCase().includes(q) || p.code.toLowerCase().includes(q) || p.display.toLowerCase().includes(q));
@@ -218,7 +200,7 @@ export default function CheckIncompleteProjectsScreen({ onBack }: CheckIncomplet
     else if (sort === 'miss_asc') data.sort((a, b) => a.total - b.total);
     else data.sort((a, b) => b.id - a.id);
     return data;
-  }, [search, filter, sort]);
+  }, [projects, search, filter, sort]);
 
   function toggleCard(id: number) {
     setExpandedIds((prev) => {
@@ -318,7 +300,7 @@ export default function CheckIncompleteProjectsScreen({ onBack }: CheckIncomplet
 
             <View style={styles.resultsMeta}>
               <Text style={styles.resultCount}>
-                แสดง {filtered.length} จาก {MOCK_PROJECTS.length} โครงการ
+                แสดง {filtered.length} จาก {projects.length} โครงการ
               </Text>
               <TouchableOpacity style={styles.expandAllBtn} onPress={toggleExpandAll}>
                 <Ionicons name={allExpanded ? 'contract-outline' : 'expand-outline'} size={13} color="#475569" />
@@ -415,6 +397,18 @@ export default function CheckIncompleteProjectsScreen({ onBack }: CheckIncomplet
     );
   }
 
+  if (loading && projects.length === 0) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="dark-content" />
+        <View style={styles.emptyBox}>
+          <ActivityIndicator size="large" color="#dc2626" />
+          <Text style={styles.emptyText}>กำลังโหลดข้อมูล...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" />
@@ -423,8 +417,17 @@ export default function CheckIncompleteProjectsScreen({ onBack }: CheckIncomplet
         keyExtractor={(p) => String(p.id)}
         renderItem={renderCard}
         ListHeaderComponent={renderHeader}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#dc2626']} tintColor="#dc2626" />}
         ListEmptyComponent={
-          stats.total > 0 ? (
+          error ? (
+            <View style={styles.emptyBox}>
+              <Ionicons name="alert-circle-outline" size={30} color="#ef4444" />
+              <Text style={styles.emptyText}>{error}</Text>
+              <TouchableOpacity style={styles.editBtn} onPress={() => loadData()}>
+                <Text style={styles.editBtnText}>ลองใหม่</Text>
+              </TouchableOpacity>
+            </View>
+          ) : stats.total > 0 ? (
             <View style={styles.emptyBox}>
               <Ionicons name="search-outline" size={26} color="#cbd5e1" />
               <Text style={styles.emptyText}>ไม่พบโครงการที่ตรงกับเงื่อนไข</Text>

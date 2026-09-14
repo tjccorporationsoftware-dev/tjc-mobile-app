@@ -34,6 +34,9 @@ import { useMemo, useState } from 'react';
 import { Alert, Modal, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+// ✅ Config
+import { API_BASE } from '../../constants/config';
+
 // ====================================================================
 // Types
 // ====================================================================

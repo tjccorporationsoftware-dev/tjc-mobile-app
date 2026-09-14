@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import axios from 'axios';
 // ปรับ path เหล่านี้ให้ตรงกับตำแหน่งไฟล์จริงในโปรเจกต์ ถ้าไม่ได้วางไว้โฟลเดอร์เดียวกัน
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -15,6 +16,8 @@ import {
   View,
 } from 'react-native';
 
+// ✅ Config
+import { API_BASE } from '../../constants/config';
 
 import ProjectAccountingScreen from './projectaccounting';
 import ProjectFollowupScreen from './projectfollowup';
@@ -25,13 +28,14 @@ import ProjectFollowupScreen from './projectfollowup';
  * ตารางแนวนอนของเดสก์ท็อปถูกแปลงเป็นการ์ดรายโครงการ แต่คงคอลัมน์ ปุ่ม และสถานะทั้งหมดไว้
  */
 
-const API_BASE_URL = (process.env.EXPO_PUBLIC_TJC_API_URL ?? 'https://api.example.com').replace(/\/$/, '');
-const API_TOKEN = process.env.EXPO_PUBLIC_TJC_API_TOKEN;
-
-const API_ROUTES = {
-  dashboard: '/api/accounting/receivable-dashboard',
-  markPaid: '/api/accounting/receivable-projects/mark-paid',
-  exportFiltered: '/api/accounting/receivable-projects/export',
+// action names เป็นการเดาตาม pattern single-file action-router ของโปรเจกต์นี้ (accounting_dashboard.php
+// ?action=xxx) — แทนที่ REST endpoint สมมติเดิม (/api/accounting/...) ที่ไม่ตรงกับ backend จริง
+// ยังไม่ได้ยืนยันกับ backend จริง
+const ACCOUNTING_API_URL = `${API_BASE}/accounting_dashboard.php`;
+const API_ACTIONS = {
+  dashboard: 'dashboard',
+  markPaid: 'mark_paid',
+  exportFiltered: 'export',
 } as const;
 
 type FollowState = 'not_started' | 'following' | 'closed';
@@ -115,7 +119,6 @@ type CompanyBreakdown = {
 };
 
 type Props = {
-  apiBaseUrl?: string;
   onBackToMain?: () => void;
   onViewCompanyBreakdown?: () => void;
   onViewProject?: (project: Project) => void;
@@ -233,26 +236,27 @@ const sample: DashboardData = {
   ],
 };
 
-async function getJson<T>(path: string, baseUrl: string): Promise<T> {
-  const response = await fetch(`${baseUrl}${path}`, {
-    headers: { Accept: 'application/json', ...(API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {}) },
-  });
-  if (!response.ok) throw new Error(`API ${response.status}`);
-  return response.json() as Promise<T>;
+// GET ?action=... ตามธรรมเนียม axios.get ของโปรเจกต์นี้
+async function getAction<T>(action: string): Promise<T> {
+  const res = await axios.get(ACCOUNTING_API_URL, { params: { action } });
+  return res.data as T;
 }
 
-async function postJson<T>(path: string, baseUrl: string, body: unknown): Promise<T> {
-  const response = await fetch(`${baseUrl}${path}`, {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      ...(API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {}),
-    },
-    body: JSON.stringify(body),
+// POST FormData (multipart) ตามธรรมเนียมของโปรเจกต์นี้ — ค่าที่เป็น array ส่งแบบ key[]
+async function postAction<T>(action: string, body: Record<string, unknown>): Promise<T> {
+  const fd = new FormData();
+  fd.append('action', action);
+  Object.entries(body).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      value.forEach((item) => fd.append(`${key}[]`, String(item)));
+    } else if (value != null) {
+      fd.append(key, String(value));
+    }
   });
-  if (!response.ok) throw new Error(`API ${response.status}`);
-  return response.json() as Promise<T>;
+  const res = await axios.post(ACCOUNTING_API_URL, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+  const success = (res.data as any)?.status === 'success' || (res.data as any)?.success;
+  if (!success) throw new Error((res.data as any)?.message || `action ${action} failed`);
+  return res.data as T;
 }
 
 function normalize(payload: any): DashboardData {
@@ -476,7 +480,6 @@ const STATUS_FILTERS = ['ทุกสถานะ', 'ยังไม่เคย
 type StatusFilter = (typeof STATUS_FILTERS)[number];
 
 export default function AccountingDashboard({
-  apiBaseUrl = API_BASE_URL,
   onBackToMain,
   onViewCompanyBreakdown,
   onViewProject,
@@ -518,14 +521,15 @@ export default function AccountingDashboard({
     refresh ? setRefreshing(true) : setLoading(true);
     setOffline(false);
     try {
-      const payload = await getJson<DashboardData>(API_ROUTES.dashboard, apiBaseUrl);
+      const payload = await getAction<DashboardData>(API_ACTIONS.dashboard);
       setData(normalize(payload));
-    } catch {
+    } catch (e) {
+      console.error('load accounting_dashboard failed', e);
       setOffline(true);
     } finally {
       refresh ? setRefreshing(false) : setLoading(false);
     }
-  }, [apiBaseUrl]);
+  }, []);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -554,7 +558,7 @@ export default function AccountingDashboard({
 
   const handleExport = async () => {
     try {
-      await postJson(API_ROUTES.exportFiltered, apiBaseUrl, {
+      await postAction(API_ACTIONS.exportFiltered, {
         search,
         statusFilter,
         followFrom,
@@ -564,7 +568,8 @@ export default function AccountingDashboard({
         jobNumbers: projects.map((item) => item.jobNo),
       });
       setToast(`ส่งออก ${projects.length} รายการเรียบร้อย`);
-    } catch {
+    } catch (e) {
+      console.error('export accounting_dashboard failed', e);
       setToast('ส่งออกไม่สำเร็จ ลองอีกครั้ง');
     }
   };
@@ -572,10 +577,11 @@ export default function AccountingDashboard({
   const handleMarkPaid = async () => {
     const ids = data.projects.filter((item) => item.payState === 'paid').map((item) => item.id);
     try {
-      await postJson(API_ROUTES.markPaid, apiBaseUrl, { projectIds: ids });
+      await postAction(API_ACTIONS.markPaid, { projectIds: ids });
       setToast(`บันทึกชำระเรียบร้อย ${ids.length} รายการ`);
       void load(true);
-    } catch {
+    } catch (e) {
+      console.error('mark_paid accounting_dashboard failed', e);
       setToast('บันทึกไม่สำเร็จ ลองอีกครั้ง');
     }
   };
@@ -1224,10 +1230,12 @@ const styles = StyleSheet.create({
   modalCloseBtnText: { color: '#5a6b7e', fontWeight: '800', fontSize: 13.5 },
 });
 
-/* API ที่หน้านี้เรียก
- * GET  /api/accounting/receivable-dashboard          -> { data: { summary, projects, asOfDate, fiscalYear, paidReadyCount } }
- * POST /api/accounting/receivable-projects/export    -> ปุ่ม Export ตามตัวกรอง
- * POST /api/accounting/receivable-projects/mark-paid -> ปุ่ม ชำระเรียบร้อย
- * ตั้งค่า EXPO_PUBLIC_TJC_API_URL และ EXPO_PUBLIC_TJC_API_TOKEN ใน .env
+/* API ที่หน้านี้เรียก (ผ่าน constants/config.ts API_BASE — ดู ACCOUNTING_API_URL/API_ACTIONS ด้านบน)
+ * action ทั้งหมดเป็นการเดาตาม pattern ?action=xxx ของโปรเจกต์นี้ ยังไม่ได้ยืนยันกับ backend จริง:
+ * GET  accounting_dashboard.php?action=dashboard  -> { data: { summary, projects, asOfDate, fiscalYear, paidReadyCount, companies } }
+ * POST accounting_dashboard.php action=export     -> ปุ่ม Export ตามตัวกรอง
+ * POST accounting_dashboard.php action=mark_paid  -> ปุ่ม ชำระเรียบร้อย
  * ปุ่มรายรายการ (ดูข้อมูล / ติดตาม / ลงบัญชี) ส่งออกทาง props: onViewProject, onFollowProject, onRecordProject
+ * — ถ้าไม่ส่ง prop เหล่านี้ หน้านี้จะเปิด modal ดูข้อมูลในตัว และสลับไป ProjectFollowupScreen/
+ * ProjectAccountingScreen ที่ import ไว้ด้านบนเอง
  */

@@ -6,8 +6,8 @@
  *   router.push({ pathname: '/ProjectFollowup', params: { id } })
  * จึงอ่าน id ผ่าน useLocalSearchParams() ตรงๆ เหมือนไฟล์อื่นในชุดนี้
  *
- * สถานะไฟล์นี้: UI MOCKUP — ข้อมูลอ้างอิงจาก MOCK_PROJECTS/MOCK_FOLLOWUPS ด้านล่าง
- * ยังไม่ยิง POST ajax_save จริง (ดู TODO ใน handleSave)
+ * สถานะไฟล์นี้: เชื่อม API จริงแล้ว (GET โหลดข้อมูลโครงการ+ประวัติติดตาม, POST ajax_save บันทึก)
+ * ผ่าน project_followup.php — action/param names เป็นการเดาตาม TODO เดิม ยังไม่ได้ยืนยันกับ backend จริง
  *
  * ตรงกับพฤติกรรมจริงจาก project_followup.php:
  *  - หน้านี้บันทึก "เฉพาะสถานะกลุ่มติดตาม" เท่านั้น (ไม่ใช่สถานะจ่ายเงิน — อันนั้นอยู่หน้า
@@ -28,9 +28,17 @@
  */
 
 import { Ionicons } from '@expo/vector-icons';
+import axios from 'axios';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useMemo, useState } from 'react';
-import { Alert, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+
+// ✅ Config
+import { API_BASE } from '../../constants/config';
+
+// endpoint นี้ไม่มี action param ตาม TODO เดิมของไฟล์นี้ (?id=projectId, ajax_save=1 ตอนบันทึก)
+// ส่วนฝั่งโหลดข้อมูล (project info + ประวัติการติดตามที่มีอยู่แล้ว) เป็นการเดา — ยังไม่ได้ยืนยันกับ backend จริงทั้งคู่
+const API_URL = `${API_BASE}/project_followup.php`;
 
 // ====================================================================
 // Types
@@ -73,29 +81,35 @@ const CURRENT_USER = 'คุณธนา';
 const CALL_STATUSES = ['กำลังติดตาม', 'นัดโทรกลับ', 'ติดต่อไม่ได้', 'รอเอกสารจากลูกค้า', 'ปิดติดตามแล้ว'];
 const BANK_LIST = ['ธนาคารกรุงไทย', 'ธนาคารกสิกรไทย', 'ธนาคารไทยพาณิชย์', 'ธนาคารกรุงเทพ'];
 
-const MOCK_PROJECTS: Record<string, ProjectInfo> = {
-  '548': { jobNo: '548', company: 'ASCENT', projectName: 'จัดซื้อครุภัณฑ์สำนักงาน บริษัท เจริญกิจ...', customer: 'ไม่ระบุ', budget: 64000, paid: 0 },
-  '547': {
-    jobNo: '547', company: 'A.R.T', projectName: 'วางระบบเครือข่ายคอมพิวเตอร์ บริษัท เจริญกิจเจริญทรัพย์...', customer: 'บริษัท เจริญกิจเจริญทรัพย์ จำกัด',
-    budget: 225600, paid: 0, contact: 'คุณสมหญิง ใจงาม โทร: 08x-xxx-1234', address: '99 ถ.สมมติ ต.ในเมือง อ.เมือง จ.สมมติ 30000',
-  },
-  '546': { jobNo: '546', company: 'A.R.T', projectName: 'ติดตั้งระบบโซล่าเซลล์ บริษัท เจริญกิจเจริญทรัพย์...', customer: 'บริษัท เจริญกิจเจริญทรัพย์ จำกัด', budget: 64000, paid: 64000 },
-  '545': {
-    jobNo: '545', company: 'TJC', projectName: 'ปรับปรุงระบบไฟฟ้าภายในอาคาร บริษัท สมมติ...', customer: 'บริษัท สมมติ จำกัด',
-    budget: 448900, paid: 0, contact: 'คุณอรทัย ใจดี โทร: 08x-xxx-9012', address: '77 ถ.พาณิชย์ ต.ในเมือง อ.เมือง จ.สมมติ 30000',
-  },
-  '544': { jobNo: '544', company: 'A.R.T', projectName: 'ติดตั้งระบบกล้องวงจรปิด บริษัท เจริญกิจเจริญทรัพย์...', customer: 'บริษัท เจริญกิจเจริญทรัพย์ จำกัด', budget: 32000, paid: 32000 },
-};
+const EMPTY_PROJECT: ProjectInfo = { jobNo: '', company: '', projectName: '', customer: '', budget: 0, paid: 0 };
 
-const MOCK_FOLLOWUPS: Record<string, FollowupEntry[]> = {
-  '547': [
-    { id: 'fu_1', isNew: false, name: 'ครั้งที่ 1', status: 'กำลังติดตาม', bankName: '', remark: 'โทรทวงครั้งแรก ลูกค้าแจ้งว่ากำลังเบิกงบ', owner: 'คุณสมชาย', createdAtShow: '01/07/2026 10:15' },
-    { id: 'fu_2', isNew: false, name: 'ครั้งที่ 2', status: 'นัดโทรกลับ', bankName: '', remark: 'นัดโทรกลับสัปดาห์หน้า', owner: 'คุณสมชาย', createdAtShow: '08/07/2026 14:30', editedBy: 'คุณกานดา' },
-  ],
-  '545': [{ id: 'fu_3', isNew: false, name: 'ครั้งที่ 1', status: 'รอเอกสารจากลูกค้า', bankName: '', remark: '12/6/69 แบ่งจ่ายเป็นงวด 2 งวด งวดละ 224,450 บาท', owner: 'คุณวิชัย', createdAtShow: '25/06/2026 15:54' }],
-  '546': [{ id: 'fu_4', isNew: false, name: 'ครั้งที่ 1', status: 'ปิดติดตามแล้ว', bankName: 'ธนาคารไทยพาณิชย์', remark: 'เก็บเงินครบแล้ว', owner: 'คุณอรทัย', createdAtShow: '23/06/2026 08:31' }],
-  '544': [{ id: 'fu_5', isNew: false, name: 'ครั้งที่ 1', status: 'ปิดติดตามแล้ว', bankName: 'ธนาคารกรุงไทย', remark: 'รับเช็ค 21/05/2569', owner: 'คุณอรทัย', createdAtShow: '11/07/2026 14:20' }],
-};
+// แปลงข้อมูลดิบจาก backend ให้เข้ารูป ProjectInfo/FollowupEntry — รองรับหลายชื่อ field เพราะยังไม่มี spec ยืนยัน
+function mapProjectInfo(raw: any): ProjectInfo {
+  return {
+    jobNo: String(raw.jobNo ?? raw.job_no ?? ''),
+    company: String(raw.company ?? raw.company_name ?? ''),
+    projectName: String(raw.projectName ?? raw.project_name ?? ''),
+    customer: String(raw.customer ?? raw.customer_name ?? ''),
+    budget: Number(raw.budget ?? raw.project_budget ?? 0),
+    paid: Number(raw.paid ?? raw.paid_gross ?? 0),
+    contact: raw.contact ?? undefined,
+    address: raw.address ?? undefined,
+  };
+}
+
+function mapFollowupEntry(raw: any): FollowupEntry {
+  return {
+    id: String(raw.id ?? raw.fu_id ?? uid()),
+    isNew: false,
+    name: String(raw.name ?? raw.followup_name ?? ''),
+    status: String(raw.status ?? raw.call_status ?? CALL_STATUSES[0]),
+    bankName: String(raw.bankName ?? raw.bank_name ?? ''),
+    remark: String(raw.remark ?? ''),
+    owner: String(raw.owner ?? raw.owner_name ?? CURRENT_USER),
+    createdAtShow: raw.createdAtShow ?? raw.created_at_show ?? undefined,
+    editedBy: raw.editedBy ?? raw.edited_by ?? undefined,
+  };
+}
 
 let uidCounter = 1;
 function uid(): string {
@@ -120,12 +134,38 @@ export default function ProjectFollowupScreen({ id, onBack, onSaved }: ProjectFo
   const params = useLocalSearchParams<{ id?: string }>();
   const projectId = id ?? params.id ?? '547';
 
-  const project = useMemo(() => MOCK_PROJECTS[projectId] ?? MOCK_PROJECTS['547'], [projectId]);
+  const [project, setProject] = useState<ProjectInfo>(EMPTY_PROJECT);
+  const [entries, setEntries] = useState<FollowupEntry[]>([mkEntry()]);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
   const outstanding = Math.max(project.budget - project.paid, 0);
 
-  const initialEntries = MOCK_FOLLOWUPS[projectId] ?? [];
-  const [entries, setEntries] = useState<FollowupEntry[]>(initialEntries.length > 0 ? initialEntries : [mkEntry()]);
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set(entries.filter((e) => e.isNew).map((e) => e.id)));
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const res = await axios.get(API_URL, { params: { id: projectId } });
+      const d = res.data?.data ?? res.data;
+      const proj = mapProjectInfo(d?.project ?? d ?? {});
+      const rawEntries = Array.isArray(d?.followups ?? d?.entries) ? d.followups ?? d.entries : [];
+      const mapped: FollowupEntry[] = rawEntries.length > 0 ? rawEntries.map(mapFollowupEntry) : [mkEntry()];
+      setProject(proj);
+      setEntries(mapped);
+      setExpandedIds(new Set(mapped.filter((e) => e.isNew).map((e) => e.id)));
+    } catch (e) {
+      console.error('load project_followup failed', e);
+      setLoadError('โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   function handleBack() {
     if (onBack) return onBack();
@@ -164,18 +204,67 @@ export default function ProjectFollowupScreen({ id, onBack, onSaved }: ProjectFo
     setEntries((prev) => prev.map((e) => (e.id === id ? { ...e, [field]: value } : e)));
   }
 
-  function handleSave() {
-    // TODO: ต่อ backend จริง -> POST project_followup.php?id=projectId, ajax_save=1
-    // ส่ง fu_id[]/followup_name[]/call_status[]/bank_name[]/remark[] ตรงตามชื่อ field ต้นฉบับ
-    // (ของจริงส่งเป็น payload_json ก้อนเดียวกันตัวแปรทะลุ max_input_vars ถ้ามีหลายสิบงวด)
+  async function handleSave() {
     const invalid = entries.some((e) => !e.name.trim());
     if (invalid) {
       Alert.alert('กรอกข้อมูลไม่ครบ', 'กรุณาระบุ "ชื่อครั้ง" ให้ครบทุกรายการก่อนบันทึก');
       return;
     }
-    Alert.alert('บันทึกสำเร็จ (mock)', `บันทึกการติดตาม ${entries.length} รายการเรียบร้อยแล้ว!`, [
-      { text: 'ตกลง', onPress: () => (onSaved ? onSaved() : handleBack()) },
-    ]);
+
+    // payload ตรงกับ TODO เดิมของไฟล์นี้ — ชื่อ field แบบ array ต่อครั้ง เรียงตามลำดับ entries
+    const fd = new FormData();
+    fd.append('ajax_save', '1');
+    entries.forEach((e) => {
+      fd.append('fu_id[]', e.isNew ? '' : e.id);
+      fd.append('followup_name[]', e.name);
+      fd.append('call_status[]', e.status);
+      fd.append('bank_name[]', e.bankName);
+      fd.append('remark[]', e.remark);
+    });
+
+    setSaving(true);
+    try {
+      const res = await axios.post(`${API_URL}?id=${encodeURIComponent(projectId)}`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      if (res.data?.status === 'success' || res.data?.success) {
+        Alert.alert('บันทึกสำเร็จ', `บันทึกการติดตาม ${entries.length} รายการเรียบร้อยแล้ว!`, [
+          { text: 'ตกลง', onPress: () => (onSaved ? onSaved() : handleBack()) },
+        ]);
+      } else {
+        Alert.alert('บันทึกไม่สำเร็จ', res.data?.message || 'กรุณาลองใหม่อีกครั้ง');
+      }
+    } catch (e) {
+      console.error('save project_followup failed', e);
+      Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถบันทึกข้อมูลได้ กรุณาลองใหม่อีกครั้ง');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="light-content" />
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+          <ActivityIndicator size="large" color="#d97706" />
+          <Text style={{ color: '#94a3b8', fontSize: 12.5 }}>กำลังโหลดข้อมูล...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="light-content" />
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 20 }}>
+          <Ionicons name="alert-circle-outline" size={28} color="#ef4444" />
+          <Text style={{ color: '#64748b', fontSize: 13, textAlign: 'center' }}>{loadError}</Text>
+          <TouchableOpacity style={styles.addBtn} onPress={loadData}>
+            <Text style={styles.addBtnText}>ลองใหม่</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
   }
 
   return (
@@ -331,9 +420,9 @@ export default function ProjectFollowupScreen({ id, onBack, onSaved }: ProjectFo
               <Ionicons name="arrow-back" size={15} color="#475569" />
               <Text style={styles.cancelBtnText}>กลับไปหน้าหลัก</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
-              <Ionicons name="save-outline" size={16} color="#fff" />
-              <Text style={styles.saveBtnText}>บันทึกการติดตาม</Text>
+            <TouchableOpacity style={[styles.saveBtn, saving && { opacity: 0.7 }]} onPress={handleSave} disabled={saving}>
+              {saving ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="save-outline" size={16} color="#fff" />}
+              <Text style={styles.saveBtnText}>{saving ? 'กำลังบันทึก...' : 'บันทึกการติดตาม'}</Text>
             </TouchableOpacity>
           </View>
         </View>
