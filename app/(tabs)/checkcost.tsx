@@ -7,7 +7,8 @@
  * ตามที่เลือกไว้: ทำชุด ปร.4/ปร.5/ปร.6/Factor F ก่อน (ข้าม Tab "ฟอร์มทำทุนทั่วไป")
  * และพยายามใส่ฟีเจอร์ power-user ให้ครบที่สุดเท่าที่ทำได้แบบไม่ต้องพึ่ง native module เพิ่ม
  *
- * สถานะไฟล์นี้: UI MOCKUP — ยังไม่ยิง fetch จริง (ดู TODO แต่ละจุด)
+ * สถานะไฟล์นี้: เชื่อม API จริงแล้ว (GET api_save_estimate.php action=detail ตอนแก้ไข, POST
+ * action=save ตอนบันทึก) — action/param names เป็นการเดาตาม TODO เดิม ยังไม่ได้ยืนยันกับ backend จริง
  *
  * ตรงกับสูตร/พฤติกรรมจริงจาก check_cost.php:
  *  - ปร.4: รายการแบ่งเป็น "หมวดงาน" (category) แต่ละรายการมี จำนวน/หน่วย/ค่าวัสดุ(ต่อหน่วย+รวม)/
@@ -37,8 +38,10 @@
  */
 
 import { FontAwesome5, Ionicons } from '@expo/vector-icons';
-import React, { useMemo, useState } from 'react';
+import axios from 'axios';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
+    ActivityIndicator,
     Alert,
     Modal,
     SafeAreaView,
@@ -51,6 +54,13 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
+
+// ✅ Config
+import { API_BASE } from '../../constants/config';
+
+// action สำหรับโหลดข้อมูลตอนแก้ไข ('detail') เป็นการเดา — ส่วน payload ของ action='save' อ้างอิงจาก
+// TODO เดิมของไฟล์นี้ ยังไม่ได้ยืนยันกับ backend จริงทั้งคู่
+const API_URL = `${API_BASE}/api_save_estimate.php`;
 
 // ====================================================================
 // Types
@@ -285,6 +295,43 @@ export default function CheckCostScreen({ onBack, onSaved, editUuid }: CheckCost
   // -------------------- Autocomplete --------------------
   const [autocompleteFor, setAutocompleteFor] = useState<string | null>(null); // item id ที่กำลังพิมพ์อยู่
 
+  // -------------------- Preload ตอนแก้ไข (editUuid) --------------------
+  const [loadingEdit, setLoadingEdit] = useState(!!editUuid);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!editUuid) return;
+    let cancelled = false;
+    (async () => {
+      setLoadingEdit(true);
+      try {
+        const res = await axios.get(API_URL, { params: { action: 'detail', uuid: editUuid } });
+        const d = res.data?.data ?? res.data;
+        if (cancelled || !d) return;
+        if (d.header) setHeader((h) => ({ ...h, ...d.header }));
+        if (Array.isArray(d.categories) && d.categories.length > 0) setCategories(d.categories);
+        if (d.use_factor_f != null) setUseFactorF(Boolean(d.use_factor_f));
+        if (d.factor_f != null) setFactorF(String(d.factor_f));
+        if (d.submitted_price != null) {
+          setSubmitPrice(String(d.submitted_price));
+          setSubmitManual(true);
+        }
+        if (Array.isArray(d.pr5_rows)) setPr5ExtraRows(d.pr5_rows.filter((r: Pr5Row) => !r.locked));
+        if (d.pr6_note != null) setPr6Note(String(d.pr6_note));
+        if (d.factor_f_calc) setFf((prev) => ({ ...prev, ...d.factor_f_calc }));
+      } catch (e) {
+        console.error('load api_save_estimate detail failed', e);
+        if (!cancelled) Alert.alert('โหลดข้อมูลไม่สำเร็จ', 'ไม่สามารถโหลดข้อมูลใบประเมินราคานี้ได้ กรุณาลองใหม่อีกครั้ง');
+      } finally {
+        if (!cancelled) setLoadingEdit(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editUuid]);
+
   // -------------------- Derived totals (ปร.4) --------------------
   const totals = useMemo(() => {
     let grandTotalMatLab = 0;
@@ -436,18 +483,47 @@ export default function CheckCostScreen({ onBack, onSaved, editUuid }: CheckCost
     Alert.alert(name, detail);
   }
 
-  function handleSave() {
-    // TODO: ต่อ backend จริง -> POST api_save_estimate.php
-    // payload = { edit_uuid, form_type: 'pr4', province: header.province, project_name/agency/location/date,
-    //   categories (ชื่อหมวด+รายการย่อยทั้งหมด), grand_total_mat_lab, grand_total_cost, factor_f, use_factor_f,
-    //   submitted_price, pr5_rows, pr6_note, factor_f_calc: { A, B, C, D, E, result } }
+  async function handleSave() {
     if (!header.projectName.trim()) {
       Alert.alert('กรอกข้อมูลไม่ครบ', 'กรุณาระบุชื่องาน/โครงการก่อนบันทึก');
       return;
     }
-    Alert.alert('บันทึกสำเร็จ (mock)', `บันทึกใบประเมินราคา "${header.projectName}" เรียบร้อย (ยังไม่ได้ต่อฐานข้อมูลจริง)`, [
-      { text: 'ตกลง', onPress: () => onSaved?.() },
-    ]);
+
+    // payload ตรงกับ TODO เดิมของไฟล์นี้ — โครงสร้างซ้อน (categories/pr5_rows/factor_f_calc) ส่งเป็น JSON string
+    // ในฟอร์ม multipart ตามธรรมเนียมของโปรเจกต์นี้ (อ่านฝั่ง PHP ด้วย json_decode($_POST[...]))
+    const fd = new FormData();
+    fd.append('action', 'save');
+    if (editUuid) fd.append('edit_uuid', editUuid);
+    fd.append('form_type', 'pr4');
+    fd.append('province', header.province);
+    fd.append('project_name', header.projectName);
+    fd.append('agency', header.agency);
+    fd.append('location', header.location);
+    fd.append('date', header.date);
+    fd.append('categories', JSON.stringify(categories));
+    fd.append('grand_total_mat_lab', String(totals.grandTotalMatLab));
+    fd.append('grand_total_cost', String(totals.grandTotalCost));
+    fd.append('factor_f', factorF);
+    fd.append('use_factor_f', useFactorF ? '1' : '0');
+    fd.append('submitted_price', String(totals.submit));
+    fd.append('pr5_rows', JSON.stringify(pr5Rows));
+    fd.append('pr6_note', pr6Note);
+    fd.append('factor_f_calc', JSON.stringify({ A: totals.grandTotalMatLab, B: ff.B, C: ff.C, D: ff.D, E: ff.E, result: ffResult }));
+
+    setSaving(true);
+    try {
+      const res = await axios.post(API_URL, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      if (res.data?.status === 'success' || res.data?.success) {
+        Alert.alert('บันทึกสำเร็จ', `บันทึกใบประเมินราคา "${header.projectName}" เรียบร้อย`, [{ text: 'ตกลง', onPress: () => onSaved?.() }]);
+      } else {
+        Alert.alert('บันทึกไม่สำเร็จ', res.data?.message || 'กรุณาลองใหม่อีกครั้ง');
+      }
+    } catch (e) {
+      console.error('save api_save_estimate failed', e);
+      Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถบันทึกข้อมูลได้ กรุณาลองใหม่อีกครั้ง');
+    } finally {
+      setSaving(false);
+    }
   }
 
   // -------------------- Render: Header (ใช้ร่วมทุกแท็บยกเว้น Factor F ซึ่งมีฟิลด์แยก) --------------------
@@ -928,6 +1004,18 @@ export default function CheckCostScreen({ onBack, onSaved, editUuid }: CheckCost
     );
   }
 
+  if (loadingEdit) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="dark-content" />
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+          <ActivityIndicator size="large" color="#0891b2" />
+          <Text style={{ color: '#94a3b8', fontSize: 12.5 }}>กำลังโหลดข้อมูล...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" />
@@ -961,9 +1049,9 @@ export default function CheckCostScreen({ onBack, onSaved, editUuid }: CheckCost
         {activeTab === 'pr6' && renderPr6()}
         {activeTab === 'factorF' && renderFactorF()}
 
-        <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
-          <Ionicons name="save-outline" size={17} color="#fff" />
-          <Text style={styles.saveBtnText}>บันทึกข้อมูลโครงการ</Text>
+        <TouchableOpacity style={[styles.saveBtn, saving && { opacity: 0.7 }]} onPress={handleSave} disabled={saving}>
+          {saving ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="save-outline" size={17} color="#fff" />}
+          <Text style={styles.saveBtnText}>{saving ? 'กำลังบันทึก...' : 'บันทึกข้อมูลโครงการ'}</Text>
         </TouchableOpacity>
       </ScrollView>
 

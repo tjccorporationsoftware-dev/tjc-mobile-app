@@ -4,8 +4,8 @@
  * Mobile mockup ของหน้า dashboard_estimate.php (แดชบอร์ดประวัติการทำทุน)
  * สำหรับแอป tjc-mobile-app (Expo / React Native)
  *
- * สถานะไฟล์นี้: UI MOCKUP เท่านั้น — ข้อมูลทั้งหมดเป็น MOCK_ESTIMATES ด้านล่าง
- * ปุ่มลบทำงานแบบ local state เท่านั้น (ยังไม่ยิง api_save_estimate.php จริง)
+ * สถานะไฟล์นี้: เชื่อม API จริงแล้ว (GET dashboard_estimate.php action=list, POST
+ * api_save_estimate.php action=delete) — action names เป็นการเดา ยังไม่ได้ยืนยันกับ backend จริง
  *
  * ตรงกับของจริงจากไฟล์ dashboard_estimate.php:
  *  - การ์ดสรุป 3 ใบ: ใบเสนอราคาทั้งหมด / ฟอร์มทำทุนทั่วไป / ฟอร์ม ปร.4
@@ -26,11 +26,20 @@
  */
 
 import { FontAwesome5, Ionicons } from '@expo/vector-icons';
-import React, { useMemo, useState } from 'react';
-import { Alert, FlatList, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import axios from 'axios';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Alert, FlatList, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+
+// ✅ Config
+import { API_BASE } from '../../constants/config';
 // ปรับ path นี้ให้ตรงกับตำแหน่งไฟล์จริงในโปรเจกต์ ถ้าไม่ได้วางไว้โฟลเดอร์เดียวกัน
 import CheckCostScreen from './checkcost';
+
+// action='list' เป็นการเดา — ส่วน api_save_estimate.php action='delete' อ้างอิงจาก TODO เดิมของไฟล์นี้
+// ยังไม่ได้ยืนยันกับ backend จริงทั้งคู่
+const LIST_URL = `${API_BASE}/dashboard_estimate.php`;
+const SAVE_URL = `${API_BASE}/api_save_estimate.php`;
 
 // ====================================================================
 // Types
@@ -61,71 +70,20 @@ export interface EstimateDashboardScreenProps {
 // Mock data
 // ====================================================================
 
-const MOCK_ESTIMATES: EstimateProject[] = [
-  {
-    uuid: 'e-001',
-    projectName: 'ก่อสร้างอาคารเรียน 4 ชั้น โรงเรียนสมมติวิทยา',
-    formType: 'pr4',
-    median: 8500000,
-    submitted: 8200000,
-    cost: 7600000,
-    creatorName: 'คุณสมชาย',
-    updaterName: 'คุณกานดา',
-    createdAtShow: '05/09/2569',
-  },
-  {
-    uuid: 'e-002',
-    projectName: 'ติดตั้งระบบกล้องวงจรปิด อาคารสำนักงานใหญ่',
-    formType: 'general',
-    median: 1250000,
-    submitted: 0,
-    cost: 980000,
-    creatorName: 'คุณอรทัย',
-    createdAtShow: '03/09/2569',
-  },
-  {
-    uuid: 'e-003',
-    projectName: 'ปรับปรุงระบบไฟฟ้าโรงงานผลิตชิ้นส่วน',
-    formType: 'general',
-    median: 640000,
-    submitted: 590000,
-    cost: 610000,
-    creatorName: 'คุณพิชญ์',
-    updaterName: 'คุณพิชญ์',
-    createdAtShow: '30/08/2569',
-  },
-  {
-    uuid: 'e-004',
-    projectName: 'งานถนนคอนกรีตเสริมเหล็ก หมู่บ้านสมมติ',
-    formType: 'pr4',
-    median: 3200000,
-    submitted: 3200000,
-    cost: 3200000,
-    creatorName: 'คุณวรรณา',
-    createdAtShow: '28/08/2569',
-  },
-  {
-    uuid: 'e-005',
-    projectName: 'ติดตั้งลิฟต์โดยสารอาคารพาณิชย์',
-    formType: 'general',
-    median: 2100000,
-    submitted: 1980000,
-    cost: 2050000,
-    creatorName: 'คุณธนา',
-    updaterName: 'คุณอรทัย',
-    createdAtShow: '20/08/2569',
-  },
-  {
-    uuid: 'e-006',
-    projectName: 'ก่อสร้างสะพานข้ามคลองสมมติ',
-    formType: 'pr4',
-    median: 12500000,
-    submitted: 11800000,
-    cost: 10200000,
-    creatorName: 'คุณสมชาย',
-    createdAtShow: '15/08/2569',
-  },
-];
+// แปลงข้อมูลดิบจาก backend ให้เข้ารูป EstimateProject — รองรับหลายชื่อ field เพราะยังไม่มี spec ยืนยัน
+function mapEstimate(raw: any): EstimateProject {
+  return {
+    uuid: String(raw.uuid ?? raw.id ?? ''),
+    projectName: String(raw.projectName ?? raw.project_name ?? ''),
+    formType: (raw.formType ?? raw.form_type ?? 'general') as FormType,
+    median: Number(raw.median ?? raw.grand_total_median ?? 0),
+    submitted: Number(raw.submitted ?? raw.submitted_price ?? 0),
+    cost: Number(raw.cost ?? raw.grand_total_cost ?? 0),
+    creatorName: String(raw.creatorName ?? raw.creator_name ?? ''),
+    updaterName: raw.updaterName ?? raw.updater_name ?? undefined,
+    createdAtShow: String(raw.createdAtShow ?? raw.created_at_show ?? raw.created_at ?? ''),
+  };
+}
 
 const TYPE_FILTERS: { label: string; value: FormType | 'all' }[] = [
   { label: 'ทุกประเภทฟอร์ม', value: 'all' },
@@ -169,10 +127,39 @@ function typeMeta(formType: FormType) {
 export default function EstimateDashboardScreen({ onBack, onCreateNew, onViewEstimate, onEditEstimate }: EstimateDashboardScreenProps) {
   // ไม่มี navigation จากภายนอก -> สลับไปหน้า CheckCostScreen เองภายในไฟล์นี้
   const [checkCost, setCheckCost] = useState<{ visible: boolean; editUuid?: string }>({ visible: false });
-  const [estimates, setEstimates] = useState<EstimateProject[]>(MOCK_ESTIMATES);
+  const [estimates, setEstimates] = useState<EstimateProject[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<FormType | 'all'>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'profit' | 'loss' | 'even'>('all');
+
+  const loadData = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
+    setError(null);
+    try {
+      const res = await axios.get(LIST_URL, { params: { action: 'list' } });
+      const raw = res.data;
+      const list = Array.isArray(raw) ? raw : raw?.data ?? [];
+      setEstimates(list.map(mapEstimate));
+    } catch (e) {
+      console.error('load dashboard_estimate failed', e);
+      setError('โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  function onRefresh() {
+    setRefreshing(true);
+    loadData({ silent: true });
+  }
 
   const counts = useMemo(() => {
     const total = estimates.length;
@@ -197,13 +184,28 @@ export default function EstimateDashboardScreen({ onBack, onCreateNew, onViewEst
   }, [estimates, search, typeFilter, statusFilter]);
 
   function handleDelete(p: EstimateProject) {
-    // TODO: ต่อ backend จริง -> POST api_save_estimate.php { action: 'delete', uuid }
     Alert.alert('ยืนยันการลบ', `ต้องการลบโปรเจกต์ "${p.projectName}" ใช่หรือไม่?\n(ข้อมูลนี้ไม่สามารถกู้คืนได้)`, [
       { text: 'ยกเลิก', style: 'cancel' },
       {
         text: 'ลบข้อมูล',
         style: 'destructive',
-        onPress: () => setEstimates((prev) => prev.filter((x) => x.uuid !== p.uuid)),
+        onPress: async () => {
+          const prev = estimates;
+          setEstimates((list) => list.filter((x) => x.uuid !== p.uuid));
+          try {
+            const fd = new FormData();
+            fd.append('action', 'delete');
+            fd.append('uuid', p.uuid);
+            const res = await axios.post(SAVE_URL, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+            if (!(res.data?.status === 'success' || res.data?.success)) {
+              throw new Error(res.data?.message || 'delete failed');
+            }
+          } catch (e) {
+            console.error('delete estimate failed', e);
+            setEstimates(prev); // rollback ถ้าลบไม่สำเร็จ
+            Alert.alert('ลบไม่สำเร็จ', 'กรุณาลองใหม่อีกครั้ง');
+          }
+        },
       },
     ]);
   }
@@ -413,6 +415,18 @@ export default function EstimateDashboardScreen({ onBack, onCreateNew, onViewEst
     );
   }
 
+  if (loading && estimates.length === 0) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="dark-content" />
+        <View style={styles.emptyBox}>
+          <ActivityIndicator size="large" color="#3f51b5" />
+          <Text style={styles.emptyText}>กำลังโหลดข้อมูล...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" />
@@ -421,14 +435,25 @@ export default function EstimateDashboardScreen({ onBack, onCreateNew, onViewEst
         keyExtractor={(p) => p.uuid}
         renderItem={renderCard}
         ListHeaderComponent={renderHeader}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#3f51b5']} tintColor="#3f51b5" />}
         ListEmptyComponent={
-          <View style={styles.emptyBox}>
-            <Ionicons name="folder-open-outline" size={28} color="#cbd5e1" />
-            <Text style={styles.emptyTitle}>ยังไม่มีข้อมูลการประเมินราคา</Text>
-            <Text style={styles.emptyText}>
-              แตะปุ่ม "สร้างทุนใหม่" ด้านบนเพื่อเริ่มต้น
-            </Text>
-          </View>
+          error ? (
+            <View style={styles.emptyBox}>
+              <Ionicons name="alert-circle-outline" size={28} color="#ef4444" />
+              <Text style={styles.emptyText}>{error}</Text>
+              <TouchableOpacity style={styles.createBtn} onPress={() => loadData()}>
+                <Text style={styles.createBtnText}>ลองใหม่</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={styles.emptyBox}>
+              <Ionicons name="folder-open-outline" size={28} color="#cbd5e1" />
+              <Text style={styles.emptyTitle}>ยังไม่มีข้อมูลการประเมินราคา</Text>
+              <Text style={styles.emptyText}>
+                แตะปุ่ม "สร้างทุนใหม่" ด้านบนเพื่อเริ่มต้น
+              </Text>
+            </View>
+          )
         }
         contentContainerStyle={{ paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}

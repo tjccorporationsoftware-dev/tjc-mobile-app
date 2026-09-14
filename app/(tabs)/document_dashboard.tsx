@@ -55,6 +55,9 @@ import * as XLSX from 'xlsx';
 // ไปอยู่ใต้ 'expo-file-system/legacy' แล้ว (API หลักตอนนี้เปลี่ยนไปใช้คลาส File/Directory แทน)
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
+
+// ✅ Config
+import { API_BASE } from '../../constants/config';
 // ปรับ path นี้ให้ตรงกับตำแหน่งไฟล์จริงในโปรเจกต์ ถ้าไม่ได้วางไว้โฟลเดอร์เดียวกัน
 import SubmitDocumentScreen from './submitdocument';
 

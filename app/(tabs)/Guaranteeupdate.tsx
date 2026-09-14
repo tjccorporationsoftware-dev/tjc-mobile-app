@@ -6,7 +6,8 @@
  *   router.push({ pathname: '/GuaranteeUpdate', params: { id } })
  * ไฟล์นี้จึงอ่าน id ผ่าน useLocalSearchParams() ตรงๆ เหมือน DriverConfirmItems.tsx
  *
- * สถานะไฟล์นี้: UI MOCKUP — ข้อมูลอ้างอิงจาก MOCK_RECORDS ด้านล่าง ยังไม่ยิง fetch จริง
+ * สถานะไฟล์นี้: เชื่อม API จริงแล้ว (GET/POST guarantee_update.php?id=) — endpoint ไม่มี action param
+ * ตาม TODO เดิม ยังไม่ได้ยืนยันกับ backend จริง
  *
  * ตรงกับพฤติกรรมจริงจาก guarantee_update.php:
  *  - ส่วนที่ 1: เลือกสถานะการติดตาม (track_status) จาก pill 7 สี ตรงกับ $status_style_map
@@ -28,9 +29,17 @@
  */
 
 import { FontAwesome5, Ionicons } from '@expo/vector-icons';
+import axios from 'axios';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useMemo, useState } from 'react';
-import { Alert, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+
+// ✅ Config
+import { API_BASE } from '../../constants/config';
+
+// TODO เดิมของไฟล์นี้ระบุ endpoint เป็น "guarantee_update.php?id=editId" โดยไม่มี action param
+// (ต่างจากไฟล์อื่นที่ใช้ ?action=xxx) — ยังไม่ได้ยืนยันกับ backend จริง ทั้งฝั่งโหลดและฝั่งบันทึก
+const API_URL = `${API_BASE}/guarantee_update.php`;
 
 // ====================================================================
 // Types
@@ -92,14 +101,17 @@ const URGENCY_OPTIONS: { value: Urgency; label: string }[] = [
   { value: 'critical', label: '🔴 ด่วนมาก' },
 ];
 
-const MOCK_RECORDS: Record<string, GuaranteeRecord> = {
-  '1': { projectCode: 'TJC69-014', contractNo: 'สัญญาเลขที่ 45/2569', trackStatus: 'ยังไม่หมดสัญญา', followups: ['12/09/2569 — ยื่นเรื่องขอ LG เรียบร้อย'] },
-  '2': { projectCode: 'ABC69-002', contractNo: 'สัญญาเลขที่ 12/2569', trackStatus: 'ยังไม่หมดสัญญา', followups: [] },
-  '3': { projectCode: 'TJC68-091', contractNo: 'สัญญาเลขที่ 8/2568', trackStatus: 'ได้รับหนังสือค้ำแล้ว', followups: ['10/03/2569 — ลูกค้าส่งหนังสือค้ำตัวจริงคืนแล้ว', '15/03/2569 — ปิดเรื่องสมบูรณ์'] },
-  '4': { projectCode: 'XYZ69-021', contractNo: 'สัญญาเลขที่ 30/2569', trackStatus: 'แจ้งซ่อม', followups: ['18/09/2569 — ลูกค้าแจ้งลิฟต์มีเสียงดังผิดปกติ ส่งช่างเข้าตรวจวันนี้'] },
-  '5': { projectCode: 'ABC69-003', contractNo: 'สัญญาเลขที่ 19/2569', trackStatus: 'อยู่ระหว่างส่งหนังสือค้ำคืนมา', followups: ['01/10/2568 — ลูกค้าแจ้งว่าส่งหนังสือค้ำตัวจริงทางไปรษณีย์แล้ว รอตรวจรับ'] },
-  '6': { projectCode: 'TJC69-030', contractNo: 'สัญญาเลขที่ 41/2569', trackStatus: 'กำลังดำเนินการ', followups: [] },
-};
+const EMPTY_RECORD: GuaranteeRecord = { projectCode: '', contractNo: '', trackStatus: 'ยังไม่หมดสัญญา', followups: [] };
+
+// แปลงข้อมูลดิบจาก backend ให้เข้ารูป GuaranteeRecord — รองรับหลายชื่อ field เพราะยังไม่มี spec ยืนยัน
+function mapRecord(raw: any): GuaranteeRecord {
+  return {
+    projectCode: String(raw.projectCode ?? raw.project_code ?? ''),
+    contractNo: String(raw.contractNo ?? raw.contract_no ?? ''),
+    trackStatus: (raw.trackStatus ?? raw.track_status ?? 'ยังไม่หมดสัญญา') as TrackStatus,
+    followups: raw.followups ?? (typeof raw.all_followups === 'string' ? raw.all_followups.split('||').filter(Boolean) : []),
+  };
+}
 
 let uidCounter = 1;
 function uid(): string {
@@ -120,14 +132,39 @@ export default function GuaranteeUpdateScreen({ onBack, onSaved }: GuaranteeUpda
   const params = useLocalSearchParams<{ id?: string }>();
   const editId = params.id ?? '1';
 
-  const record = useMemo(() => MOCK_RECORDS[editId] ?? MOCK_RECORDS['1'], [editId]);
+  const [record, setRecord] = useState<GuaranteeRecord>(EMPTY_RECORD);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  const [trackStatus, setTrackStatus] = useState<TrackStatus>(record.trackStatus);
-  const [followups, setFollowups] = useState<string[]>(record.followups.length > 0 ? record.followups : ['']);
+  const [trackStatus, setTrackStatus] = useState<TrackStatus>('ยังไม่หมดสัญญา');
+  const [followups, setFollowups] = useState<string[]>(['']);
 
   const [srReceiver, setSrReceiver] = useState('');
   const [srUrgency, setSrUrgency] = useState<Urgency>('normal');
   const [srItems, setSrItems] = useState<SrItem[]>([mkSrItem()]);
+
+  const loadRecord = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const res = await axios.get(API_URL, { params: { id: editId } });
+      const raw = res.data?.data ?? res.data;
+      const mapped = mapRecord(raw ?? {});
+      setRecord(mapped);
+      setTrackStatus(mapped.trackStatus);
+      setFollowups(mapped.followups.length > 0 ? mapped.followups : ['']);
+    } catch (e) {
+      console.error('load guarantee_update failed', e);
+      setLoadError('โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+    } finally {
+      setLoading(false);
+    }
+  }, [editId]);
+
+  useEffect(() => {
+    loadRecord();
+  }, [loadRecord]);
 
   function handleBack() {
     if (onBack) return onBack();
@@ -159,11 +196,7 @@ export default function GuaranteeUpdateScreen({ onBack, onSaved }: GuaranteeUpda
     setSrItems((prev) => prev.map((it) => (it.id === id ? { ...it, [field]: value } : it)));
   }
 
-  function handleSave() {
-    // TODO: ต่อ backend จริง -> POST guarantee_update.php?id=editId
-    //   track_status, followup[] และถ้า track_status === 'แจ้งซ่อม' ให้แนบ
-    //   sr_receiver, sr_urgency, sr_product[]/sr_job_type[]/sr_job_other[]/sr_issue[] ไปด้วย
-    //   (ฝั่ง backend จะสร้างแถวใน service_requests ให้อัตโนมัติ)
+  async function handleSave() {
     if (trackStatus === 'แจ้งซ่อม') {
       if (!srReceiver) {
         Alert.alert('กรอกข้อมูลไม่ครบ', 'กรุณาเลือกผู้รับเรื่องก่อนบันทึก');
@@ -175,15 +208,71 @@ export default function GuaranteeUpdateScreen({ onBack, onSaved }: GuaranteeUpda
         return;
       }
     }
-    Alert.alert('บันทึกสำเร็จ (mock)', 'อัปเดตสถานะและประวัติการติดตามเรียบร้อยแล้ว!', [
-      {
-        text: 'ตกลง',
-        onPress: () => {
-          if (onSaved) return onSaved();
-          handleBack();
-        },
-      },
-    ]);
+
+    // payload ตรงกับ TODO เดิมของไฟล์นี้ (track_status, followup[], sr_* ถ้าเลือก "แจ้งซ่อม")
+    const fd = new FormData();
+    fd.append('track_status', trackStatus);
+    followups.filter((f) => f.trim()).forEach((f) => fd.append('followup[]', f));
+    if (trackStatus === 'แจ้งซ่อม') {
+      fd.append('sr_receiver', srReceiver);
+      fd.append('sr_urgency', srUrgency);
+      srItems.forEach((it) => {
+        fd.append('sr_product[]', it.product);
+        fd.append('sr_job_type[]', it.jobType);
+        fd.append('sr_job_other[]', it.jobOther);
+        fd.append('sr_issue[]', it.issue);
+      });
+    }
+
+    setSaving(true);
+    try {
+      const res = await axios.post(`${API_URL}?id=${encodeURIComponent(editId)}`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      if (res.data?.status === 'success' || res.data?.success) {
+        Alert.alert('บันทึกสำเร็จ', 'อัปเดตสถานะและประวัติการติดตามเรียบร้อยแล้ว!', [
+          {
+            text: 'ตกลง',
+            onPress: () => {
+              if (onSaved) return onSaved();
+              handleBack();
+            },
+          },
+        ]);
+      } else {
+        Alert.alert('บันทึกไม่สำเร็จ', res.data?.message || 'กรุณาลองใหม่อีกครั้ง');
+      }
+    } catch (e) {
+      console.error('save guarantee_update failed', e);
+      Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถบันทึกข้อมูลได้ กรุณาลองใหม่อีกครั้ง');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="light-content" />
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+          <ActivityIndicator size="large" color="#059669" />
+          <Text style={{ color: '#94a3b8', fontSize: 12.5 }}>กำลังโหลดข้อมูล...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="light-content" />
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 20 }}>
+          <Ionicons name="alert-circle-outline" size={28} color="#ef4444" />
+          <Text style={{ color: '#64748b', fontSize: 13, textAlign: 'center' }}>{loadError}</Text>
+          <TouchableOpacity style={styles.addFuBtn} onPress={loadRecord}>
+            <Text style={styles.addFuBtnText}>ลองใหม่</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
   }
 
   return (
@@ -345,9 +434,9 @@ export default function GuaranteeUpdateScreen({ onBack, onSaved }: GuaranteeUpda
             <TouchableOpacity style={styles.cancelBtn} onPress={handleBack}>
               <Text style={styles.cancelBtnText}>ยกเลิก</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
-              <Ionicons name="save-outline" size={16} color="#fff" />
-              <Text style={styles.saveBtnText}>บันทึกการอัปเดต</Text>
+            <TouchableOpacity style={[styles.saveBtn, saving && { opacity: 0.7 }]} onPress={handleSave} disabled={saving}>
+              {saving ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="save-outline" size={16} color="#fff" />}
+              <Text style={styles.saveBtnText}>{saving ? 'กำลังบันทึก...' : 'บันทึกการอัปเดต'}</Text>
             </TouchableOpacity>
           </View>
         </View>

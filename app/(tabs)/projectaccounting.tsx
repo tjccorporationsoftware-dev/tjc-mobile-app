@@ -10,7 +10,8 @@
  * accounting_dashboard.php ส่งมาแค่ ?id= เสมอ ไม่มี plan_id/lg_id เลย ดังนั้นไฟล์นี้ทำเฉพาะ
  * "โหมดปกติ" เท่านั้น ตรงกับเงื่อนไข !$is_plan_mode && !$is_lg_mode ของต้นฉบับ
  *
- * สถานะไฟล์นี้: UI MOCKUP — ยังไม่ยิง POST ajax_save จริง (ดู TODO ใน handleSave)
+ * สถานะไฟล์นี้: เชื่อม API จริงแล้ว (GET โหลดข้อมูลโครงการ+งวด, POST ajax_save บันทึก) ผ่าน
+ * project_accounting.php — action/param names เป็นการเดาตาม TODO เดิม ยังไม่ได้ยืนยันกับ backend จริง
  *
  * ตรงกับพฤติกรรม/สูตรจริงจาก project_accounting.php (โหมดปกติ):
  *  - สูตรคำนวณต่องวดตรงกับ calculateRow() เป๊ะ (VAT 7%, 3 โหมดกรอก: ก่อน VAT / รวม VAT /
@@ -36,9 +37,17 @@
  */
 
 import { Ionicons } from '@expo/vector-icons';
+import axios from 'axios';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useMemo, useState } from 'react';
-import { Alert, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Alert, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+
+// ✅ Config
+import { API_BASE } from '../../constants/config';
+
+// endpoint นี้ไม่มี action param ตาม TODO เดิมของไฟล์นี้ (?id=projectId, ajax_save=1 ตอนบันทึก)
+// ส่วนฝั่งโหลดข้อมูล (project info + งวดที่มีอยู่แล้ว) เป็นการเดา — ยังไม่ได้ยืนยันกับ backend จริงทั้งคู่
+const API_URL = `${API_BASE}/project_accounting.php`;
 
 // ====================================================================
 // Types
@@ -108,19 +117,43 @@ const CALC_MODE_OPTIONS: { value: CalcMode; label: string }[] = [
 const MOCK_USERS = ['คุณธนา', 'คุณสมชาย', 'คุณกานดา', 'คุณปิยะ'];
 const MOCK_JOB_TYPES = ['ซ่อมบำรุงทั่วไป', 'ระบบไฟฟ้า', 'ระบบปรับอากาศ', 'ระบบกล้องวงจรปิด', 'อื่นๆ'];
 
-const MOCK_PROJECTS: Record<string, ProjectInfo> = {
-  '548': { jobNo: '548', projectName: 'จัดซื้อครุภัณฑ์สำนักงาน บริษัท เจริญกิจ...', customer: 'ไม่ระบุ', budget: 64000, paidGross: 0 },
-  '547': {
-    jobNo: '547', projectName: 'วางระบบเครือข่ายคอมพิวเตอร์ บริษัท เจริญกิจเจริญทรัพย์...', customer: 'บริษัท เจริญกิจเจริญทรัพย์ จำกัด',
-    budget: 225600, paidGross: 0, address: '99 ถ.สมมติ ต.ในเมือง อ.เมือง จ.สมมติ 30000', contact: 'คุณสมหญิง ใจงาม โทร: 08x-xxx-1234',
-  },
-  '546': { jobNo: '546', projectName: 'ติดตั้งระบบโซล่าเซลล์ บริษัท เจริญกิจเจริญทรัพย์...', customer: 'บริษัท เจริญกิจเจริญทรัพย์ จำกัด', budget: 64000, paidGross: 64000 },
-  '545': {
-    jobNo: '545', projectName: 'ปรับปรุงระบบไฟฟ้าภายในอาคาร บริษัท สมมติ...', customer: 'บริษัท สมมติ จำกัด',
-    budget: 448900, paidGross: 0, address: '77 ถ.พาณิชย์ ต.ในเมือง อ.เมือง จ.สมมติ 30000', contact: 'คุณอรทัย ใจดี โทร: 08x-xxx-9012',
-  },
-  '544': { jobNo: '544', projectName: 'ติดตั้งระบบกล้องวงจรปิด บริษัท เจริญกิจเจริญทรัพย์...', customer: 'บริษัท เจริญกิจเจริญทรัพย์ จำกัด', budget: 32000, paidGross: 32000 },
-};
+const EMPTY_PROJECT: ProjectInfo = { jobNo: '', projectName: '', customer: '', budget: 0, paidGross: 0 };
+
+// แปลงข้อมูลดิบจาก backend ให้เข้ารูป ProjectInfo/PaymentRow — รองรับหลายชื่อ field เพราะยังไม่มี spec ยืนยัน
+function mapProjectInfo(raw: any): ProjectInfo {
+  return {
+    jobNo: String(raw.jobNo ?? raw.job_no ?? ''),
+    projectName: String(raw.projectName ?? raw.project_name ?? ''),
+    customer: String(raw.customer ?? raw.customer_name ?? ''),
+    budget: Number(raw.budget ?? raw.project_budget ?? 0),
+    paidGross: Number(raw.paidGross ?? raw.paid_gross ?? 0),
+    address: raw.address ?? undefined,
+    contact: raw.contact ?? undefined,
+  };
+}
+
+function mapPaymentRow(raw: any): PaymentRow {
+  return mkRow({
+    id: String(raw.id ?? uid()),
+    isNew: false,
+    name: String(raw.name ?? raw.payment_name ?? ''),
+    amount: String(raw.amount ?? raw.payment_amount ?? ''),
+    calcMode: (raw.calcMode ?? raw.calc_mode ?? 'base') as CalcMode,
+    whtPercent: Number(raw.whtPercent ?? raw.wht_percent ?? 0),
+    status: String(raw.status ?? raw.call_status ?? STATUS_LIST[0]),
+    fee: String(raw.fee ?? raw.fee_amount ?? ''),
+    fine: String(raw.fine ?? raw.fine_amount ?? ''),
+    bankName: String(raw.bankName ?? raw.bank_name ?? ''),
+    receiptNo: String(raw.receiptNo ?? raw.receipt_no ?? ''),
+    receivedDate: String(raw.receivedDate ?? raw.payment_received_date ?? ''),
+    receiptDate: String(raw.receiptDate ?? raw.receipt_date ?? ''),
+    remark: String(raw.remark ?? ''),
+    owner: String(raw.owner ?? raw.owner_name ?? CURRENT_USER),
+    createdAtShow: raw.createdAtShow ?? raw.created_at_show ?? undefined,
+    chequeNo: String(raw.chequeNo ?? raw.cheque_no ?? ''),
+    chequeDate: String(raw.chequeDate ?? raw.cheque_date ?? ''),
+  });
+}
 
 let uidCounter = 1;
 function uid(): string {
@@ -155,21 +188,6 @@ function mkRow(partial: Partial<PaymentRow> = {}): PaymentRow {
     ...partial,
   };
 }
-
-const MOCK_PAYMENTS: Record<string, PaymentRow[]> = {
-  '546': [
-    mkRow({
-      isNew: false, name: 'งวดเดียว (เต็มจำนวน)', amount: '63401.87', calcMode: 'net', whtPercent: 0, status: STATUS_FULL,
-      receiptNo: 'RC-4562', receivedDate: '23/06/2026', receiptDate: '23/06/2026', owner: 'คุณอรทัย', createdAtShow: '23/06/2026 08:31',
-    }),
-  ],
-  '544': [
-    mkRow({
-      isNew: false, name: 'งวดเดียว (เต็มจำนวน)', amount: '31700.93', calcMode: 'net', whtPercent: 0, status: STATUS_FULL,
-      bankName: 'ธนาคารกรุงไทย', receiptNo: 'RC-3391', receivedDate: '11/07/2026', receiptDate: '11/07/2026', owner: 'คุณอรทัย', createdAtShow: '11/07/2026 14:20',
-    }),
-  ],
-};
 
 function num(n: number): string {
   return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -224,12 +242,38 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
   const params = useLocalSearchParams<{ id?: string }>();
   const projectId = id ?? params.id ?? '547';
 
-  const project = useMemo(() => MOCK_PROJECTS[projectId] ?? MOCK_PROJECTS['547'], [projectId]);
+  const [project, setProject] = useState<ProjectInfo>(EMPTY_PROJECT);
+  const [rows, setRows] = useState<PaymentRow[]>([mkRow({ name: 'งวดที่ 1' })]);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
   const outstanding = Math.max(project.budget - project.paidGross, 0);
 
-  const initialRows = MOCK_PAYMENTS[projectId] ?? [];
-  const [rows, setRows] = useState<PaymentRow[]>(initialRows.length > 0 ? initialRows : [mkRow({ name: 'งวดที่ 1' })]);
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set(rows.filter((r) => r.isNew).map((r) => r.id)));
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const res = await axios.get(API_URL, { params: { id: projectId } });
+      const d = res.data?.data ?? res.data;
+      const proj = mapProjectInfo(d?.project ?? d ?? {});
+      const rawRows = Array.isArray(d?.rows) ? d.rows : [];
+      const mappedRows: PaymentRow[] = rawRows.length > 0 ? rawRows.map(mapPaymentRow) : [mkRow({ name: 'งวดที่ 1' })];
+      setProject(proj);
+      setRows(mappedRows);
+      setExpandedIds(new Set(mappedRows.filter((r) => r.isNew).map((r) => r.id)));
+    } catch (e) {
+      console.error('load project_accounting failed', e);
+      setLoadError('โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const rowCalcs = useMemo(() => {
     const map: Record<string, ReturnType<typeof calcRow>> = {};
@@ -296,11 +340,7 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
   }
 
-  function handleSave() {
-    // TODO: ต่อ backend จริง -> POST project_accounting.php?id=projectId, ajax_save=1
-    // ส่ง payment_name[]/payment_amount[]/net_amount[]/calc_mode[]/wht_percent[]/call_status[]/
-    // fee_amount[]/fine_amount[]/bank_name[]/receipt_no[]/payment_received_date[]/receipt_date[]/
-    // remark[] ตรงตามชื่อ field ต้นฉบับ + sr_* ถ้ามีงวดไหนสถานะเป็น "แจ้งซ่อม"
+  async function handleSave() {
     const invalidName = rows.some((r) => !r.name.trim());
     if (invalidName) {
       Alert.alert('กรอกข้อมูลไม่ครบ', 'กรุณาระบุ "ชื่องวด" ให้ครบทุกรายการก่อนบันทึก');
@@ -316,9 +356,76 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
       Alert.alert('กรอกข้อมูลไม่ครบ', 'มีงวดที่แจ้งซ่อม แต่ยังกรอกข้อมูลใบแจ้งซ่อมไม่ครบ');
       return;
     }
-    Alert.alert('บันทึกสำเร็จ (mock)', `บันทึกงวดชำระ ${rows.length} รายการเรียบร้อยแล้ว!`, [
-      { text: 'ตกลง', onPress: () => (onSaved ? onSaved() : handleBack()) },
-    ]);
+
+    // payload ตรงกับ TODO เดิมของไฟล์นี้ — ชื่อ field แบบ array ต่องวด เรียงตามลำดับ rows
+    const fd = new FormData();
+    fd.append('ajax_save', '1');
+    rows.forEach((r) => {
+      const c = rowCalcs[r.id];
+      fd.append('payment_name[]', r.name);
+      fd.append('payment_amount[]', r.amount);
+      fd.append('net_amount[]', String(c.net));
+      fd.append('calc_mode[]', r.calcMode);
+      fd.append('wht_percent[]', String(r.whtPercent));
+      fd.append('call_status[]', r.status);
+      fd.append('fee_amount[]', r.fee);
+      fd.append('fine_amount[]', r.fine);
+      fd.append('bank_name[]', r.bankName);
+      fd.append('receipt_no[]', r.receiptNo);
+      fd.append('payment_received_date[]', r.receivedDate);
+      fd.append('receipt_date[]', r.receiptDate);
+      fd.append('remark[]', r.remark);
+      fd.append('cheque_no[]', r.chequeNo);
+      fd.append('cheque_date[]', r.chequeDate);
+      fd.append('sr_receiver[]', r.status === 'แจ้งซ่อม' ? r.srReceiver : '');
+      fd.append('sr_product[]', r.status === 'แจ้งซ่อม' ? r.srProduct : '');
+      fd.append('sr_job_type[]', r.status === 'แจ้งซ่อม' ? r.srJobType : '');
+      fd.append('sr_issue[]', r.status === 'แจ้งซ่อม' ? r.srIssue : '');
+    });
+
+    setSaving(true);
+    try {
+      const res = await axios.post(`${API_URL}?id=${encodeURIComponent(projectId)}`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      if (res.data?.status === 'success' || res.data?.success) {
+        Alert.alert('บันทึกสำเร็จ', `บันทึกงวดชำระ ${rows.length} รายการเรียบร้อยแล้ว!`, [
+          { text: 'ตกลง', onPress: () => (onSaved ? onSaved() : handleBack()) },
+        ]);
+      } else {
+        Alert.alert('บันทึกไม่สำเร็จ', res.data?.message || 'กรุณาลองใหม่อีกครั้ง');
+      }
+    } catch (e) {
+      console.error('save project_accounting failed', e);
+      Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถบันทึกข้อมูลได้ กรุณาลองใหม่อีกครั้ง');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="light-content" />
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+          <ActivityIndicator size="large" color="#059669" />
+          <Text style={{ color: '#94a3b8', fontSize: 12.5 }}>กำลังโหลดข้อมูล...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="light-content" />
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 20 }}>
+          <Ionicons name="alert-circle-outline" size={28} color="#ef4444" />
+          <Text style={{ color: '#64748b', fontSize: 13, textAlign: 'center' }}>{loadError}</Text>
+          <TouchableOpacity style={styles.addBtnPaid} onPress={loadData}>
+            <Text style={styles.addBtnPaidText}>ลองใหม่</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
   }
 
   return (
@@ -613,9 +720,9 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
               <Ionicons name="arrow-back" size={15} color="#475569" />
               <Text style={styles.cancelBtnText}>กลับไปหน้าหลัก</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
-              <Ionicons name="save-outline" size={16} color="#fff" />
-              <Text style={styles.saveBtnText}>บันทึกงวดชำระ</Text>
+            <TouchableOpacity style={[styles.saveBtn, saving && { opacity: 0.7 }]} onPress={handleSave} disabled={saving}>
+              {saving ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="save-outline" size={16} color="#fff" />}
+              <Text style={styles.saveBtnText}>{saving ? 'กำลังบันทึก...' : 'บันทึกงวดชำระ'}</Text>
             </TouchableOpacity>
           </View>
         </View>

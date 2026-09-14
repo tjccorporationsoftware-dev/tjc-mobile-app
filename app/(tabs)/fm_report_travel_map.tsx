@@ -36,6 +36,9 @@ import { Linking, Modal, ScrollView, StatusBar, StyleSheet, Text, TextInput, Tou
 import MapView, { Marker, Region } from 'react-native-maps';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+// ✅ Config
+import { API_BASE } from '../../constants/config';
+
 // ====================================================================
 // Types
 // ====================================================================

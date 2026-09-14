@@ -38,6 +38,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { useMemo, useState } from 'react';
 import { Alert, FlatList, Modal, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+
+// ✅ Config
+import { API_BASE } from '../../constants/config';
 // ปรับ path นี้ให้ตรงกับตำแหน่งไฟล์จริงในโปรเจกต์ ถ้าไม่ได้วางไว้โฟลเดอร์เดียวกัน
 import TravelAllowanceFormScreen from './fm_report_travel_form'; // ฟอร์มกรอกข้อมูลจริงของคนขับแต่ละคน (mode=form) — ยังไม่มีต้นฉบับให้ดู
 import TravelAllowanceMapScreen from './fm_report_travel_map'; // แท็บแผนที่ GPS จุดเบิก — ยังไม่มีต้นฉบับให้ดู

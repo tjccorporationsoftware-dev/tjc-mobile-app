@@ -4,8 +4,8 @@
  * Mobile mockup ของหน้า guarantee_tracking.php (รายการติดตามหนังสือค้ำประกัน)
  * สำหรับแอป tjc-mobile-app (Expo / React Native)
  *
- * สถานะไฟล์นี้: UI MOCKUP — ข้อมูลทั้งหมดเป็น MOCK_GUARANTEES ด้านล่าง
- * ปุ่มลบทำงานแบบ local state เท่านั้น (ยังไม่ยิง guarantee_tracking.php action=delete จริง)
+ * สถานะไฟล์นี้: เชื่อม API จริงแล้ว (GET action=list, POST action=delete) ผ่าน guarantee_tracking.php
+ * — action='list' เป็นการเดา, action='delete' อ้างอิงจาก TODO เดิม ยังไม่ได้ยืนยันกับ backend จริง
  *
  * ตรงกับพฤติกรรม/สูตรจริงจาก guarantee_tracking.php:
  *  - การ์ดสรุป: ทั้งหมด + 7 สถานะการติดตาม (ยังไม่หมดสัญญา/แจ้งซ่อม/กำลังดำเนินการ/ตรวจชำรุด/
@@ -29,9 +29,17 @@
  */
 
 import { FontAwesome5, Ionicons } from '@expo/vector-icons';
+import axios from 'axios';
 import { useRouter } from 'expo-router';
-import React, { useMemo, useState } from 'react';
-import { Alert, FlatList, Modal, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Alert, FlatList, Modal, RefreshControl, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+
+// ✅ Config
+import { API_BASE } from '../../constants/config';
+
+// action สำหรับดึงรายการเป็นการเดา ('list') — ส่วน action: 'delete' อ้างอิงจาก TODO เดิมของไฟล์นี้
+// ยังไม่ได้ยืนยันกับ backend จริงทั้งคู่
+const API_URL = `${API_BASE}/guarantee_tracking.php`;
 
 // ====================================================================
 // Types
@@ -86,147 +94,37 @@ export interface GuaranteeTrackingScreenProps {
 // Mock data
 // ====================================================================
 
-const MOCK_GUARANTEES: Guarantee[] = [
-  {
-    id: 1,
-    projectCode: 'TJC69-014',
-    lgCondition: 'หนังสือค้ำฯ',
-    contractNo: 'สัญญาเลขที่ 45/2569',
-    lgNumber: 'LG-2026-0891',
-    docNo: 'ทน.115/2569',
-    dataSource: 'manual',
-    companyName: 'ทีเจซี',
-    customerName: 'เทศบาลนครสมมติ',
-    bankName: 'ธนาคารกรุงไทย',
-    lgValue: 62500,
-    totalBudget: 1250000,
-    startDateShow: '01/12/2569',
-    endDateShow: '30/11/2570',
-    endDaysLeft: 445,
-    alertDays: 30,
-    warrantyValue: 1,
-    warrantyUnit: 'years',
-    trackStatus: 'ยังไม่หมดสัญญา',
-    agencyAddress: '99 ถ.สมมติ ต.ในเมือง อ.เมือง จ.สมมติ 30000',
-    reqFullname: 'คุณอรทัย ใจดี',
-    reqPosition: 'ผู้จัดการโครงการ',
-    reqDepartment: 'ฝ่ายขาย',
-    contacts: ['คุณสมหญิง (เจ้าหน้าที่พัสดุ) 08x-xxx-1234'],
-    followups: ['12/09/2569 — ยื่นเรื่องขอ LG เรียบร้อย'],
-  },
-  {
-    id: 2,
-    projectCode: 'ABC69-002',
-    lgCondition: 'หนังสือค้ำฯ',
-    contractNo: 'สัญญาเลขที่ 12/2569',
-    lgNumber: 'LG-2026-0755',
-    dataSource: 'import',
-    importSheet: 'นำเข้า ก.ย. 69',
-    companyName: 'เอบีซี',
-    customerName: 'โรงพยาบาลสมมติ',
-    bankName: 'ธนาคารกสิกรไทย',
-    lgValue: 21500,
-    totalBudget: 430000,
-    startDateShow: '10/06/2569',
-    endDateShow: '20/09/2569',
-    endDaysLeft: 8,
-    alertDays: 30,
-    warrantyValue: 6,
-    warrantyUnit: 'months',
-    trackStatus: 'ยังไม่หมดสัญญา',
-    agencyAddress: '55 ถ.การแพทย์ ต.ในเมือง อ.เมือง จ.สมมติ 30000',
-    contacts: ['คุณวิไล (พัสดุ) 08x-xxx-5678'],
-    followups: [],
-  },
-  {
-    id: 3,
-    projectCode: 'TJC68-091',
-    lgCondition: 'ค้ำเเบบจนกว่าจะหมดภาระผูกพันธ์',
-    contractNo: 'สัญญาเลขที่ 8/2568',
-    dataSource: 'manual',
-    companyName: 'ทีเจซี',
-    customerName: 'บริษัท สมมติ จำกัด',
-    bankName: 'ธนาคารไทยพาณิชย์',
-    lgValue: 105000,
-    totalBudget: 2100000,
-    startDateShow: '05/03/2568',
-    endDateShow: '-',
-    endDaysLeft: null,
-    alertDays: 30,
-    warrantyValue: 0,
-    warrantyUnit: 'days',
-    trackStatus: 'ได้รับหนังสือค้ำแล้ว',
-    agencyAddress: '12 ถ.อุตสาหกรรม ต.สมมติ อ.เมือง จ.สมมติ 30000',
-    contacts: [],
-    followups: ['10/03/2569 — ลูกค้าส่งหนังสือค้ำตัวจริงคืนแล้ว', '15/03/2569 — ปิดเรื่องสมบูรณ์'],
-  },
-  {
-    id: 4,
-    projectCode: 'XYZ69-021',
-    lgCondition: 'หนังสือค้ำฯ',
-    contractNo: 'สัญญาเลขที่ 30/2569',
-    dataSource: 'manual',
-    companyName: 'เอ็กซ์วายแซด',
-    customerName: 'เทศบาลนครสมมติ',
-    bankName: 'ธนาคารกรุงเทพ',
-    lgValue: 182500,
-    totalBudget: 3650000,
-    startDateShow: '18/09/2568',
-    endDateShow: '18/09/2569',
-    endDaysLeft: 0,
-    alertDays: 30,
-    warrantyValue: 1,
-    warrantyUnit: 'years',
-    trackStatus: 'แจ้งซ่อม',
-    agencyAddress: '99 ถ.สมมติ ต.ในเมือง อ.เมือง จ.สมมติ 30000',
-    contacts: ['คุณประไพ (หัวหน้าฝ่ายช่าง) 08x-xxx-9012'],
-    followups: ['18/09/2569 — ลูกค้าแจ้งลิฟต์มีเสียงดังผิดปกติ ส่งช่างเข้าตรวจวันนี้'],
-  },
-  {
-    id: 5,
-    projectCode: 'ABC69-003',
-    lgCondition: 'หนังสือค้ำฯ',
-    contractNo: 'สัญญาเลขที่ 19/2569',
-    dataSource: 'manual',
-    companyName: 'เอบีซี',
-    customerName: 'โรงพยาบาลสมมติ',
-    bankName: 'ธนาคารกสิกรไทย',
-    lgValue: 28000,
-    totalBudget: 560000,
-    startDateShow: '25/09/2567',
-    endDateShow: '25/09/2568',
-    endDaysLeft: -365,
-    alertDays: 30,
-    warrantyValue: 1,
-    warrantyUnit: 'years',
-    trackStatus: 'อยู่ระหว่างส่งหนังสือค้ำคืนมา',
-    agencyAddress: '55 ถ.การแพทย์ ต.ในเมือง อ.เมือง จ.สมมติ 30000',
-    contacts: [],
-    followups: ['01/10/2568 — ลูกค้าแจ้งว่าส่งหนังสือค้ำตัวจริงทางไปรษณีย์แล้ว รอตรวจรับ'],
-  },
-  {
-    id: 6,
-    projectCode: 'TJC69-030',
-    lgCondition: 'ค้ำเงินสด',
-    contractNo: 'สัญญาเลขที่ 41/2569',
-    dataSource: 'manual',
-    companyName: 'ทีเจซี',
-    customerName: 'บริษัท สมมติ จำกัด',
-    bankName: '-',
-    lgValue: 210000,
-    totalBudget: 4200000,
-    startDateShow: '20/09/2569',
-    endDateShow: '20/03/2570',
-    endDaysLeft: 190,
-    alertDays: 30,
-    warrantyValue: 6,
-    warrantyUnit: 'months',
-    trackStatus: 'กำลังดำเนินการ',
-    agencyAddress: '77 ถ.พาณิชย์ ต.ในเมือง อ.เมือง จ.สมมติ 30000',
-    contacts: ['คุณพิชญ์ (ผู้จัดการฝ่ายจัดซื้อ) 08x-xxx-3456'],
-    followups: [],
-  },
-];
+// แปลงข้อมูลดิบจาก backend ให้เข้ารูป Guarantee — รองรับหลายชื่อ field เพราะยังไม่มี spec ยืนยัน
+function mapGuarantee(raw: any): Guarantee {
+  return {
+    id: Number(raw.id ?? 0),
+    projectCode: String(raw.projectCode ?? raw.project_code ?? ''),
+    lgCondition: (raw.lgCondition ?? raw.lg_condition ?? 'หนังสือค้ำฯ') as LgCondition,
+    contractNo: String(raw.contractNo ?? raw.contract_no ?? ''),
+    lgNumber: raw.lgNumber ?? raw.lg_number ?? undefined,
+    docNo: raw.docNo ?? raw.doc_no ?? undefined,
+    dataSource: (raw.dataSource ?? raw.data_source ?? 'manual') as 'manual' | 'import',
+    importSheet: raw.importSheet ?? raw.import_sheet ?? undefined,
+    companyName: String(raw.companyName ?? raw.company_name ?? ''),
+    customerName: String(raw.customerName ?? raw.customer_name ?? ''),
+    bankName: String(raw.bankName ?? raw.bank_name ?? ''),
+    lgValue: Number(raw.lgValue ?? raw.lg_value ?? 0),
+    totalBudget: raw.totalBudget != null ? Number(raw.totalBudget) : raw.total_budget != null ? Number(raw.total_budget) : undefined,
+    startDateShow: String(raw.startDateShow ?? raw.start_date_show ?? raw.start_date ?? ''),
+    endDateShow: String(raw.endDateShow ?? raw.end_date_show ?? raw.end_date ?? '-'),
+    endDaysLeft: raw.endDaysLeft ?? raw.end_days_left ?? null,
+    alertDays: Number(raw.alertDays ?? raw.alert_days ?? 30),
+    warrantyValue: Number(raw.warrantyValue ?? raw.warranty_value ?? 0),
+    warrantyUnit: (raw.warrantyUnit ?? raw.warranty_unit ?? 'days') as WarrantyUnit,
+    trackStatus: (raw.trackStatus ?? raw.track_status ?? 'ยังไม่หมดสัญญา') as TrackStatus,
+    agencyAddress: raw.agencyAddress ?? raw.agency_address ?? undefined,
+    reqFullname: raw.reqFullname ?? raw.req_fullname ?? undefined,
+    reqPosition: raw.reqPosition ?? raw.req_position ?? undefined,
+    reqDepartment: raw.reqDepartment ?? raw.req_department ?? undefined,
+    contacts: raw.contacts ?? [],
+    followups: raw.followups ?? [],
+  };
+}
 
 const STATUS_STYLE: Record<TrackStatus, { icon: keyof typeof FontAwesome5.glyphMap; fg: string; bg: string }> = {
   ยังไม่หมดสัญญา: { icon: 'clock', fg: '#2563eb', bg: '#eff6ff' },
@@ -274,11 +172,40 @@ function conditionMeta(cond: LgCondition): { icon: keyof typeof FontAwesome5.gly
 
 export default function GuaranteeTrackingScreen({ onBack }: GuaranteeTrackingScreenProps) {
   const router = useRouter();
-  const [guarantees, setGuarantees] = useState<Guarantee[]>(MOCK_GUARANTEES);
+  const [guarantees, setGuarantees] = useState<Guarantee[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<TrackStatus | 'all'>('all');
   const [companyFilter, setCompanyFilter] = useState<string>('all');
   const [detailModal, setDetailModal] = useState<{ visible: boolean; item?: Guarantee }>({ visible: false });
+
+  const loadData = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
+    setError(null);
+    try {
+      const res = await axios.get(API_URL, { params: { action: 'list' } });
+      const raw = res.data;
+      const list = Array.isArray(raw) ? raw : raw?.data ?? [];
+      setGuarantees(list.map(mapGuarantee));
+    } catch (e) {
+      console.error('load guarantee_tracking failed', e);
+      setError('โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  function onRefresh() {
+    setRefreshing(true);
+    loadData({ silent: true });
+  }
 
   const companies = useMemo(() => Array.from(new Set(guarantees.map((g) => g.companyName))), [guarantees]);
 
@@ -307,10 +234,29 @@ export default function GuaranteeTrackingScreen({ onBack }: GuaranteeTrackingScr
   }, [guarantees, search, statusFilter, companyFilter]);
 
   function handleDelete(item: Guarantee) {
-    // TODO: ต่อ backend จริง -> POST guarantee_tracking.php { action: 'delete', id }
     Alert.alert('ยืนยันลบข้อมูล', `ยืนยันลบข้อมูลการขอเปิด LG หน้างาน: ${item.projectCode} ?`, [
       { text: 'ยกเลิก', style: 'cancel' },
-      { text: 'ลบข้อมูล', style: 'destructive', onPress: () => setGuarantees((prev) => prev.filter((g) => g.id !== item.id)) },
+      {
+        text: 'ลบข้อมูล',
+        style: 'destructive',
+        onPress: async () => {
+          const prev = guarantees;
+          setGuarantees((g) => g.filter((x) => x.id !== item.id));
+          try {
+            const fd = new FormData();
+            fd.append('action', 'delete');
+            fd.append('id', String(item.id));
+            const res = await axios.post(API_URL, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+            if (!(res.data?.status === 'success' || res.data?.success)) {
+              throw new Error(res.data?.message || 'delete failed');
+            }
+          } catch (e) {
+            console.error('delete guarantee failed', e);
+            setGuarantees(prev); // rollback ถ้าลบไม่สำเร็จ
+            Alert.alert('ลบไม่สำเร็จ', 'กรุณาลองใหม่อีกครั้ง');
+          }
+        },
+      },
     ]);
   }
 
@@ -491,6 +437,18 @@ export default function GuaranteeTrackingScreen({ onBack }: GuaranteeTrackingScr
 
   const d = detailModal.item;
 
+  if (loading && guarantees.length === 0) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="dark-content" />
+        <View style={styles.emptyBox}>
+          <ActivityIndicator size="large" color="#7c3aed" />
+          <Text style={styles.emptyText}>กำลังโหลดข้อมูล...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" />
@@ -499,11 +457,22 @@ export default function GuaranteeTrackingScreen({ onBack }: GuaranteeTrackingScr
         keyExtractor={(g) => String(g.id)}
         renderItem={renderCard}
         ListHeaderComponent={renderHeader}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#7c3aed']} tintColor="#7c3aed" />}
         ListEmptyComponent={
-          <View style={styles.emptyBox}>
-            <Ionicons name="folder-open-outline" size={28} color="#cbd5e1" />
-            <Text style={styles.emptyText}>ไม่พบข้อมูลการขอเปิดหนังสือค้ำประกัน</Text>
-          </View>
+          error ? (
+            <View style={styles.emptyBox}>
+              <Ionicons name="alert-circle-outline" size={28} color="#ef4444" />
+              <Text style={styles.emptyText}>{error}</Text>
+              <TouchableOpacity style={styles.iconBtn} onPress={() => loadData()}>
+                <Text style={styles.iconBtnText}>ลองใหม่</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={styles.emptyBox}>
+              <Ionicons name="folder-open-outline" size={28} color="#cbd5e1" />
+              <Text style={styles.emptyText}>ไม่พบข้อมูลการขอเปิดหนังสือค้ำประกัน</Text>
+            </View>
+          )
         }
         contentContainerStyle={{ paddingBottom: 24 }}
         showsVerticalScrollIndicator={false}
