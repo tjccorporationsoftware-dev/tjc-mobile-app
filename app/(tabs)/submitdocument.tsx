@@ -5,8 +5,10 @@
  * "แก้ไขเอกสาร" (มี docId) เหมือนต้นฉบับที่เป็นไฟล์เดียวกันสลับโหมดด้วย $is_edit_mode
  * เชื่อมจากปุ่ม "แก้ไข" ในการ์ดเอกสารของ DocumentDashboardScreen
  *
- * สถานะไฟล์นี้: UI MOCKUP — ตัวเลือก (บริษัท/ซัพพลายเออร์/บัญชี/ธนาคาร) เป็นข้อมูลตัวอย่าง
- * ยังไม่ยิง POST action=submit_doc จริง (ดู TODO ใน handleSave)
+ * สถานะไฟล์นี้: เชื่อม API จริงแล้ว (GET action=detail ตอนแก้ไข, POST action=submit_doc ตอนบันทึก)
+ * ผ่าน SubmitDocument.php — action='submit_doc'/param names อ้างอิงจาก TODO เดิม, action='detail'
+ * เป็นการเดา ยังไม่ได้ยืนยันกับ backend จริงทั้งคู่ ตัวเลือกดรอปดาวน์ (บริษัท/ซัพพลายเออร์/บัญชี/
+ * ธนาคาร) ยังเป็นข้อมูลตัวอย่างในเครื่อง — ยังไม่มี action สำหรับโหลดลิสต์จริง
  *
  * ตรงกับโครงสร้าง/สูตร/validation จริงจาก SubmitDocument.php:
  *  - ข้อมูลเอกสาร: doc_type (PO/AX แบบปุ่มสวิตช์), เลขที่เอกสาร (กรองให้เหลือแค่ตัวเลข/ขีด),
@@ -34,12 +36,18 @@
  */
 
 import { Ionicons } from '@expo/vector-icons';
-import React, { useMemo, useState } from 'react';
-import { Alert, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import axios from 'axios';
+import React, { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Alert, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { useAuth } from '../_layout';
 // ✅ Config
 import { API_BASE } from '../../constants/config';
+
+// action='detail' สำหรับโหลดข้อมูลตอนแก้ไขเป็นการเดา — ส่วน action='submit_doc' + payload
+// อ้างอิงจาก TODO เดิมของไฟล์นี้ ยังไม่ได้ยืนยันกับ backend จริงทั้งคู่
+const API_URL = `${API_BASE}/SubmitDocument.php`;
 
 // ====================================================================
 // Types
@@ -81,7 +89,6 @@ export interface SubmitDocumentScreenProps {
 // Mock option lists
 // ====================================================================
 
-const CURRENT_USER = 'คุณธนา';
 const COMPANIES = ['บริษัท ทีเจซี กรุ๊ป จำกัด', 'บริษัท เอบีซี เอ็นจิเนียริ่ง จำกัด', 'บริษัท เอ็กซ์วายแซด จำกัด'];
 const SUPPLIERS_LIST = ['ร้าน สมมติอิเล็กทรอนิกส์', 'บริษัท วัสดุก่อสร้างสมมติ จำกัด', 'หจก. อะไหล่ปรับอากาศสมมติ', 'บริษัท ลิฟต์สมมติ จำกัด', 'ร้าน โซล่าเซลล์สมมติ', 'ร้านเครือข่ายสมมติ'];
 const ACCOUNT_NAMES = ['ร้าน สมมติอิเล็กทรอนิกส์', 'บริษัท วัสดุก่อสร้างสมมติ จำกัด', 'หจก. อะไหล่ปรับอากาศสมมติ', 'บริษัท ลิฟต์สมมติ จำกัด'];
@@ -124,33 +131,35 @@ function initialForm(): FormState {
   };
 }
 
-// mock ข้อมูลเดิมสำหรับโหมดแก้ไข — ใช้ id เดียวกับ DocumentDashboardScreen (1-6)
-const MOCK_EDIT_DATA: Record<string, Partial<FormState>> = {
-  '2': {
-    docType: 'AX', docNumber: '2245', companyId: COMPANIES[0], jobSite: 'TJC69-030', supplierName: SUPPLIERS_LIST[1],
-    description: 'ค่าวัสดุก่อสร้างงวดที่ 1', amount: '128500', accountName: ACCOUNT_NAMES[1], bankAccount: BANK_ACCOUNTS[1], bankName: BANKS[1],
-    attachmentSelect: 'รอใบกำกับภาษี 7%',
-  },
-  '3': {
-    docType: 'PO', docNumber: '6877', companyId: COMPANIES[1], jobSite: 'ABC69-002', supplierName: SUPPLIERS_LIST[2],
-    description: 'ค่าอะไหล่ปรับอากาศ', amount: '67200', isCredit: true, creditTerm: '30', accountName: ACCOUNT_NAMES[2], bankAccount: BANK_ACCOUNTS[2], bankName: BANKS[2],
-    attachmentSelect: 'ใบกำกับภาษี 7%', taxRecvDept: 'buyer', taxInvoiceNumbers: ['INV-7701'],
-  },
-  '4': {
-    docType: 'AX', docNumber: '2198', companyId: COMPANIES[0], jobSite: 'TJC68-091', supplierName: SUPPLIERS_LIST[3],
-    description: 'ค่าติดตั้งลิฟต์โดยสาร งวดสุดท้าย', amount: '350000', isCredit: true, creditTerm: '60', accountName: ACCOUNT_NAMES[3], bankAccount: BANK_ACCOUNTS[3], bankName: BANKS[3],
-    attachmentSelect: 'ใบสำคัญจ่าย', whtTax: '3%',
-  },
-  '6': {
-    docType: 'AX', docNumber: '2050', companyId: COMPANIES[1], jobSite: 'ABC69-003', supplierName: SUPPLIERS_LIST[5],
-    description: 'ค่าบำรุงรักษาระบบเครือข่าย', amount: '15800', accountName: '', bankAccount: BANK_ACCOUNTS[1], bankName: BANKS[1],
-    attachmentSelect: 'ใบเสร็จรับเงิน',
-  },
-};
-
 // ====================================================================
 // Helpers
 // ====================================================================
+
+// แปลงข้อมูลดิบจาก backend ให้เข้ารูป FormState (บางส่วน) — รองรับหลายชื่อ field เพราะยังไม่มี spec ยืนยัน
+function mapFormFromRaw(raw: any): Partial<FormState> {
+  return {
+    docType: (raw.docType ?? raw.doc_type ?? 'PO') as DocType,
+    docNumber: String(raw.docNumber ?? raw.doc_number ?? ''),
+    companyId: String(raw.companyId ?? raw.company_id ?? ''),
+    jobSite: String(raw.jobSite ?? raw.job_site ?? ''),
+    supplierName: String(raw.supplierName ?? raw.supplier_name ?? ''),
+    description: String(raw.description ?? ''),
+    amount: String(raw.amount ?? ''),
+    isCredit: Boolean(raw.isCredit ?? raw.is_credit ?? false),
+    creditTerm: raw.creditTerm != null ? String(raw.creditTerm) : raw.credit_term != null ? String(raw.credit_term) : '',
+    accountName: String(raw.accountName ?? raw.account_name ?? ''),
+    bankAccount: String(raw.bankAccount ?? raw.bank_account ?? ''),
+    bankName: String(raw.bankName ?? raw.bank_name ?? ''),
+    attachmentSelect: (raw.attachmentSelect ?? raw.attachment_select ?? '') as AttachmentType | '',
+    taxRecvDept: (raw.taxRecvDept ?? raw.tax_recv_dept ?? '') as TaxDept,
+    taxInvoiceNumbers: Array.isArray(raw.taxInvoiceNumbers ?? raw.tax_recv_inv) && (raw.taxInvoiceNumbers ?? raw.tax_recv_inv).length > 0
+      ? raw.taxInvoiceNumbers ?? raw.tax_recv_inv
+      : [''],
+    taxNote: String(raw.taxNote ?? raw.tax_recv_note ?? ''),
+    whtTax: (raw.whtTax ?? raw.wht_tax ?? 'ไม่มี') as WhtRate,
+    whtAmount: String(raw.whtAmount ?? raw.wht_amount ?? ''),
+  };
+}
 
 function toFloat(s: string): number {
   return parseFloat((s || '').replace(/,/g, '')) || 0;
@@ -210,8 +219,37 @@ function ChipPicker({ options, value, onChange }: { options: string[]; value: st
 // ====================================================================
 
 export default function SubmitDocumentScreen({ docId, onBack, onSaved }: SubmitDocumentScreenProps) {
+  const { user } = useAuth();
+  const currentUserLabel = user?.fullname || user?.username || '';
+
   const isEditMode = !!docId;
-  const [form, setForm] = useState<FormState>(() => ({ ...initialForm(), ...(docId ? MOCK_EDIT_DATA[docId] ?? {} : {}) }));
+  const [form, setForm] = useState<FormState>(initialForm());
+  const [loadingEdit, setLoadingEdit] = useState(isEditMode);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!docId) return;
+    let cancelled = false;
+    (async () => {
+      setLoadingEdit(true);
+      setLoadError(null);
+      try {
+        const res = await axios.get(API_URL, { params: { action: 'detail', doc_id: docId } });
+        const raw = res.data?.data ?? res.data;
+        if (cancelled || !raw) return;
+        setForm((f) => ({ ...f, ...mapFormFromRaw(raw) }));
+      } catch (e) {
+        console.error('load SubmitDocument detail failed', e);
+        if (!cancelled) setLoadError('โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+      } finally {
+        if (!cancelled) setLoadingEdit(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [docId]);
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -236,11 +274,6 @@ export default function SubmitDocumentScreen({ docId, onBack, onSaved }: SubmitD
   }
 
   function handleSave() {
-    // TODO: ต่อ backend จริง -> POST SubmitDocument.php action=submit_doc (+ edit_doc_id ถ้าแก้ไข)
-    // payload ตรงชื่อกับ $_POST[...] ในต้นฉบับ: doc_type, doc_number, company_id, job_site,
-    // ordered_by, supplier_name, description, amount, is_credit, credit_term, account_name,
-    // bank_account, bank_name, attachment_select, tax_recv_dept + existing_inv[]/tax_recv_inv[]/
-    // tax_file_upload[]/tax_recv_note, wht_tax, wht_amount
     if (!form.docNumber.trim()) return Alert.alert('กรอกข้อมูลไม่ครบ', 'กรุณาระบุเลขที่เอกสาร');
     if (!form.companyId) return Alert.alert('กรอกข้อมูลไม่ครบ', 'กรุณาเลือกบริษัท (ผู้ซื้อ)');
     if (!form.jobSite.trim()) return Alert.alert('กรอกข้อมูลไม่ครบ', 'กรุณาระบุโครงการ/หน้างาน');
@@ -260,18 +293,81 @@ export default function SubmitDocumentScreen({ docId, onBack, onSaved }: SubmitD
 
     Alert.alert('บันทึกข้อมูล?', 'ยืนยันบันทึกเอกสารนี้', [
       { text: 'ยกเลิก', style: 'cancel' },
-      {
-        text: 'บันทึก',
-        onPress: () => {
-          Alert.alert('บันทึกสำเร็จ (mock)', isEditMode ? 'แก้ไขเอกสารเรียบร้อย!' : 'ลงสมุดเสนอเอกสารเรียบร้อย!', [
-            { text: 'ตกลง', onPress: () => (onSaved ? onSaved() : handleBack()) },
-          ]);
-        },
-      },
+      { text: 'บันทึก', onPress: () => void submitToBackend() },
     ]);
   }
 
+  async function submitToBackend() {
+    // payload ตรงชื่อกับ $_POST[...] ที่ TODO เดิมของไฟล์นี้ระบุไว้ — ยังไม่ได้ยืนยันกับ backend จริง
+    const fd = new FormData();
+    fd.append('action', 'submit_doc');
+    if (isEditMode && docId) fd.append('edit_doc_id', docId);
+    fd.append('doc_type', form.docType);
+    fd.append('doc_number', form.docNumber);
+    fd.append('company_id', form.companyId);
+    fd.append('job_site', form.jobSite);
+    fd.append('ordered_by', currentUserLabel);
+    fd.append('supplier_name', form.supplierName);
+    fd.append('description', form.description);
+    fd.append('amount', form.amount);
+    fd.append('is_credit', form.isCredit ? '1' : '0');
+    if (form.isCredit) fd.append('credit_term', form.creditTerm);
+    fd.append('account_name', form.accountName);
+    fd.append('bank_account', form.bankAccount);
+    fd.append('bank_name', form.bankName);
+    fd.append('attachment_select', form.attachmentSelect);
+    if (form.attachmentSelect === 'ใบกำกับภาษี 7%') {
+      fd.append('tax_recv_dept', form.taxRecvDept);
+      form.taxInvoiceNumbers.filter((v) => v.trim()).forEach((v) => fd.append('tax_recv_inv[]', v.trim()));
+      fd.append('tax_recv_note', form.taxNote);
+    }
+    fd.append('wht_tax', form.whtTax);
+    fd.append('wht_amount', String(whtAmount));
+    // หมายเหตุ: การแนบไฟล์ใบกำกับภาษี (tax_file_upload[]) ยังเป็น stub — ต้องเพิ่ม expo-document-picker ก่อน
+
+    setSaving(true);
+    try {
+      const res = await axios.post(API_URL, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      if (res.data?.status === 'success' || res.data?.success) {
+        Alert.alert('บันทึกสำเร็จ', isEditMode ? 'แก้ไขเอกสารเรียบร้อย!' : 'ลงสมุดเสนอเอกสารเรียบร้อย!', [
+          { text: 'ตกลง', onPress: () => (onSaved ? onSaved() : handleBack()) },
+        ]);
+      } else {
+        Alert.alert('บันทึกไม่สำเร็จ', res.data?.message || 'กรุณาลองใหม่อีกครั้ง');
+      }
+    } catch (e) {
+      console.error('submit_doc failed', e);
+      Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถบันทึกข้อมูลได้ กรุณาลองใหม่อีกครั้ง');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const showTaxReceiveBox = form.attachmentSelect === 'ใบกำกับภาษี 7%';
+
+  if (loadingEdit) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="dark-content" />
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+          <ActivityIndicator size="large" color="#4f46e5" />
+          <Text style={{ color: '#94a3b8', fontSize: 12.5 }}>กำลังโหลดข้อมูล...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="dark-content" />
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 20 }}>
+          <Ionicons name="alert-circle-outline" size={28} color="#ef4444" />
+          <Text style={{ color: '#64748b', fontSize: 13, textAlign: 'center' }}>{loadError}</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -324,7 +420,7 @@ export default function SubmitDocumentScreen({ docId, onBack, onSaved }: SubmitD
               <View style={{ flex: 1 }}>
                 <FieldLabel text="ผู้เปิดเอกสาร" />
                 <View style={styles.readonlyInput}>
-                  <Text style={styles.readonlyInputText}>{CURRENT_USER}</Text>
+                  <Text style={styles.readonlyInputText}>{currentUserLabel}</Text>
                 </View>
               </View>
             </View>
@@ -442,7 +538,7 @@ export default function SubmitDocumentScreen({ docId, onBack, onSaved }: SubmitD
 
                 <FieldLabel text="ผู้ลงรับ" />
                 <View style={styles.readonlyInput}>
-                  <Text style={styles.readonlyInputText}>{CURRENT_USER}</Text>
+                  <Text style={styles.readonlyInputText}>{currentUserLabel}</Text>
                 </View>
               </View>
             )}
@@ -482,9 +578,9 @@ export default function SubmitDocumentScreen({ docId, onBack, onSaved }: SubmitD
               <Ionicons name="close" size={16} color="#475569" />
               <Text style={styles.cancelBtnText}>ยกเลิก</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
-              <Ionicons name="save-outline" size={17} color="#fff" />
-              <Text style={styles.saveBtnText}>บันทึกข้อมูล</Text>
+            <TouchableOpacity style={[styles.saveBtn, saving && { opacity: 0.7 }]} onPress={handleSave} disabled={saving}>
+              {saving ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="save-outline" size={17} color="#fff" />}
+              <Text style={styles.saveBtnText}>{saving ? 'กำลังบันทึก...' : 'บันทึกข้อมูล'}</Text>
             </TouchableOpacity>
           </View>
         </View>

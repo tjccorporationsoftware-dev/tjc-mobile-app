@@ -1,5 +1,4 @@
 import { Ionicons } from '@expo/vector-icons';
-import axios from 'axios';
 // ปรับ path เหล่านี้ให้ตรงกับตำแหน่งไฟล์จริงในโปรเจกต์ ถ้าไม่ได้วางไว้โฟลเดอร์เดียวกัน
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -16,31 +15,33 @@ import {
   View,
 } from 'react-native';
 
+import { useAuth } from '../_layout';
 // ✅ Config
-import { API_BASE } from '../../constants/config';
+import { API_MODULES } from '../../constants/config';
+import { apiMobileGet, apiMobilePost } from '../service/api_mobile';
 
 import ProjectAccountingScreen from './projectaccounting';
 import ProjectFollowupScreen from './projectfollowup';
 
 /**
- * แดชบอร์ดบัญชีลูกหนี้ (mobile)
- * แปลงจากหน้า accounting_dashboard.php ให้เป็นหน้าจอมือถือ
- * ตารางแนวนอนของเดสก์ท็อปถูกแปลงเป็นการ์ดรายโครงการ แต่คงคอลัมน์ ปุ่ม และสถานะทั้งหมดไว้
+ * แดชบอร์ดบัญชีลูกหนี้ (mobile) — เชื่อม accounting_API_mobile.php ตัวจริง
+ * ตามสเปกใน mobile_api/docs/README_accounting.md
+ *
+ * action ที่ใช้จริง: get_dashboard (การ์ด KPI รวม + แยกบริษัท), get_list (รายการ),
+ * get_detail (popup "ดูข้อมูล" — ดึงตอนเปิดเท่านั้น ไม่ฝังมากับ get_list), save_debt_owner
+ *
+ * ตัด "ทำเครื่องหมายจ่ายแล้ว" (mark_paid) และปุ่ม Export ออกทั้งคู่ — ไม่มี action เหล่านี้ใน
+ * accounting_API_mobile.php เลย (เอกสารข้อ 8 ระบุชัดว่า Export ไม่ได้ทำเป็น endpoint ฝั่งเซิร์ฟเวอร์
+ * ส่วนสถานะ "ชำระเรียบร้อย" เป็นผลคำนวณอัตโนมัติจากยอดจ่าย ไม่ใช่ปุ่มกดบันทึกเอง) ปุ่ม "ติดตาม"/
+ * "ลงบัญชี" ยังอยู่ครบเพราะพาไปหน้าจอจริงอื่น (ProjectFollowupScreen / ProjectAccountingScreen)
  */
 
-// action names เป็นการเดาตาม pattern single-file action-router ของโปรเจกต์นี้ (accounting_dashboard.php
-// ?action=xxx) — แทนที่ REST endpoint สมมติเดิม (/api/accounting/...) ที่ไม่ตรงกับ backend จริง
-// ยังไม่ได้ยืนยันกับ backend จริง
-const ACCOUNTING_API_URL = `${API_BASE}/accounting_dashboard.php`;
-const API_ACTIONS = {
-  dashboard: 'dashboard',
-  markPaid: 'mark_paid',
-  exportFiltered: 'export',
-} as const;
+const ACCOUNTING_API_URL = `${API_MODULES}/accounting_API_mobile.php`;
 
 type FollowState = 'not_started' | 'following' | 'closed';
 type PayState = 'none' | 'paid';
 
+// ตรงกับ kpi_all ของ get_dashboard (README_accounting.md ข้อ 4.2)
 type Summary = {
   initialBudget: number;
   debtorsDue: number;
@@ -53,12 +54,30 @@ type Summary = {
   wipAmount: number;
 };
 
+const EMPTY_SUMMARY: Summary = {
+  initialBudget: 0, debtorsDue: 0, outstanding: 0, jobsWithPayment: 0,
+  totalReceived: 0, netReceived: 0, receivedToday: 0, wipJobs: 0, wipAmount: 0,
+};
+
+function mapSummary(k: any): Summary {
+  return {
+    initialBudget: Number(k?.total_budget ?? 0),
+    debtorsDue: Number(k?.debtor_customers_count ?? 0),
+    outstanding: Number(k?.total_outstanding ?? 0),
+    jobsWithPayment: Number(k?.projects_with_income ?? 0),
+    totalReceived: Number(k?.total_received ?? 0),
+    netReceived: Number(k?.total_net ?? 0),
+    receivedToday: Number(k?.today_received ?? 0),
+    wipJobs: Number(k?.wip_projects ?? 0),
+    wipAmount: Number(k?.wip_budget ?? 0),
+  };
+}
+
 // 🌟 [เพิ่มใหม่] ประเภทการค้ำประกัน — ใช้กำหนดว่า modal "ดูข้อมูล" จะโชว์ฟิลด์ไหนบ้าง
-// ตรงกับเงื่อนไข isContract/isCash/isEndless/isCompany ใน openDetailsModal() ของต้นฉบับ
 type GuaranteeType = 'ไม่มี' | 'หนังสือค้ำ' | 'เงินสด' | 'ค้ำแบบจนกว่าจะหมดภาระผูกพันธ์' | 'บริษัทค้ำประกัน';
 
-// 🌟 [เพิ่มใหม่] ข้อมูลรายละเอียดสำหรับ modal "ดูข้อมูล" — ตรงกับ data-info JSON ที่ปุ่ม
-// ดูข้อมูลของจริงฝังไว้ (openDetailsModal ใน accounting_dashboard.php)
+// ตรงกับ detail{} ของ get_detail (README_accounting.md ข้อ 4.4) — ดึงตอนเปิด modal เท่านั้น
+// (ไม่ได้ฝังมากับแถวของ get_list เพราะจะกลายเป็นยิง API ต่อแถวตอนโหลดลิสต์)
 type ProjectDetail = {
   contractNo: string;
   contractFile?: string;
@@ -80,43 +99,101 @@ type ProjectDetail = {
   warranty: string;
 };
 
+function guaranteeTone(daysLeft: number | null, isFinished: boolean): 'green' | 'amber' | 'red' | 'gray' {
+  if (isFinished) return 'gray';
+  if (daysLeft === null) return 'amber';
+  if (daysLeft < 0) return 'red';
+  if (daysLeft <= 30) return 'amber';
+  return 'green';
+}
+
+function mapProjectDetail(d: any): ProjectDetail {
+  return {
+    contractNo: String(d?.contract_no || d?.purchase_order_no || '-'),
+    contractFile: d?.contract_file || undefined,
+    startDate: String(d?.start_date_thai || d?.start_date || '-'),
+    endDate: String(d?.end_date_thai || d?.end_date || '-'),
+    countdownText: String(d?.contract_countdown || '-'),
+    countdownTone: guaranteeTone(d?.contract_days_left ?? null, Boolean(d?.contract_is_finished)),
+    customerAffiliation: String(d?.customer_affiliation || d?.customer_name || '-'),
+    contactPerson: String(d?.contact_person || '-'),
+    contactPhone: String(d?.contact_phone || ''),
+    customerAddress: String(d?.customer_address || '-'),
+    guaranteeType: (d?.guarantee_type || 'ไม่มี') as GuaranteeType,
+    bankName: String(d?.bank_name || '-'),
+    guaranteeNo: String(d?.guarantee_no || '-'),
+    guaranteeAmount: Number(d?.guarantee_amount ?? 0),
+    guaranteePercent: Number(d?.guarantee_percent ?? 0),
+    guaranteeStart: String(d?.guarantee_start_date_thai || d?.guarantee_start_date || '-'),
+    guaranteeEnd: String(d?.guarantee_end_date_thai || d?.guarantee_end_date || '-'),
+    warranty: String(d?.warranty || '-'),
+  };
+}
+
+// ตรงกับ 1 แถวของ get_list (README_accounting.md ข้อ 4.3) — ชื่อ field ในแอปคงไว้แบบเดิม
+// เพื่อไม่ต้องแตะ UI ทั้งหมด แต่ mapProject() ด้านล่างอ่านจากคีย์ snake_case จริง
 type Project = {
   id: string | number;
   jobNo: string;
   company: string;
   customer: string;
   projectName: string;
-  owner: string;
+  owner: string; // debt_name — ผู้รับผิดชอบติดตามหนี้
   closedBy: string;
   closedAt?: string;
   initialBudget: number;
   paidAmount: number;
-  netReceived: number;
   outstanding: number;
   followState: FollowState;
   followDate?: string;
   payState: PayState;
   payDate?: string;
   note?: string;
-  detail?: ProjectDetail; // 🌟 [เพิ่มใหม่] ใช้โชว์ใน modal ปุ่ม "ดูข้อมูล"
 };
+
+function mapProject(raw: any): Project {
+  const followClosed = Number(raw.follow_closed ?? 0) === 1;
+  const followState: FollowState = followClosed
+    ? 'closed'
+    : String(raw.latest_follow_status_raw || '').trim() !== ''
+      ? 'following'
+      : 'not_started';
+  return {
+    id: raw.project_id ?? raw.id,
+    jobNo: String(raw.display_code ?? ''),
+    company: String(raw.company_name ?? ''),
+    customer: String(raw.customer_name ?? ''),
+    projectName: String(raw.project_name ?? ''),
+    owner: String(raw.debt_name || 'ยังไม่ระบุ'),
+    closedBy: String(raw.closed_by || '-'),
+    closedAt: raw.closed_at_thai || undefined,
+    initialBudget: Number(raw.project_budget ?? 0),
+    paidAmount: Number(raw.total_received_amount ?? 0),
+    outstanding: Number(raw.outstanding_amount ?? 0),
+    followState,
+    followDate: raw.latest_follow_at_thai || undefined,
+    payState: raw.payment_state === 'paid_full' ? 'paid' : 'none',
+    payDate: raw.latest_pay_at_thai || undefined,
+    note: raw.display_remark && raw.display_remark !== '-' ? String(raw.display_remark) : undefined,
+  };
+}
 
 type DashboardData = {
   summary: Summary;
   projects: Project[];
-  asOfDate: string;
-  fiscalYear: string;
-  paidReadyCount: number;
-  // 🌟 [เพิ่มใหม่] ข้อมูลสรุปแยกตามบริษัท สำหรับส่วน "ดูข้อมูลบัญชีแยกตามบริษัท"
   companies: CompanyBreakdown[];
 };
 
-// 🌟 [เพิ่มใหม่] สรุป KPI ต่อบริษัทหนึ่งใบ (โครงสร้างเดียวกับ Summary รวม)
+// 🌟 [เพิ่มใหม่] สรุป KPI ต่อบริษัทหนึ่งใบ (โครงสร้างเดียวกับ Summary รวม) — kpi_by_company[]
 type CompanyBreakdown = {
   id: string;
   name: string;
   summary: Summary;
 };
+
+function mapCompanyBreakdown(c: any): CompanyBreakdown {
+  return { id: String(c.company_id ?? ''), name: String(c.company_name ?? ''), summary: mapSummary(c) };
+}
 
 type Props = {
   onBackToMain?: () => void;
@@ -125,151 +202,6 @@ type Props = {
   onFollowProject?: (project: Project) => void;
   onRecordProject?: (project: Project) => void;
 };
-
-const sample: DashboardData = {
-  asOfDate: '09/09/2026',
-  fiscalYear: 'ปี ค.ศ. 2026',
-  paidReadyCount: 2,
-  summary: {
-    initialBudget: 834500,
-    debtorsDue: 3,
-    outstanding: 738500,
-    jobsWithPayment: 2,
-    totalReceived: 96000,
-    netReceived: 95102.8,
-    receivedToday: 0,
-    wipJobs: 0,
-    wipAmount: 0,
-  },
-  projects: [
-    {
-      id: 548, jobNo: '548', company: 'ASCENT', customer: 'ไม่ระบุ',
-      projectName: 'จัดซื้อครุภัณฑ์สำนักงาน บริษัท เจริญกิจ...',
-      owner: 'ปรีชา รักไทย', closedBy: 'จรัญ ใจดี', closedAt: '22/06/2026 15:16',
-      initialBudget: 64000, paidAmount: 0, netReceived: 0, outstanding: 64000,
-      followState: 'not_started', payState: 'none',
-      detail: {
-        contractNo: 'PO-2026-548', startDate: '01/05/2026', endDate: '01/08/2026',
-        countdownText: 'เลยกำหนด 30 วัน', countdownTone: 'red',
-        customerAffiliation: 'ไม่ระบุ', contactPerson: 'ไม่ระบุ', contactPhone: '', customerAddress: 'ไม่ระบุ',
-        guaranteeType: 'ไม่มี', bankName: '-', guaranteeNo: '-', guaranteeAmount: 0, guaranteePercent: 0,
-        guaranteeStart: '-', guaranteeEnd: '-', warranty: '-',
-      },
-    },
-    {
-      id: 547, jobNo: '547', company: 'A.R.T', customer: 'ไม่ระบุ',
-      projectName: 'วางระบบเครือข่ายคอมพิวเตอร์ บริษัท เ...',
-      owner: 'วิราพร รักไทย', closedBy: 'อรทัย รักไทย', closedAt: '17/06/2026 11:20',
-      initialBudget: 225600, paidAmount: 0, netReceived: 0, outstanding: 225600,
-      followState: 'not_started', payState: 'none',
-      detail: {
-        contractNo: 'CT-2026-547', startDate: '17/06/2026', endDate: '17/06/2027',
-        countdownText: 'เหลือ 280 วัน', countdownTone: 'green',
-        customerAffiliation: 'บริษัท เจริญกิจเจริญทรัพย์ จำกัด', contactPerson: 'คุณสมหญิง ใจงาม',
-        contactPhone: 'โทร: 08x-xxx-1234, LINE: @charoenkit', customerAddress: '99 ถ.สมมติ ต.ในเมือง อ.เมือง จ.สมมติ 30000',
-        guaranteeType: 'หนังสือค้ำ', bankName: 'ธนาคารกรุงไทย', guaranteeNo: 'LG-9981',
-        guaranteeAmount: 11280, guaranteePercent: 5, guaranteeStart: '17/06/2026', guaranteeEnd: '17/06/2027', warranty: '1 ปี',
-      },
-    },
-    {
-      id: 546, jobNo: '546', company: 'A.R.T', customer: 'ไม่ระบุ',
-      projectName: 'ติดตั้งระบบโซล่าเซลล์ บริษัท เจริญกิจเจ...',
-      owner: 'วิราพร รักไทย', closedBy: 'อรทัย รักไทย', closedAt: '23/06/2026 08:31',
-      initialBudget: 64000, paidAmount: 64000, netReceived: 63401.87, outstanding: 0,
-      followState: 'closed', payState: 'paid',
-      detail: {
-        contractNo: 'CT-2026-546', startDate: '23/06/2026', endDate: '23/12/2026',
-        countdownText: 'เสร็จสิ้นแล้ว', countdownTone: 'gray',
-        customerAffiliation: 'บริษัท เจริญกิจเจริญทรัพย์ จำกัด', contactPerson: 'คุณวิชัย มั่นคง',
-        contactPhone: 'โทร: 08x-xxx-5678', customerAddress: '12 ถ.อุตสาหกรรม ต.สมมติ อ.เมือง จ.สมมติ 30000',
-        guaranteeType: 'เงินสด', bankName: '-', guaranteeNo: 'RC-4562',
-        guaranteeAmount: 3200, guaranteePercent: 5, guaranteeStart: '23/06/2026', guaranteeEnd: '23/12/2026', warranty: '6 เดือน',
-      },
-    },
-    {
-      id: 545, jobNo: '545', company: 'TJC', customer: 'ไม่ระบุ',
-      projectName: 'ปรับปรุงระบบไฟฟ้าภายในอาคาร บริษัท เ...',
-      owner: 'วิชัย ใจดี', closedBy: 'ปรีชา ใจดี', closedAt: '25/06/2026 15:54',
-      initialBudget: 448900, paidAmount: 0, netReceived: 0, outstanding: 448900,
-      followState: 'following', payState: 'none',
-      note: '12/6/69 แบ่งจ่ายเป็นงวด 2 งวด งวดละ 224,450 บาท งวดที่ 1 ตุลาคม 2569 งวดที่ 2 เมษา 70',
-      detail: {
-        contractNo: 'CT-2026-545', startDate: '25/06/2026', endDate: '-',
-        countdownText: 'ค้ำจนกว่าจะหมดภาระผูกพัน', countdownTone: 'amber',
-        customerAffiliation: 'บริษัท สมมติ จำกัด', contactPerson: 'คุณอรทัย ใจดี',
-        contactPhone: 'โทร: 08x-xxx-9012, LINE: @sammati', customerAddress: '77 ถ.พาณิชย์ ต.ในเมือง อ.เมือง จ.สมมติ 30000',
-        guaranteeType: 'ค้ำแบบจนกว่าจะหมดภาระผูกพันธ์', bankName: 'ธนาคารกสิกรไทย', guaranteeNo: 'LG-7712',
-        guaranteeAmount: 22445, guaranteePercent: 5, guaranteeStart: '25/06/2026', guaranteeEnd: '-', warranty: '-',
-      },
-    },
-    {
-      id: 544, jobNo: '544', company: 'A.R.T', customer: 'ไม่ระบุ',
-      projectName: 'ติดตั้งระบบกล้องวงจรปิด บริษัท เจริญ...',
-      owner: 'วิราพร รักไทย', closedBy: 'อรทัย รักไทย', closedAt: '11/07/2026 14:20',
-      initialBudget: 32000, paidAmount: 32000, netReceived: 31700.93, outstanding: 0,
-      followState: 'closed', payState: 'paid',
-      note: 'รับเช็ค 21/05/2569',
-      detail: {
-        contractNo: 'CT-2026-544', startDate: '11/07/2026', endDate: '11/07/2027',
-        countdownText: 'เสร็จสิ้นแล้ว', countdownTone: 'gray',
-        customerAffiliation: 'บริษัท เจริญกิจเจริญทรัพย์ จำกัด', contactPerson: 'คุณประไพ ยิ้มแย้ม',
-        contactPhone: 'โทร: 08x-xxx-3456', customerAddress: '55 ถ.การแพทย์ ต.ในเมือง อ.เมือง จ.สมมติ 30000',
-        guaranteeType: 'หนังสือค้ำ', bankName: 'ธนาคารไทยพาณิชย์', guaranteeNo: 'LG-6633',
-        guaranteeAmount: 1600, guaranteePercent: 5, guaranteeStart: '11/07/2026', guaranteeEnd: '11/07/2027', warranty: '1 ปี',
-      },
-    },
-  ],
-  // 🌟 [เพิ่มใหม่] ยอดแยกตามบริษัท — รวมกันแล้วต้องเท่ากับ summary รวมด้านบนเป๊ะ
-  companies: [
-    {
-      id: 'ascent', name: 'ASCENT',
-      summary: { initialBudget: 64000, debtorsDue: 1, outstanding: 64000, jobsWithPayment: 0, totalReceived: 0, netReceived: 0, receivedToday: 0, wipJobs: 0, wipAmount: 0 },
-    },
-    {
-      id: 'art', name: 'A.R.T',
-      summary: { initialBudget: 321600, debtorsDue: 1, outstanding: 225600, jobsWithPayment: 2, totalReceived: 96000, netReceived: 95102.8, receivedToday: 0, wipJobs: 0, wipAmount: 0 },
-    },
-    {
-      id: 'tjc', name: 'TJC',
-      summary: { initialBudget: 448900, debtorsDue: 1, outstanding: 448900, jobsWithPayment: 0, totalReceived: 0, netReceived: 0, receivedToday: 0, wipJobs: 0, wipAmount: 0 },
-    },
-  ],
-};
-
-// GET ?action=... ตามธรรมเนียม axios.get ของโปรเจกต์นี้
-async function getAction<T>(action: string): Promise<T> {
-  const res = await axios.get(ACCOUNTING_API_URL, { params: { action } });
-  return res.data as T;
-}
-
-// POST FormData (multipart) ตามธรรมเนียมของโปรเจกต์นี้ — ค่าที่เป็น array ส่งแบบ key[]
-async function postAction<T>(action: string, body: Record<string, unknown>): Promise<T> {
-  const fd = new FormData();
-  fd.append('action', action);
-  Object.entries(body).forEach(([key, value]) => {
-    if (Array.isArray(value)) {
-      value.forEach((item) => fd.append(`${key}[]`, String(item)));
-    } else if (value != null) {
-      fd.append(key, String(value));
-    }
-  });
-  const res = await axios.post(ACCOUNTING_API_URL, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-  const success = (res.data as any)?.status === 'success' || (res.data as any)?.success;
-  if (!success) throw new Error((res.data as any)?.message || `action ${action} failed`);
-  return res.data as T;
-}
-
-function normalize(payload: any): DashboardData {
-  const data = payload?.data ?? payload;
-  return {
-    summary: { ...sample.summary, ...(data?.summary ?? {}) },
-    projects: Array.isArray(data?.projects) ? data.projects : sample.projects,
-    asOfDate: data?.asOfDate ?? sample.asOfDate,
-    fiscalYear: data?.fiscalYear ?? sample.fiscalYear,
-    paidReadyCount: data?.paidReadyCount ?? sample.paidReadyCount,
-    companies: Array.isArray(data?.companies) ? data.companies : sample.companies,
-  };
-}
 
 function num(value: number) {
   const decimals = value % 1 === 0 ? 0 : 2;
@@ -413,10 +345,6 @@ function ProjectCard({
           <Text style={styles.moneyValue}>{num(item.paidAmount)}</Text>
         </View>
         <View style={styles.moneyCell}>
-          <Text style={styles.microLabel}>ยอดรับสุทธิ</Text>
-          <Text style={[styles.moneyValue, item.netReceived > 0 && styles.moneyPositive]}>{num(item.netReceived)}</Text>
-        </View>
-        <View style={styles.moneyCell}>
           <Text style={styles.microLabel}>ค้างชำระ</Text>
           <Text style={[styles.moneyValue, item.outstanding > 0 && styles.moneyDanger]}>{num(item.outstanding)}</Text>
         </View>
@@ -486,19 +414,26 @@ export default function AccountingDashboard({
   onFollowProject,
   onRecordProject,
 }: Props) {
-  const [data, setData] = useState<DashboardData>(sample);
+  const { user } = useAuth();
+  const userId = user?.id;
+
+  const [summary, setSummary] = useState<Summary>(EMPTY_SUMMARY);
+  const [companies, setCompanies] = useState<CompanyBreakdown[]>([]);
+  const [projectList, setProjectList] = useState<Project[]>([]);
+  const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [offline, setOffline] = useState(false);
   const [busyId, setBusyId] = useState<string | number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
-  // 🌟 [เพิ่มใหม่] modal "ดูข้อมูล" — ของจริงเป็น modal ในหน้าเดียวกัน (openDetailsModal)
-  // ไม่ใช่หน้าแยก จึงทำเป็น modal ในนี้เลยแทนการ navigate ออกไป
-  const [detailModal, setDetailModal] = useState<{ visible: boolean; project?: Project }>({ visible: false });
+  // 🌟 modal "ดูข้อมูล" — ดึง get_detail ตอนเปิด modal เท่านั้น (ไม่ฝังกับ get_list)
+  const [detailModal, setDetailModal] = useState<{ visible: boolean; project?: Project; loading: boolean; detail?: ProjectDetail }>({
+    visible: false,
+    loading: false,
+  });
 
-  // 🌟 [เพิ่มใหม่] สลับไปหน้า "ติดตาม"/"ลงบัญชี" เองภายในไฟล์นี้เมื่อไม่มี onFollowProject/
-  // onRecordProject จากภายนอก (แทนการเดา router.push ไปหน้าที่อาจยังไม่มีจริง)
+  // 🌟 สลับไปหน้า "ติดตาม"/"ลงบัญชี" เองภายในไฟล์นี้เมื่อไม่มี onFollowProject/onRecordProject จากภายนอก
   const [activeScreen, setActiveScreen] = useState<'dashboard' | 'followup' | 'accounting'>('dashboard');
   const [activeProjectId, setActiveProjectId] = useState<string | number | null>(null);
 
@@ -517,19 +452,31 @@ export default function AccountingDashboard({
   const [companyFilter, setCompanyFilter] = useState<string>('all');
   const [collapsedCompanyIds, setCollapsedCompanyIds] = useState<Set<string>>(new Set());
 
+  const asOfDate = useMemo(() => {
+    const d = new Date();
+    return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+  }, []);
+
+  // get_dashboard — README_accounting.md ข้อ 4.2 (kpi_all + kpi_by_company)
   const load = useCallback(async (refresh = false) => {
+    if (!userId) return;
     refresh ? setRefreshing(true) : setLoading(true);
     setOffline(false);
     try {
-      const payload = await getAction<DashboardData>(API_ACTIONS.dashboard);
-      setData(normalize(payload));
+      const [dash, list] = await Promise.all([
+        apiMobileGet(ACCOUNTING_API_URL, 'get_dashboard', { user_id: userId, year: selectedYear }),
+        apiMobileGet(ACCOUNTING_API_URL, 'get_list', { user_id: userId, year: selectedYear, limit: 500 }),
+      ]);
+      setSummary(mapSummary(dash.kpi_all));
+      setCompanies(Array.isArray(dash.kpi_by_company) ? dash.kpi_by_company.map(mapCompanyBreakdown) : []);
+      setProjectList(Array.isArray(list.list) ? list.list.map(mapProject) : []);
     } catch (e) {
-      console.error('load accounting_dashboard failed', e);
+      console.error('accounting_API_mobile load failed', e);
       setOffline(true);
     } finally {
       refresh ? setRefreshing(false) : setLoading(false);
     }
-  }, []);
+  }, [userId, selectedYear]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -541,7 +488,7 @@ export default function AccountingDashboard({
 
   const projects = useMemo(() => {
     const term = search.trim().toLowerCase();
-    return data.projects.filter((item) => {
+    return projectList.filter((item) => {
       const haystack = `${item.jobNo} ${item.company} ${item.customer} ${item.projectName} ${item.owner} ${item.closedBy}`.toLowerCase();
       const matchesTerm = !term || haystack.includes(term);
       const matchesStatus =
@@ -554,43 +501,21 @@ export default function AccountingDashboard({
       const matchesCompany = companyFilter === 'all' || item.company === companyFilter;
       return matchesTerm && matchesStatus && matchesCompany;
     });
-  }, [data.projects, search, statusFilter, companyFilter]);
+  }, [projectList, search, statusFilter, companyFilter]);
 
-  const handleExport = async () => {
-    try {
-      await postAction(API_ACTIONS.exportFiltered, {
-        search,
-        statusFilter,
-        followFrom,
-        followTo,
-        payFrom,
-        payTo,
-        jobNumbers: projects.map((item) => item.jobNo),
-      });
-      setToast(`ส่งออก ${projects.length} รายการเรียบร้อย`);
-    } catch (e) {
-      console.error('export accounting_dashboard failed', e);
-      setToast('ส่งออกไม่สำเร็จ ลองอีกครั้ง');
-    }
-  };
-
-  const handleMarkPaid = async () => {
-    const ids = data.projects.filter((item) => item.payState === 'paid').map((item) => item.id);
-    try {
-      await postAction(API_ACTIONS.markPaid, { projectIds: ids });
-      setToast(`บันทึกชำระเรียบร้อย ${ids.length} รายการ`);
-      void load(true);
-    } catch (e) {
-      console.error('mark_paid accounting_dashboard failed', e);
-      setToast('บันทึกไม่สำเร็จ ลองอีกครั้ง');
-    }
-  };
-
-  // 🌟 [เพิ่มใหม่] ปุ่ม "ดูข้อมูล" — ถ้ามี prop จากภายนอกให้ใช้ตามนั้น ไม่งั้นเปิด modal ในตัว
-  // (ของจริงก็เป็น modal ในหน้าเดียวกัน ไม่ใช่หน้าแยก — ดู openDetailsModal() ในต้นฉบับ)
-  const handleView = (project: Project) => {
+  // 🌟 [เพิ่มใหม่] ปุ่ม "ดูข้อมูล" — ถ้ามี prop จากภายนอกให้ใช้ตามนั้น ไม่งั้นเปิด modal + ยิง
+  // get_detail(project_id) ตอนนี้เอง (ของจริงก็เป็น modal ในหน้าเดียวกัน — openDetailsModal ในต้นฉบับ)
+  const handleView = async (project: Project) => {
     if (onViewProject) return onViewProject(project);
-    setDetailModal({ visible: true, project });
+    setDetailModal({ visible: true, project, loading: true });
+    if (!userId) return;
+    try {
+      const res = await apiMobileGet(ACCOUNTING_API_URL, 'get_detail', { user_id: userId, project_id: project.id });
+      setDetailModal((s) => (s.project?.id === project.id ? { ...s, loading: false, detail: mapProjectDetail(res.detail) } : s));
+    } catch (e) {
+      console.error('accounting_API_mobile get_detail failed', e);
+      setDetailModal((s) => (s.project?.id === project.id ? { ...s, loading: false } : s));
+    }
   };
 
   // 🌟 [เพิ่มใหม่] ปุ่ม "ติดตาม" — ตอนนี้มีสกรีนจริงแล้ว (ProjectFollowupScreen) จึงสลับมาแสดง
@@ -646,8 +571,6 @@ export default function AccountingDashboard({
     });
   };
 
-  const { summary } = data;
-
   if (activeScreen === 'followup' && activeProjectId !== null) {
     return <ProjectFollowupScreen id={String(activeProjectId)} onBack={() => setActiveScreen('dashboard')} onSaved={() => setActiveScreen('dashboard')} />;
   }
@@ -683,12 +606,16 @@ export default function AccountingDashboard({
               <Ionicons name="arrow-back" size={16} color="#5a6b7e" />
               <Text style={styles.ghostText}>กลับแดชบอร์ดหลัก</Text>
             </Pressable>
-            <Pressable style={({ pressed }) => [styles.dateButton, pressed && styles.pressed]}>
+            <View style={[styles.dateButton, { opacity: 0.85 }]}>
               <Ionicons name="calendar" size={15} color="#b23bd8" />
-              <Text style={styles.dateText}>{data.asOfDate}</Text>
-            </Pressable>
-            <Pressable style={({ pressed }) => [styles.yearButton, pressed && styles.pressed]}>
-              <Text style={styles.yearText}>{data.fiscalYear}</Text>
+              <Text style={styles.dateText}>{asOfDate}</Text>
+            </View>
+            <Pressable
+              style={({ pressed }) => [styles.yearButton, pressed && styles.pressed]}
+              onPress={() => setSelectedYear((y) => y - 1)}
+              onLongPress={() => setSelectedYear(new Date().getFullYear())}
+            >
+              <Text style={styles.yearText}>ปี ค.ศ. {selectedYear}</Text>
               <Ionicons name="chevron-down" size={14} color="#5a6b7e" />
             </Pressable>
           </View>
@@ -729,7 +656,7 @@ export default function AccountingDashboard({
               <StatTile icon="document-outline" label="หน้างานที่เงินเข้าแล้ว" value={String(summary.jobsWithPayment)} unit="งาน" tone="teal" />
               <StatTile icon="cash-outline" label="เงินเข้าทั้งหมด (ยอดจ่าย)" value={num(summary.totalReceived)} tone="green" />
               <StatTile icon="layers-outline" label="ยอดรับสุทธิ" value={num(summary.netReceived)} tone="mint" />
-              <StatTile icon="calendar-outline" label={`เงินเข้า (${data.asOfDate})`} value={num(summary.receivedToday)} tone="violet" />
+              <StatTile icon="calendar-outline" label={`เงินเข้า (${asOfDate})`} value={num(summary.receivedToday)} tone="violet" />
             </View>
           )}
 
@@ -752,7 +679,7 @@ export default function AccountingDashboard({
 
         {breakdownExpanded && (
           <View style={styles.companyGrid}>
-            {data.companies.map((c) => {
+            {companies.map((c) => {
               const isActive = companyFilter === c.name;
               const isCollapsed = collapsedCompanyIds.has(c.id);
               const cs = c.summary;
@@ -822,21 +749,10 @@ export default function AccountingDashboard({
               <Ionicons name="sync" size={16} color="#0e9fb4" />
               <Text style={styles.refreshText}>รีเฟรช</Text>
             </Pressable>
-            <Pressable onPress={handleExport} style={({ pressed }) => [styles.export, pressed && styles.pressed]}>
-              <Ionicons name="grid" size={15} color="#ffffff" />
-              <Text style={styles.solidText}>Export ตามตัวกรอง</Text>
-              <View style={styles.badgeCount}>
-                <Text style={[styles.badgeCountText, { color: '#0d8058' }]}>{projects.length}</Text>
-              </View>
-            </Pressable>
-            <Pressable onPress={handleMarkPaid} style={({ pressed }) => [styles.markPaid, pressed && styles.pressed]}>
-              <Ionicons name="ribbon" size={15} color="#ffffff" />
-              <Text style={styles.solidText}>ชำระเรียบร้อย</Text>
-              <View style={styles.badgeCount}>
-                <Text style={[styles.badgeCountText, { color: '#7a34c4' }]}>{data.paidReadyCount}</Text>
-              </View>
-            </Pressable>
           </View>
+          {/* ปุ่ม "Export ตามตัวกรอง" และ "ทำเครื่องหมายจ่ายแล้ว" ถูกตัดออก — accounting_API_mobile.php
+              ไม่มี action สำหรับสองอย่างนี้เลย (README_accounting.md ข้อ 8: Export ไม่ได้ทำเป็น endpoint
+              ฝั่งเซิร์ฟเวอร์ ส่วนสถานะจ่ายเงินคำนวณอัตโนมัติจาก project_payments ไม่มีปุ่มกดบันทึกเอง) */}
 
           <View style={styles.searchRow}>
             <Pressable onPress={() => setStatusOpen(!statusOpen)} style={styles.statusSelect}>
@@ -962,16 +878,20 @@ export default function AccountingDashboard({
           <View style={styles.modalCard}>
             <View style={styles.modalHeadRow}>
               <Text style={styles.modalTitle}>รายละเอียดโครงการ</Text>
-              <Pressable onPress={() => setDetailModal({ visible: false })} hitSlop={8}>
+              <Pressable onPress={() => setDetailModal({ visible: false, loading: false })} hitSlop={8}>
                 <Ionicons name="close" size={20} color="#64748b" />
               </Pressable>
             </View>
 
-            {detailModal.project && (
+            {detailModal.loading ? (
+              <View style={{ paddingVertical: 30, alignItems: 'center' }}>
+                <ActivityIndicator color="#0e9fb4" />
+              </View>
+            ) : detailModal.project && (
               <ScrollView style={{ marginTop: 8 }} showsVerticalScrollIndicator={false}>
                 {(() => {
                   const p = detailModal.project!;
-                  const d = p.detail;
+                  const d = detailModal.detail;
                   const countdownColor = d
                     ? d.countdownTone === 'green' ? '#0e8f60'
                     : d.countdownTone === 'amber' ? '#c47f04'
@@ -1038,7 +958,7 @@ export default function AccountingDashboard({
               </ScrollView>
             )}
 
-            <Pressable onPress={() => setDetailModal({ visible: false })} style={styles.modalCloseBtn}>
+            <Pressable onPress={() => setDetailModal({ visible: false, loading: false })} style={styles.modalCloseBtn}>
               <Text style={styles.modalCloseBtnText}>ปิดหน้าต่าง</Text>
             </Pressable>
           </View>
@@ -1230,11 +1150,12 @@ const styles = StyleSheet.create({
   modalCloseBtnText: { color: '#5a6b7e', fontWeight: '800', fontSize: 13.5 },
 });
 
-/* API ที่หน้านี้เรียก (ผ่าน constants/config.ts API_BASE — ดู ACCOUNTING_API_URL/API_ACTIONS ด้านบน)
- * action ทั้งหมดเป็นการเดาตาม pattern ?action=xxx ของโปรเจกต์นี้ ยังไม่ได้ยืนยันกับ backend จริง:
- * GET  accounting_dashboard.php?action=dashboard  -> { data: { summary, projects, asOfDate, fiscalYear, paidReadyCount, companies } }
- * POST accounting_dashboard.php action=export     -> ปุ่ม Export ตามตัวกรอง
- * POST accounting_dashboard.php action=mark_paid  -> ปุ่ม ชำระเรียบร้อย
+/* API ที่หน้านี้เรียกจริง — accounting_API_mobile.php (README_accounting.md), ผ่าน API_MODULES ใน
+ * constants/config.ts และ apiMobileGet จาก app/service/api_mobile.ts:
+ * GET get_dashboard -> kpi_all + kpi_by_company (การ์ดสรุป)
+ * GET get_list       -> รายการโครงการ (การ์ดลูกหนี้)
+ * GET get_detail      -> รายละเอียดโครงการเดียว ดึงตอนเปิด modal "ดูข้อมูล" เท่านั้น
+ * ไม่มี action mark_paid / export ใน API จริง จึงตัดปุ่มทั้งสองออก (ดูคอมเมนต์หัวไฟล์)
  * ปุ่มรายรายการ (ดูข้อมูล / ติดตาม / ลงบัญชี) ส่งออกทาง props: onViewProject, onFollowProject, onRecordProject
  * — ถ้าไม่ส่ง prop เหล่านี้ หน้านี้จะเปิด modal ดูข้อมูลในตัว และสลับไป ProjectFollowupScreen/
  * ProjectAccountingScreen ที่ import ไว้ด้านบนเอง
