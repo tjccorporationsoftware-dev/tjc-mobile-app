@@ -1,7 +1,7 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import axios from "axios";
+import Constants, { ExecutionEnvironment } from "expo-constants";
 import { LinearGradient } from "expo-linear-gradient";
-import * as Notifications from "expo-notifications";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -21,15 +21,30 @@ import {
 import { API_BASE, IMG_BASE_URL } from "../../constants/config";
 import { useAuth } from "../_layout";
 
-// 🔥 แก้ไข: เติม as any เพื่อปิด Error สีแดง
-Notifications.setNotificationHandler({
-  handleNotification: async () =>
-    ({
-      shouldShowAlert: true,
-      shouldPlaySound: true,
-      shouldSetBadge: false,
-    }) as any,
-});
+// expo-notifications (Android) ใช้งานไม่ได้ใน Expo Go ตั้งแต่ SDK 53 เป็นต้นไป — แค่ "import" แบบ
+// static ก็พังทันที (โมดูลรันโค้ดเริ่มต้น/ลงทะเบียน native event emitter ตอน require เลย ก่อนโค้ด
+// guard ใดๆ จะได้ทำงานด้วยซ้ำ) จึงต้องโหลดแบบ require() แบบมีเงื่อนไขแทน import ปกติ เพื่อไม่ให้
+// โมดูลถูก require เลยตอนรันบน Expo Go — ต้องใช้ development build ถึงจะได้แจ้งเตือนจริง
+type NotificationsModule = typeof import("expo-notifications");
+const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+let Notifications: NotificationsModule | null = null;
+if (!isExpoGo) {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    Notifications = require("expo-notifications");
+    Notifications!.setNotificationHandler({
+      handleNotification: async () =>
+        ({
+          shouldShowAlert: true,
+          shouldPlaySound: true,
+          shouldSetBadge: false,
+        }) as any,
+    });
+  } catch (e) {
+    Notifications = null;
+    console.warn("โหลด/ตั้งค่า expo-notifications ไม่สำเร็จ:", e);
+  }
+}
 
 // --- Theme Colors ---
 const COLORS = {
@@ -76,10 +91,15 @@ export default function AlertScreen() {
   const [stats, setStats] = useState({ urgent: 0, soon: 0, total: 0 });
 
   useEffect(() => {
+    if (!Notifications) return; // ข้ามไปเลยบน Expo Go — ขอ permission ไม่ได้อยู่แล้ว
     (async () => {
-      const { status } = await Notifications.getPermissionsAsync();
-      if (status !== "granted") {
-        await Notifications.requestPermissionsAsync();
+      try {
+        const { status } = await Notifications!.getPermissionsAsync();
+        if (status !== "granted") {
+          await Notifications!.requestPermissionsAsync();
+        }
+      } catch (e) {
+        console.warn("ขอสิทธิ์แจ้งเตือนไม่สำเร็จ:", e);
       }
     })();
   }, []);
@@ -117,7 +137,13 @@ export default function AlertScreen() {
     let sCount = 0;
     const filtered: any[] = [];
 
-    await Notifications.cancelAllScheduledNotificationsAsync();
+    if (Notifications) {
+      try {
+        await Notifications.cancelAllScheduledNotificationsAsync();
+      } catch (e) {
+        console.warn("ล้างแจ้งเตือนเดิมไม่สำเร็จ:", e);
+      }
+    }
 
     data.forEach((car) => {
       const tax = parseInt(car.tax_days_left);
@@ -143,6 +169,7 @@ export default function AlertScreen() {
   };
 
   const triggerNotification = async (plate: string, days: number) => {
+    if (!Notifications) return; // ข้ามไปเลยบน Expo Go — ยิงแจ้งเตือนจริงไม่ได้อยู่แล้ว
     const title =
       days < 0
         ? `⚠️ ทะเบียน ${plate} ขาดต่ออายุ!`
@@ -152,15 +179,19 @@ export default function AlertScreen() {
         ? `เอกสารขาดมาแล้ว ${Math.abs(days)} วัน โปรดดำเนินการทันที`
         : `เอกสารจะหมดอายุในอีก ${days} วัน`;
 
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: title,
-        body: body,
-        sound: "default",
-        data: { plate: plate },
-      },
-      trigger: null,
-    });
+    try {
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: title,
+          body: body,
+          sound: "default",
+          data: { plate: plate },
+        },
+        trigger: null,
+      });
+    } catch (e) {
+      console.warn("ยิงแจ้งเตือนไม่สำเร็จ:", e);
+    }
   };
 
   useEffect(() => {

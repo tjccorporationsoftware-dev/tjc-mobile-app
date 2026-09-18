@@ -1,57 +1,58 @@
 /**
  * TravelAllowanceFormScreen.tsx
  * ------------------------------------------------------------------
- * Mobile mockup ของหน้า fm_report_travel_form.php ("กรอกข้อมูลค่าเบี้ยเลี้ยง" รายคน)
- * เชื่อมจากปุ่ม "กรอกข้อมูลใหม่ / แก้ไขข้อมูล" ในหน้า TravelAllowanceScreen (fm_report_travel.php)
+ * ฟอร์มกรอก/แก้ไขค่าเบี้ยเลี้ยงรายคน (fm_report_travel_form.php) — ต่อ API จริงแล้ว ผ่าน
+ * fm_travel_API_mobile.php: get_master_data / get_detail / get_source_jobs / upload_proof / save_form
  *
- * สถานะไฟล์นี้: UI MOCKUP — ข้อมูลตัวเลือก/ใบงานเดิมเป็น mock ด้านล่าง ยังไม่ยิง
- * POST action=save_travel_form จริง (ดู TODO ใน handleSave)
- *
- * ตรงกับพฤติกรรม/สูตรจริงจาก fm_report_travel_form.php:
- *  - ช่วงรอบเบิก (เริ่ม-สิ้นสุด) + ปุ่ม "โหลดช่วงวันที่" (ยืนยันก่อนเปลี่ยน เพราะข้อมูลที่ยังไม่ได้
- *    บันทึกจะหายไป — ตรงกับ changePeriod() ของต้นฉบับ)
- *  - ข้อมูลทั่วไป: ชื่อผู้ขอเบิก/แผนก/วันที่เสนอเบิก/วิธีรับเงิน
- *  - รายการค่าเบี้ยเลี้ยง: เพิ่มจากใบงานเดิม (เลือกจากรายการใบงานในช่วงนี้) หรือเพิ่มเอง — แต่ละ
- *    แถวมี วันที่/เวลา/เส้นทาง/ประเภทที่พัก-ระยะทาง(auto-fill อัตรา)/อัตรา-วัน/จำนวนวัน/
- *    รายการหัก(เรตติดลบ)/รวม(คำนวณอัตโนมัติ)/รายละเอียด/รูปหลักฐาน/จับพิกัด GPS
- *    (โผล่เฉพาะตัวเลือกที่ตั้งค่าไว้ว่าต้องจับ — เกณฑ์เดียวกับที่ตั้งค่าไว้ในหน้ารายการ)
- *  - สูตรคำนวณต่อแถวตรงกับ calc() เป๊ะ: รวม = อัตรา × จำนวนวัน + รายการหัก(ค่าติดลบ)
- *  - สรุปยอดรวมท้ายฟอร์ม: จำนวนรายการ/รวมจำนวนวัน/ยอดเบิกสุทธิ + คำอ่านเป็นภาษาไทย (ตรงกับ
- *    thaiBahtText()/thaiIntegerText() ของต้นฉบับ พอร์ตมาทั้งฟังก์ชัน)
- *
- * ที่ปรับให้เหมาะกับมือถือ/ตัดออก (เกินขอบเขต mockup):
- *  - แนบรูปหลักฐานจริง (ต้อง expo-image-picker) — เป็น stub เก็บแค่จำนวนไฟล์
- *  - จับพิกัด GPS จริง (ต้อง expo-location + สิทธิ์ตำแหน่ง) — เป็น stub สุ่มพิกัดตัวอย่างแทน
- *  - สถานะ "ใบล็อกแก้ไขไม่ได้" (ธุรการจัดส่งตรวจสอบแล้ว) — ต้องมีระบบสิทธิ์/สถานะฝั่ง backend
- *    เพิ่มเติม ตัดออกก่อน มือถือนี้แก้ไขได้เสมอ
- *
- * ต้องติดตั้ง (ถ้ายังไม่มี): npx expo install @expo/vector-icons
+ * เปลี่ยนจาก mockup เดิม:
+ *  - ตัวเลือกเกณฑ์ (RATE_OPTIONS/DEDUCT_OPTIONS) มาจาก get_master_data.rate_options_positive /
+ *    rate_options_negative จริง ไม่ hardcode
+ *  - รายการใบงานเดิม (SOURCE_JOBS) มาจาก get_source_jobs จริง
+ *  - ข้อมูลฟอร์ม/รายการที่เคยบันทึกมาจาก get_detail จริง
+ *  - บันทึกจริงผ่าน save_form (doc_json/jobs_json) — amount ไม่ส่งไป (เซิร์ฟเวอร์คำนวณเอง)
+ *  - แนบรูป: ใช้ expo-image-picker จริง (มีอยู่แล้วใน package.json) แล้วอัปโหลดทันทีผ่าน
+ *    upload_proof (multipart) ตาม pattern ที่ระบุ — ไม่รอถึงตอนกดบันทึกฟอร์ม
+ *  - จับพิกัด: ใช้ expo-location จริง (มีอยู่แล้วใน package.json)
+ *  - ⚠️ require_gps: เซิร์ฟเวอร์ "ไม่" บังคับพิกัดตอนบันทึก (มีแต่ฝั่ง JS ของเว็บเดิม) จึงบังคับ
+ *    เองฝั่งแอปนี้ก่อนกดบันทึก ถ้าแถวเลือกเกณฑ์ที่ require_gps=1 แต่ยังไม่มี lat/lng
+ *  - เอาช่องแก้ไข "ช่วงรอบเบิก" ในฟอร์มออก — รอบเบิกกำหนดจากหน้ารายการ (get_pay_cycle) เท่านั้น
+ *    ไม่มี action ให้ "ตั้งวันที่เอง" ในฟอร์มนี้
  * ------------------------------------------------------------------
  */
 
 import { Ionicons } from '@expo/vector-icons';
-import { useMemo, useState } from 'react';
-import { Alert, Modal, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import axios from 'axios';
+import * as ImagePicker from 'expo-image-picker';
+import * as Location from 'expo-location';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Alert, Modal, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-// ✅ Config
-import { API_BASE } from '../../constants/config';
+// ✅ Config + API helper กลาง
+import { API_MODULES } from '../../constants/config';
+import { useAuth } from '../_layout';
+import { apiMobileGet, apiMobilePost } from '../service/api_mobile';
+
+const FM_TRAVEL_API_URL = `${API_MODULES}/fm_travel_API_mobile.php`;
 
 // ====================================================================
 // Types
 // ====================================================================
 
 interface RateOption {
-  key: string;
+  key: string; // opt_key
   label: string;
   rate: number;
-  requiresGps: boolean;
+  group: string; // group_name
+  requireGps: boolean;
+  isDeduct: boolean;
 }
 
 interface JobRow {
-  key: string;
-  jobId: number; // 0 = กรอกเอง, >0 = ดึงจากใบงาน
-  date: string;
+  key: string; // uid ฝั่งไคลเอนต์ล้วน ๆ ไว้ผูก state
+  jobId: number; // job_id จากใบงานต้นทาง, 0 = กรอกเอง
+  dateYmd: string; // date_ymd — ใช้ส่งกลับ backend
+  dateThai?: string; // date_thai — ใช้โชว์ผลเท่านั้น
   time: string;
   route: string;
   rateType: string;
@@ -59,70 +60,37 @@ interface JobRow {
   qty: string;
   deductType: string;
   detail: string;
-  proofCount: number;
-  gpsCaptured: boolean;
+  photos: string[]; // path ที่ได้จาก upload_proof แล้ว (uploads/expense_proofs/...)
+  lat?: number;
+  lng?: number;
   gpsAt?: string;
-  isSaved: boolean; // แถวที่เคยบันทึกไว้แล้วจากรอบก่อน (พับเก็บไว้ก่อน)
+  gpsAcc?: number;
+  isSaved: boolean; // เคยมาจาก get_detail (บันทึกไว้แล้วในรอบก่อน) — พับเก็บไว้ก่อนถ้ามีหลายแถว
+  serverAmount?: number; // amount ที่เซิร์ฟเวอร์เคยคำนวณไว้ (ใช้โชว์ก่อนแก้ไข)
 }
 
 interface SourceJob {
   jobId: number;
-  date: string;
+  dateYmd: string;
+  dateThai?: string;
   time: string;
   route: string;
-  customer: string;
+  customer?: string;
   detail: string;
-  status: 'completed' | 'pending' | 'in_progress' | 'failed';
+  status?: string;
 }
 
 export interface TravelAllowanceFormScreenProps {
   driverId?: string;
   driverName?: string;
-  startDate?: string;
-  endDate?: string;
+  startDate?: string; // YYYY-MM-DD
+  endDate?: string; // YYYY-MM-DD
+  startDateThai?: string;
+  endDateThai?: string;
   hasSavedData?: boolean;
   onBack?: () => void;
   onSaved?: () => void;
   onViewSubmission?: () => void;
-}
-
-// ====================================================================
-// Mock data
-// ====================================================================
-
-const RATE_OPTIONS: RateOption[] = [
-  { key: 'hotel', label: 'นอนโรงแรม', rate: 210, requiresGps: false },
-  { key: 'vehicle', label: 'นอนรถ/นอนบ้านพัก', rate: 310, requiresGps: false },
-  { key: 'roundtrip', label: 'ไป-กลับ', rate: 80, requiresGps: false },
-  { key: '1-200', label: '1-200 กม.', rate: 80, requiresGps: true },
-  { key: '200-500', label: '200-500 กม.', rate: 160, requiresGps: true },
-  { key: '500+', label: '500 กม. ขึ้นไป', rate: 210, requiresGps: true },
-];
-const DEDUCT_OPTIONS: RateOption[] = [{ key: 'deduct50', label: 'พักเกิน 50 กม. ห่างจากหน้างาน', rate: -100, requiresGps: true }];
-const ALL_RATES: Record<string, RateOption> = Object.fromEntries([...RATE_OPTIONS, ...DEDUCT_OPTIONS].map((o) => [o.key, o]));
-
-const PAY_METHODS = ['โอนเข้าบัญชีพร้อมเงินเดือน', 'เงินสด', 'อื่นๆ'];
-
-const SOURCE_JOBS: SourceJob[] = [
-  { jobId: 101, date: '03/09/2569', time: '08:30', route: 'คลังสินค้าหลัก - โครงการ TJC69-030', customer: 'บริษัท เจริญกิจเจริญทรัพย์ จำกัด', detail: 'ส่งอุปกรณ์โซล่าเซลล์', status: 'completed' },
-  { jobId: 102, date: '05/09/2569', time: '07:00', route: 'คลังสินค้าหลัก - จ.ขอนแก่น', customer: 'บริษัท วัสดุก่อสร้างสมมติ จำกัด', detail: 'ส่งวัสดุก่อสร้างรอบ 2', status: 'completed' },
-  { jobId: 103, date: '12/09/2569', time: '13:15', route: 'คลังสินค้าหลัก - จ.นครราชสีมา', customer: 'หจก. อะไหล่ปรับอากาศสมมติ', detail: '', status: 'in_progress' },
-];
-
-const STATUS_LABEL: Record<SourceJob['status'], string> = { completed: 'เสร็จแล้ว', pending: 'รอดำเนินการ', in_progress: 'กำลังส่ง', failed: 'ไม่สำเร็จ' };
-
-let uidCounter = 1;
-function uid(): string {
-  uidCounter += 1;
-  return `row_${Date.now()}_${uidCounter}`;
-}
-
-function mkManualRow(): JobRow {
-  return { key: uid(), jobId: 0, date: '', time: '', route: '', rateType: '', rate: '0', qty: '1', deductType: '', detail: '', proofCount: 0, gpsCaptured: false, isSaved: false };
-}
-
-function mkRowFromSource(j: SourceJob): JobRow {
-  return { key: uid(), jobId: j.jobId, date: j.date, time: j.time, route: j.route, rateType: '', rate: '0', qty: '1', deductType: '', detail: j.detail, proofCount: 0, gpsCaptured: false, isSaved: false };
 }
 
 // ====================================================================
@@ -138,12 +106,7 @@ function moneyFmt(v: number): string {
   return n === Math.floor(n) ? n.toLocaleString('en-US') : n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function rowAmount(row: JobRow): number {
-  const deduct = row.deductType && ALL_RATES[row.deductType] ? ALL_RATES[row.deductType].rate : 0;
-  return toNum(row.rate) * toNum(row.qty) + deduct;
-}
-
-// พอร์ตตรงจาก thaiIntegerText()/thaiBahtText() ของต้นฉบับ
+// พอร์ตตรงจาก thaiIntegerText()/thaiBahtText() ของต้นฉบับ — ใช้แค่แสดงผล ไม่ใช่ตัวเลขทางการ
 const THAI_DIGITS = ['ศูนย์', 'หนึ่ง', 'สอง', 'สาม', 'สี่', 'ห้า', 'หก', 'เจ็ด', 'แปด', 'เก้า'];
 const THAI_PLACES = ['', 'สิบ', 'ร้อย', 'พัน', 'หมื่น', 'แสน'];
 
@@ -178,6 +141,74 @@ function thaiBahtText(value: number): string {
   let text = `${prefix}${thaiIntegerText(String(baht))}บาท`;
   text += satang === 0 ? 'ถ้วน' : `${thaiIntegerText(String(satang))}สตางค์`;
   return text;
+}
+
+let uidCounter = 1;
+function uid(): string {
+  uidCounter += 1;
+  return `row_${Date.now()}_${uidCounter}`;
+}
+
+function mkManualRow(): JobRow {
+  return { key: uid(), jobId: 0, dateYmd: '', time: '', route: '', rateType: '', rate: '0', qty: '1', deductType: '', detail: '', photos: [], isSaved: false };
+}
+
+function mkRowFromSource(j: SourceJob): JobRow {
+  return { key: uid(), jobId: j.jobId, dateYmd: j.dateYmd, dateThai: j.dateThai, time: j.time, route: j.route, rateType: '', rate: '0', qty: '1', deductType: '', detail: j.detail, photos: [], isSaved: false };
+}
+
+function mapRateOption(raw: any): RateOption {
+  return {
+    key: String(raw.opt_key ?? raw.key ?? ''),
+    label: String(raw.label ?? ''),
+    rate: Number(raw.rate ?? 0),
+    group: String(raw.group_name ?? raw.group ?? ''),
+    requireGps: !!raw.require_gps,
+    isDeduct: !!raw.is_deduct,
+  };
+}
+
+function mapSourceJob(raw: any): SourceJob {
+  return {
+    jobId: Number(raw.job_id ?? raw.id ?? 0),
+    dateYmd: String(raw.date_ymd ?? raw.date ?? ''),
+    dateThai: raw.date_thai,
+    time: String(raw.time ?? ''),
+    route: String(raw.route ?? ''),
+    customer: raw.customer ?? raw.customer_name,
+    detail: String(raw.detail ?? ''),
+    status: raw.status,
+  };
+}
+
+function mapDetailJobRow(raw: any): JobRow {
+  return {
+    key: uid(),
+    jobId: Number(raw.job_id ?? 0),
+    dateYmd: String(raw.date_ymd ?? ''),
+    dateThai: raw.date_thai,
+    time: String(raw.time ?? ''),
+    route: String(raw.route ?? ''),
+    rateType: String(raw.rate_type ?? ''),
+    rate: String(raw.rate ?? '0'),
+    qty: String(raw.qty ?? '1'),
+    deductType: String(raw.deduct_type ?? ''),
+    detail: String(raw.detail ?? ''),
+    photos: Array.isArray(raw.photos) ? raw.photos : [],
+    lat: typeof raw.lat === 'number' ? raw.lat : undefined,
+    lng: typeof raw.lng === 'number' ? raw.lng : undefined,
+    gpsAt: raw.gps_at || undefined,
+    gpsAcc: typeof raw.gps_acc === 'number' ? raw.gps_acc : undefined,
+    isSaved: true,
+    serverAmount: typeof raw.amount === 'number' ? raw.amount : undefined,
+  };
+}
+
+// preview เท่านั้น (แสดงระหว่างกรอก) — สูตรตรงกับที่เซิร์ฟเวอร์ใช้จริง (round(rate*qty+deduct,2))
+// แต่ตัวเลขที่นับเป็นทางการเสมอคือค่าที่ backend คืนกลับมาหลัง save_form สำเร็จ
+function rowAmountPreview(row: JobRow, rateByKey: Record<string, RateOption>): number {
+  const deduct = row.deductType && rateByKey[row.deductType] ? rateByKey[row.deductType].rate : 0;
+  return Math.round((toNum(row.rate) * toNum(row.qty) + deduct) * 100) / 100;
 }
 
 // ====================================================================
@@ -218,25 +249,44 @@ function ChipPicker({ options, value, onChange, formatLabel }: { options: RateOp
 
 export default function TravelAllowanceFormScreen({
   driverId,
-  driverName = 'วิชัย ใจดี',
-  startDate: initialStart = '01/09/2569',
-  endDate: initialEnd = '15/09/2569',
+  driverName = '',
+  startDate = '',
+  endDate = '',
+  startDateThai,
+  endDateThai,
   hasSavedData = false,
   onBack,
   onSaved,
   onViewSubmission,
 }: TravelAllowanceFormScreenProps) {
-  const [startDate, setStartDate] = useState(initialStart);
-  const [endDate, setEndDate] = useState(initialEnd);
+  const { user } = useAuth();
+
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [canSave, setCanSave] = useState(false);
+
+  const [rateOptionsPositive, setRateOptionsPositive] = useState<RateOption[]>([]);
+  const [rateOptionsNegative, setRateOptionsNegative] = useState<RateOption[]>([]);
+  const rateByKey = useMemo(() => {
+    const map: Record<string, RateOption> = {};
+    [...rateOptionsPositive, ...rateOptionsNegative].forEach((o) => (map[o.key] = o));
+    return map;
+  }, [rateOptionsPositive, rateOptionsNegative]);
 
   const [reqName, setReqName] = useState(driverName);
-  const [dept, setDept] = useState('พนักงานจัดส่ง');
-  const [submitDate, setSubmitDate] = useState(startDate);
-  const [payMethod, setPayMethod] = useState(PAY_METHODS[0]);
+  const [dept, setDept] = useState('');
+  const [submitDate, setSubmitDate] = useState('');
+  const [payMethod, setPayMethod] = useState('');
+  const [payMethods, setPayMethods] = useState<string[]>([]);
 
-  const [rows, setRows] = useState<JobRow[]>(() => (hasSavedData ? [{ ...mkManualRow(), isSaved: true, date: startDate, route: 'คลังสินค้าหลัก - จ.สมมติ', rateType: 'hotel', rate: '210', qty: '2' }] : []));
+  const [rows, setRows] = useState<JobRow[]>([]);
   const [showSaved, setShowSaved] = useState(false);
   const [pickerVisible, setPickerVisible] = useState(false);
+  const [sourceJobs, setSourceJobs] = useState<SourceJob[]>([]);
+  const [sourceJobsLoading, setSourceJobsLoading] = useState(false);
+
+  const [gpsBusyKey, setGpsBusyKey] = useState<string | null>(null);
+  const [photoBusyKey, setPhotoBusyKey] = useState<string | null>(null);
 
   const importedJobIds = useMemo(() => new Set(rows.map((r) => r.jobId).filter((id) => id !== 0)), [rows]);
   const savedRows = rows.filter((r) => r.isSaved);
@@ -244,16 +294,73 @@ export default function TravelAllowanceFormScreen({
 
   const summary = useMemo(() => {
     const days = rows.reduce((s, r) => s + toNum(r.qty), 0);
-    const total = rows.reduce((s, r) => s + rowAmount(r), 0);
+    const total = rows.reduce((s, r) => s + rowAmountPreview(r, rateByKey), 0);
     return { count: rows.length, days, total };
-  }, [rows]);
+  }, [rows, rateByKey]);
+
+  // โหลด master data (เกณฑ์/วิธีรับเงิน) + ใบเบิกเดิมของคนขับคนนี้ในรอบนี้
+  const load = useCallback(async () => {
+    if (!user || !driverId) return;
+    setLoading(true);
+    try {
+      const [masterRes, detailRes] = await Promise.all([
+        apiMobileGet(FM_TRAVEL_API_URL, 'get_master_data', { user_id: user.id }),
+        apiMobileGet(FM_TRAVEL_API_URL, 'get_detail', { user_id: user.id, driver_id: driverId, start_date: startDate, end_date: endDate }),
+      ]);
+
+      const positive: RateOption[] = Array.isArray(masterRes.rate_options_positive) ? masterRes.rate_options_positive.map(mapRateOption) : [];
+      const negative: RateOption[] = Array.isArray(masterRes.rate_options_negative) ? masterRes.rate_options_negative.map(mapRateOption) : [];
+      setRateOptionsPositive(positive);
+      setRateOptionsNegative(negative);
+      setPayMethods(Array.isArray(masterRes.pay_methods) ? masterRes.pay_methods : []);
+
+      const detail = detailRes.detail || {};
+      const formExists = !!detail.form_exists;
+      setReqName(formExists ? detail.req_name || driverName : driverName);
+      setDept(formExists ? detail.dept || '' : masterRes.default_dept || '');
+      setSubmitDate(formExists ? detail.date_submit || '' : startDate);
+      setPayMethod(formExists ? detail.pay_method || '' : masterRes.default_pay_method || (Array.isArray(masterRes.pay_methods) ? masterRes.pay_methods[0] : ''));
+
+      const jobs = Array.isArray(detailRes.jobs) ? detailRes.jobs.map(mapDetailJobRow) : [];
+      setRows(jobs);
+
+      setCanSave(!!detailRes.can_save);
+    } catch (e: any) {
+      Alert.alert('โหลดข้อมูลไม่สำเร็จ', e.message || 'เกิดข้อผิดพลาด', [{ text: 'ตกลง', onPress: onBack }]);
+    } finally {
+      setLoading(false);
+    }
+  }, [user, driverId, startDate, endDate, driverName, onBack]);
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [driverId, startDate, endDate]);
+
+  // เปิดโมดัล "เพิ่มจากใบงาน" -> โหลด get_source_jobs
+  async function openSourcePicker() {
+    setPickerVisible(true);
+    if (!user || !driverId) return;
+    setSourceJobsLoading(true);
+    try {
+      const res = await apiMobileGet(FM_TRAVEL_API_URL, 'get_source_jobs', { user_id: user.id, driver_id: driverId, start_date: startDate, end_date: endDate, limit: 200 });
+      // โมดัล "เพิ่มจากใบงาน" ต้องโชว์ใบงานทั้งหมดในช่วง (jobs[]) ไม่ใช่ initial_jobs (ที่กรองเฉพาะ
+      // status=completed สำหรับตั้งต้นฟอร์มใหม่เท่านั้น) — ถ้า jobs ว่างจริงๆ ก็ต้องโชว์ว่างจริง ไม่ fallback
+      const jobs: any[] = Array.isArray(res.jobs) ? res.jobs : [];
+      setSourceJobs(jobs.map(mapSourceJob));
+    } catch (e: any) {
+      Alert.alert('โหลดใบงานไม่สำเร็จ', e.message || 'เกิดข้อผิดพลาด');
+    } finally {
+      setSourceJobsLoading(false);
+    }
+  }
 
   function updateRow<K extends keyof JobRow>(key: string, field: K, value: JobRow[K]) {
     setRows((prev) => prev.map((r) => (r.key === key ? { ...r, [field]: value } : r)));
   }
 
   function applyRateType(key: string, rateType: string) {
-    const opt = ALL_RATES[rateType];
+    const opt = rateByKey[rateType];
     setRows((prev) => prev.map((r) => (r.key === key ? { ...r, rateType, rate: opt ? String(opt.rate) : '0' } : r)));
   }
 
@@ -270,57 +377,136 @@ export default function TravelAllowanceFormScreen({
     setRows((prev) => [...prev, mkRowFromSource(j)]);
   }
 
-  function captureGps(key: string) {
-    // TODO: ต่อ expo-location จริง -> ขอสิทธิ์ + Location.getCurrentPositionAsync()
-    const now = new Date();
-    const timeShow = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-    updateRow(key, 'gpsCaptured', true);
-    updateRow(key, 'gpsAt', timeShow);
-    Alert.alert('จับพิกัดแล้ว (mock)', `บันทึกตำแหน่งเวลา ${timeShow} น. — ต้องเพิ่ม expo-location เพื่อจับพิกัดจริง`);
+  // จับพิกัดจริงด้วย expo-location (มีอยู่แล้วใน package.json ของโปรเจกต์)
+  async function captureGps(key: string) {
+    try {
+      const perm = await Location.requestForegroundPermissionsAsync();
+      if (perm.status !== 'granted') {
+        Alert.alert('ไม่ได้รับสิทธิ์ตำแหน่ง', 'กรุณาอนุญาตการเข้าถึงตำแหน่งเพื่อจับพิกัด');
+        return;
+      }
+      setGpsBusyKey(key);
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      updateRow(key, 'lat', pos.coords.latitude);
+      updateRow(key, 'lng', pos.coords.longitude);
+      updateRow(key, 'gpsAcc', pos.coords.accuracy ?? undefined);
+      updateRow(key, 'gpsAt', new Date(pos.timestamp).toISOString());
+    } catch (e: any) {
+      Alert.alert('จับพิกัดไม่สำเร็จ', e.message || 'เกิดข้อผิดพลาด');
+    } finally {
+      setGpsBusyKey(null);
+    }
   }
 
-  function addProof(key: string) {
-    // TODO: ต่อ expo-image-picker จริง
-    setRows((prev) => prev.map((r) => (r.key === key ? { ...r, proofCount: r.proofCount + 1 } : r)));
+  // อัปโหลดรูปทันทีที่เลือก ผ่าน action=upload_proof (multipart) — ใช้ axios ตรงเพราะ
+  // apiMobilePost ในไฟล์กลางส่งแบบ urlencoded เท่านั้น ไม่รองรับไฟล์แนบ
+  async function uploadProofPhoto(uri: string, fileName: string): Promise<{ path: string; filename: string }> {
+    const match = /\.(\w+)$/.exec(fileName);
+    const ext = (match ? match[1] : 'jpg').toLowerCase();
+    const mime = ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+    const form = new FormData();
+    form.append('action', 'upload_proof');
+    form.append('user_id', String(user?.id ?? ''));
+    form.append('photo', { uri, name: fileName, type: mime } as any);
+    const res = await axios.post(FM_TRAVEL_API_URL, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+    if ((res.data as any)?.status !== 'success') throw new Error((res.data as any)?.message || 'อัปโหลดรูปไม่สำเร็จ');
+    return { path: (res.data as any).path, filename: (res.data as any).filename };
   }
 
-  function changePeriod(newStart: string, newEnd: string) {
-    if (!newStart || !newEnd || newStart > newEnd) {
-      Alert.alert('ช่วงวันที่ไม่ถูกต้อง', 'กรุณาตรวจสอบวันที่');
+  async function addProof(key: string) {
+    const row = rows.find((r) => r.key === key);
+    if (row && row.photos.length >= 8) {
+      Alert.alert('แนบรูปครบแล้ว', 'แนบได้สูงสุด 8 รูปต่อรายการ');
       return;
     }
-    Alert.alert('เปลี่ยนช่วงวันที่?', 'ข้อมูลที่ยังไม่ได้บันทึกจะหายไป', [
-      { text: 'ยกเลิก', style: 'cancel' },
-      {
-        text: 'เปลี่ยนช่วง',
-        onPress: () => {
-          setStartDate(newStart);
-          setEndDate(newEnd);
-          setRows([]);
-        },
-      },
-    ]);
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('ไม่ได้รับสิทธิ์เข้าถึงรูปภาพ', 'กรุณาอนุญาตการเข้าถึงคลังภาพเพื่อแนบรูปหลักฐาน');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.7 });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    const fileName = asset.fileName || asset.uri.split('/').pop() || `photo_${Date.now()}.jpg`;
+    setPhotoBusyKey(key);
+    try {
+      const uploaded = await uploadProofPhoto(asset.uri, fileName);
+      setRows((prev) => prev.map((r) => (r.key === key ? { ...r, photos: [...r.photos, uploaded.path] } : r)));
+    } catch (e: any) {
+      Alert.alert('อัปโหลดรูปไม่สำเร็จ', e.message || 'เกิดข้อผิดพลาด');
+    } finally {
+      setPhotoBusyKey(null);
+    }
+  }
+
+  function removePhoto(key: string, path: string) {
+    setRows((prev) => prev.map((r) => (r.key === key ? { ...r, photos: r.photos.filter((p) => p !== path) } : r)));
   }
 
   function handleBack() {
     if (onBack) return onBack();
-    Alert.alert('ยกเลิก', 'กลับไปหน้ารายการเบิกเบี้ยเลี้ยง');
   }
 
-  function handleSave() {
-    // TODO: ต่อ backend จริง -> POST fm_report_travel_form.php action=save_travel_form
-    // payload: doc[req_name]/doc[dept]/doc[date_submit]/doc[pay_method]/doc[grand_qty]/
-    // doc[grand_total] + jobs[key][date]/time/route/rate_type/rate/qty/deduct_type/amount/detail
+  async function handleSave() {
+    if (!user || !driverId) return;
+    if (!canSave) {
+      Alert.alert('ไม่มีสิทธิ์', 'บัญชีนี้ไม่มีสิทธิ์บันทึกใบเบิกเบี้ยเลี้ยง');
+      return;
+    }
     if (!reqName.trim() || !dept.trim() || !submitDate.trim()) {
       Alert.alert('กรอกข้อมูลไม่ครบ', 'กรุณากรอกชื่อผู้ขอเบิก, แผนก และวันที่เสนอเบิกให้ครบ');
       return;
     }
-    const missingGps = rows.some((r) => r.rateType && ALL_RATES[r.rateType]?.requiresGps && !r.gpsCaptured);
+    // ⚠️ บังคับ GPS เองฝั่งแอป — เซิร์ฟเวอร์ไม่บังคับ (ดูคอมเมนต์หัวไฟล์)
+    const missingGps = rows.some((r) => {
+      const opt = r.rateType ? rateByKey[r.rateType] : undefined;
+      return opt?.requireGps && !(typeof r.lat === 'number' && typeof r.lng === 'number');
+    });
     if (missingGps) {
       Alert.alert('ยังไม่ได้จับพิกัด', 'มีรายการที่เลือกประเภทซึ่งต้องจับพิกัด GPS แต่ยังไม่ได้กด "จับพิกัด GPS"');
       return;
     }
-    Alert.alert('บันทึกสำเร็จ (mock)', 'บันทึกข้อมูลค่าเบี้ยเลี้ยงเรียบร้อย! กำลังกลับไปหน้ารายการ...', [{ text: 'ตกลง', onPress: () => (onSaved ? onSaved() : handleBack()) }]);
+
+    const jobsPayload = rows.map((r) => ({
+      date: r.dateYmd,
+      time: r.time,
+      route: r.route,
+      rate: toNum(r.rate),
+      qty: toNum(r.qty),
+      rate_type: r.rateType,
+      deduct_type: r.deductType,
+      detail: r.detail,
+      lat: typeof r.lat === 'number' ? r.lat : undefined,
+      lng: typeof r.lng === 'number' ? r.lng : undefined,
+      gps_at: r.gpsAt || undefined,
+      gps_acc: typeof r.gpsAcc === 'number' ? r.gpsAcc : undefined,
+      photos: r.photos,
+    }));
+
+    setSaving(true);
+    try {
+      await apiMobilePost(FM_TRAVEL_API_URL, 'save_form', {
+        user_id: user.id,
+        driver_id: driverId,
+        start_date: startDate,
+        end_date: endDate,
+        doc_json: JSON.stringify({ req_name: reqName, dept, date_submit: submitDate, pay_method: payMethod }),
+        jobs_json: JSON.stringify(jobsPayload),
+      });
+      Alert.alert('บันทึกสำเร็จ', 'บันทึกข้อมูลค่าเบี้ยเลี้ยงเรียบร้อย! กำลังกลับไปหน้ารายการ...', [{ text: 'ตกลง', onPress: () => (onSaved ? onSaved() : handleBack()) }]);
+    } catch (e: any) {
+      Alert.alert('บันทึกไม่สำเร็จ', e.message || 'เกิดข้อผิดพลาด');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <SafeAreaView style={[styles.safeArea, { alignItems: 'center', justifyContent: 'center' }]}>
+        <ActivityIndicator color="#4338ca" size="large" />
+      </SafeAreaView>
+    );
   }
 
   return (
@@ -353,24 +539,14 @@ export default function TravelAllowanceFormScreen({
           <View style={styles.periodRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.periodLabel}>เริ่มรอบเบิก</Text>
-              <TextInput style={styles.periodInput} placeholder="วว/ดด/ปปปป" placeholderTextColor="rgba(255,255,255,0.6)" value={startDate} onChangeText={setStartDate} />
+              <Text style={styles.periodValue}>{startDateThai || startDate}</Text>
             </View>
             <Ionicons name="arrow-forward" size={14} color="rgba(255,255,255,0.7)" style={{ marginTop: 18 }} />
             <View style={{ flex: 1 }}>
               <Text style={styles.periodLabel}>สิ้นสุดรอบเบิก</Text>
-              <TextInput style={styles.periodInput} placeholder="วว/ดด/ปปปป" placeholderTextColor="rgba(255,255,255,0.6)" value={endDate} onChangeText={setEndDate} />
+              <Text style={styles.periodValue}>{endDateThai || endDate}</Text>
             </View>
           </View>
-          <TouchableOpacity style={styles.loadPeriodBtn} onPress={() => changePeriod(startDate, endDate)}>
-            <Ionicons name="refresh" size={12} color="#4338ca" />
-            <Text style={styles.loadPeriodBtnText}>โหลดช่วงวันที่</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.stepsRow}>
-          <StepPill n={1} label="ข้อมูลผู้ขอเบิก" />
-          <StepPill n={2} label="รายการเดินทาง" />
-          <StepPill n={3} label="ตรวจสอบยอดและบันทึก" />
         </View>
 
         <View style={styles.body}>
@@ -381,15 +557,19 @@ export default function TravelAllowanceFormScreen({
             <FieldLabel text="แผนก" required />
             <TextInput style={styles.input} value={dept} onChangeText={setDept} placeholderTextColor="#94a3b8" />
             <FieldLabel text="วันที่เสนอเบิก" required />
-            <TextInput style={styles.input} placeholder="วว/ดด/ปปปป" placeholderTextColor="#94a3b8" value={submitDate} onChangeText={setSubmitDate} />
-            <FieldLabel text="วิธีรับเงิน" />
-            <View style={styles.rowGap}>
-              {PAY_METHODS.map((m) => (
-                <TouchableOpacity key={m} onPress={() => setPayMethod(m)} style={[styles.radioPill, payMethod === m && styles.radioPillActive]}>
-                  <Text style={[styles.radioPillText, payMethod === m && styles.radioPillTextActive]}>{m}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+            <TextInput style={styles.input} placeholder="YYYY-MM-DD" placeholderTextColor="#94a3b8" value={submitDate} onChangeText={setSubmitDate} />
+            {payMethods.length > 0 && (
+              <>
+                <FieldLabel text="วิธีรับเงิน" />
+                <View style={styles.rowGap}>
+                  {payMethods.map((m) => (
+                    <TouchableOpacity key={m} onPress={() => setPayMethod(m)} style={[styles.radioPill, payMethod === m && styles.radioPillActive]}>
+                      <Text style={[styles.radioPillText, payMethod === m && styles.radioPillTextActive]}>{m}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </>
+            )}
           </View>
 
           <View style={styles.card}>
@@ -403,7 +583,7 @@ export default function TravelAllowanceFormScreen({
                   <Text style={styles.jobsActionBtnNeutralText}>{showSaved ? `ซ่อนรายการที่กรอกแล้ว (${savedRows.length})` : `แก้ไขรายการที่กรอกแล้ว (${savedRows.length})`}</Text>
                 </TouchableOpacity>
               )}
-              <TouchableOpacity style={styles.jobsActionBtnSoft} onPress={() => setPickerVisible(true)}>
+              <TouchableOpacity style={styles.jobsActionBtnSoft} onPress={openSourcePicker}>
                 <Ionicons name="download-outline" size={13} color="#4338ca" />
                 <Text style={styles.jobsActionBtnSoftText}>เพิ่มจากใบงาน</Text>
               </TouchableOpacity>
@@ -420,8 +600,9 @@ export default function TravelAllowanceFormScreen({
               </View>
             ) : (
               visibleRows.map((row, idx) => {
-                const opt = row.rateType ? ALL_RATES[row.rateType] : undefined;
-                const needsGps = !!opt?.requiresGps;
+                const opt = row.rateType ? rateByKey[row.rateType] : undefined;
+                const needsGps = !!opt?.requireGps;
+                const hasGps = typeof row.lat === 'number' && typeof row.lng === 'number';
                 return (
                   <View key={row.key} style={[styles.jobRow, row.isSaved && styles.jobRowSaved]}>
                     <View style={styles.jobRowHead}>
@@ -442,8 +623,8 @@ export default function TravelAllowanceFormScreen({
 
                     <View style={styles.rowGap}>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.miniLabel}>วันที่</Text>
-                        <TextInput style={styles.input} placeholder="วว/ดด/ปปปป" placeholderTextColor="#94a3b8" value={row.date} onChangeText={(v) => updateRow(row.key, 'date', v)} />
+                        <Text style={styles.miniLabel}>วันที่ (YYYY-MM-DD)</Text>
+                        <TextInput style={styles.input} placeholder="2026-09-03" placeholderTextColor="#94a3b8" value={row.dateYmd} onChangeText={(v) => updateRow(row.key, 'dateYmd', v)} />
                       </View>
                       <View style={{ flex: 1 }}>
                         <Text style={styles.miniLabel}>เวลา</Text>
@@ -455,7 +636,7 @@ export default function TravelAllowanceFormScreen({
                     <TextInput style={styles.input} placeholder="ระบุเส้นทาง" placeholderTextColor="#94a3b8" value={row.route} onChangeText={(v) => updateRow(row.key, 'route', v)} />
 
                     <Text style={styles.miniLabel}>ประเภทที่พัก / ระยะทาง</Text>
-                    <ChipPicker options={RATE_OPTIONS} value={row.rateType} onChange={(v) => applyRateType(row.key, v)} />
+                    <ChipPicker options={rateOptionsPositive} value={row.rateType} onChange={(v) => applyRateType(row.key, v)} />
 
                     <View style={styles.rowGap}>
                       <View style={{ flex: 1 }}>
@@ -469,11 +650,11 @@ export default function TravelAllowanceFormScreen({
                     </View>
 
                     <Text style={styles.miniLabel}>รายการหัก</Text>
-                    <ChipPicker options={DEDUCT_OPTIONS} value={row.deductType} onChange={(v) => updateRow(row.key, 'deductType', v)} />
+                    <ChipPicker options={rateOptionsNegative} value={row.deductType} onChange={(v) => updateRow(row.key, 'deductType', v)} />
 
                     <View style={styles.amountBox}>
-                      <Text style={styles.amountBoxLabel}>รวม (บาท)</Text>
-                      <Text style={styles.amountBoxValue}>{moneyFmt(rowAmount(row))}</Text>
+                      <Text style={styles.amountBoxLabel}>รวม (บาท) — ประมาณการ</Text>
+                      <Text style={styles.amountBoxValue}>{moneyFmt(rowAmountPreview(row, rateByKey))}</Text>
                     </View>
 
                     <Text style={styles.miniLabel}>รายละเอียด</Text>
@@ -487,20 +668,34 @@ export default function TravelAllowanceFormScreen({
                     />
 
                     <View style={styles.proofRow}>
-                      <TouchableOpacity style={styles.proofBtn} onPress={() => addProof(row.key)}>
-                        <Ionicons name="camera-outline" size={13} color="#475569" />
+                      <TouchableOpacity style={styles.proofBtn} onPress={() => addProof(row.key)} disabled={photoBusyKey === row.key}>
+                        {photoBusyKey === row.key ? <ActivityIndicator size="small" color="#475569" /> : <Ionicons name="camera-outline" size={13} color="#475569" />}
                         <Text style={styles.proofBtnText}>แนบรูป</Text>
                       </TouchableOpacity>
-                      {row.proofCount > 0 && <Text style={styles.proofCountText}>แนบแล้ว {row.proofCount} รูป</Text>}
+                      {row.photos.length > 0 && <Text style={styles.proofCountText}>แนบแล้ว {row.photos.length} รูป</Text>}
                     </View>
+                    {row.photos.length > 0 && (
+                      <View style={styles.photoChipsRow}>
+                        {row.photos.map((p) => (
+                          <TouchableOpacity key={p} style={styles.photoChip} onPress={() => removePhoto(row.key, p)}>
+                            <Text style={styles.photoChipText} numberOfLines={1}>{p.split('/').pop()}</Text>
+                            <Ionicons name="close-circle" size={13} color="#ef4444" />
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    )}
 
                     {needsGps && (
                       <View style={styles.gpsBox}>
-                        <TouchableOpacity style={[styles.gpsBtn, row.gpsCaptured && styles.gpsBtnDone]} onPress={() => captureGps(row.key)}>
-                          <Ionicons name="location" size={13} color={row.gpsCaptured ? '#059669' : '#2563eb'} />
-                          <Text style={[styles.gpsBtnText, { color: row.gpsCaptured ? '#059669' : '#2563eb' }]}>{row.gpsCaptured ? `จับพิกัดแล้ว (${row.gpsAt} น.)` : 'จับพิกัด GPS'}</Text>
+                        <TouchableOpacity style={[styles.gpsBtn, hasGps && styles.gpsBtnDone]} onPress={() => captureGps(row.key)} disabled={gpsBusyKey === row.key}>
+                          {gpsBusyKey === row.key ? (
+                            <ActivityIndicator size="small" color="#2563eb" />
+                          ) : (
+                            <Ionicons name="location" size={13} color={hasGps ? '#059669' : '#2563eb'} />
+                          )}
+                          <Text style={[styles.gpsBtnText, { color: hasGps ? '#059669' : '#2563eb' }]}>{hasGps ? 'จับพิกัดแล้ว' : 'จับพิกัด GPS'}</Text>
                         </TouchableOpacity>
-                        {!row.gpsCaptured && <Text style={styles.gpsHint}>ตัวเลือกนี้ต้องจับพิกัดก่อนบันทึก</Text>}
+                        {!hasGps && <Text style={styles.gpsHint}>ตัวเลือกนี้ต้องจับพิกัดก่อนบันทึก</Text>}
                       </View>
                     )}
                   </View>
@@ -512,7 +707,7 @@ export default function TravelAllowanceFormScreen({
           <View style={styles.summaryCard}>
             <View style={styles.driverBlock}>
               <View style={styles.driverAvatar}>
-                <Text style={styles.driverAvatarText}>{driverName.trim().charAt(0)}</Text>
+                <Text style={styles.driverAvatarText}>{(driverName || '?').trim().charAt(0)}</Text>
               </View>
               <Text style={styles.driverName}>{driverName}</Text>
               <Text style={styles.driverSub}>พนักงานผู้ขอเบิกค่าเดินทาง</Text>
@@ -526,14 +721,14 @@ export default function TravelAllowanceFormScreen({
               <Text style={styles.sumRowValue}>{Number.isInteger(summary.days) ? summary.days : summary.days.toFixed(2)}</Text>
             </View>
             <View style={styles.sumTotalBox}>
-              <Text style={styles.sumTotalLabel}>ยอดเบิกสุทธิ</Text>
+              <Text style={styles.sumTotalLabel}>ยอดเบิกสุทธิ (ประมาณการ)</Text>
               <Text style={styles.sumTotalValue}>
                 {moneyFmt(summary.total)} <Text style={styles.sumTotalUnit}>บาท</Text>
               </Text>
               <Text style={styles.sumBahtText}>{thaiBahtText(summary.total)}</Text>
             </View>
             <Text style={styles.sumNote}>
-              <Ionicons name="information-circle-outline" size={11} color="#94a3b8" /> หลังบันทึก ระบบจะพากลับไปหน้ารายการเบิกเบี้ยเลี้ยง
+              <Ionicons name="information-circle-outline" size={11} color="#94a3b8" /> ยอดที่เป็นทางการจะยืนยันโดยเซิร์ฟเวอร์หลังกดบันทึก
             </Text>
           </View>
         </View>
@@ -544,9 +739,9 @@ export default function TravelAllowanceFormScreen({
           <Ionicons name="close" size={16} color="#475569" />
           <Text style={styles.cancelBtnText}>ยกเลิก</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
-          <Ionicons name="save-outline" size={16} color="#fff" />
-          <Text style={styles.saveBtnText}>บันทึกและกลับหน้ารายการ</Text>
+        <TouchableOpacity style={[styles.saveBtn, (!canSave || saving) && styles.saveBtnDisabled]} onPress={handleSave} disabled={!canSave || saving}>
+          {saving ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="save-outline" size={16} color="#fff" />}
+          <Text style={styles.saveBtnText}>{canSave ? 'บันทึกและกลับหน้ารายการ' : 'ไม่มีสิทธิ์บันทึก'}</Text>
         </TouchableOpacity>
       </View>
 
@@ -561,7 +756,11 @@ export default function TravelAllowanceFormScreen({
               </TouchableOpacity>
             </View>
             <ScrollView style={{ marginTop: 10 }} showsVerticalScrollIndicator={false}>
-              {SOURCE_JOBS.length === 0 ? (
+              {sourceJobsLoading ? (
+                <View style={styles.emptyBox}>
+                  <ActivityIndicator color="#4338ca" />
+                </View>
+              ) : sourceJobs.length === 0 ? (
                 <View style={styles.emptyBox}>
                   <Ionicons name="folder-open-outline" size={24} color="#cbd5e1" />
                   <Text style={styles.emptyText}>ไม่พบใบงานในช่วงนี้</Text>
@@ -570,19 +769,21 @@ export default function TravelAllowanceFormScreen({
                   </TouchableOpacity>
                 </View>
               ) : (
-                SOURCE_JOBS.map((j) => {
+                sourceJobs.map((j) => {
                   const added = importedJobIds.has(j.jobId);
                   return (
                     <View key={j.jobId} style={styles.sourceItem}>
                       <View style={{ flex: 1 }}>
                         <Text style={styles.sourceDate}>
-                          {j.date} {j.time} <Text style={styles.sourceStatus}>{STATUS_LABEL[j.status]}</Text>
+                          {j.dateThai || j.dateYmd} {j.time} {j.status ? <Text style={styles.sourceStatus}>{j.status}</Text> : null}
                         </Text>
                         <Text style={styles.sourceRoute}>{j.route}</Text>
-                        <Text style={styles.sourceCustomer}>
-                          {j.customer}
-                          {j.detail ? ` — ${j.detail}` : ''}
-                        </Text>
+                        {(j.customer || j.detail) && (
+                          <Text style={styles.sourceCustomer}>
+                            {j.customer}
+                            {j.detail ? ` — ${j.detail}` : ''}
+                          </Text>
+                        )}
                       </View>
                       <TouchableOpacity disabled={added} style={[styles.sourceAddBtn, added && styles.sourceAddBtnDone]} onPress={() => addFromSource(j)}>
                         <Text style={[styles.sourceAddBtnText, added && { color: '#94a3b8' }]}>{added ? 'เพิ่มแล้ว' : '+ เพิ่ม'}</Text>
@@ -596,17 +797,6 @@ export default function TravelAllowanceFormScreen({
         </View>
       </Modal>
     </SafeAreaView>
-  );
-}
-
-function StepPill({ n, label }: { n: number; label: string }) {
-  return (
-    <View style={styles.stepPill}>
-      <View style={styles.stepPillN}>
-        <Text style={styles.stepPillNText}>{n}</Text>
-      </View>
-      <Text style={styles.stepPillLabel}>{label}</Text>
-    </View>
   );
 }
 
@@ -644,15 +834,7 @@ const styles = StyleSheet.create({
 
   periodRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginTop: 14 },
   periodLabel: { color: 'rgba(255,255,255,0.75)', fontSize: 10, fontWeight: '700', marginBottom: 5 },
-  periodInput: { borderWidth: 1, borderColor: 'rgba(255,255,255,0.4)', borderRadius: 9, paddingHorizontal: 10, paddingVertical: 8, fontSize: 12, color: '#fff', backgroundColor: 'rgba(255,255,255,0.1)' },
-  loadPeriodBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, backgroundColor: '#fff', borderRadius: 9, paddingVertical: 9, marginTop: 10 },
-  loadPeriodBtnText: { color: '#4338ca', fontSize: 11.5, fontWeight: '700' },
-
-  stepsRow: { flexDirection: 'row', backgroundColor: '#fff', marginHorizontal: 14, marginTop: 12, borderRadius: 12, padding: 10, gap: 6, borderWidth: 1, borderColor: '#e2e8f0' },
-  stepPill: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 5 },
-  stepPillN: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#eef2ff', alignItems: 'center', justifyContent: 'center' },
-  stepPillNText: { fontSize: 9.5, fontWeight: '800', color: '#4338ca' },
-  stepPillLabel: { fontSize: 9.5, fontWeight: '700', color: '#475569', flexShrink: 1 },
+  periodValue: { fontSize: 13, color: '#fff', fontWeight: '800' },
 
   body: { padding: 14 },
   card: { backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#e2e8f0', padding: 14, marginBottom: 14 },
@@ -706,6 +888,9 @@ const styles = StyleSheet.create({
   proofBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 },
   proofBtnText: { fontSize: 10.5, fontWeight: '700', color: '#475569' },
   proofCountText: { fontSize: 10.5, color: '#059669', fontWeight: '700' },
+  photoChipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+  photoChip: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 7, paddingHorizontal: 8, paddingVertical: 5, maxWidth: 160 },
+  photoChipText: { fontSize: 9.5, color: '#475569', fontWeight: '600', flexShrink: 1 },
 
   gpsBox: { marginTop: 9 },
   gpsBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: '#eff6ff', borderWidth: 1, borderColor: '#93c5fd', borderRadius: 9, paddingVertical: 10 },
@@ -736,6 +921,7 @@ const styles = StyleSheet.create({
   cancelBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: '#f1f5f9', borderRadius: 12, paddingVertical: 13 },
   cancelBtnText: { color: '#475569', fontWeight: '700', fontSize: 13 },
   saveBtn: { flex: 2, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#4338ca', borderRadius: 12, paddingVertical: 13 },
+  saveBtnDisabled: { opacity: 0.5 },
   saveBtnText: { color: '#fff', fontWeight: '700', fontSize: 12.5 },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', justifyContent: 'center', padding: 16 },

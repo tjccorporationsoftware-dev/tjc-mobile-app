@@ -1,43 +1,33 @@
 /**
  * TravelAllowanceMapScreen.tsx
  * ------------------------------------------------------------------
- * Mobile mockup ของแท็บ "แผนที่พิกัด" ในหน้า fm_report_travel.php — แผนที่จุด GPS ที่จับตอน
- * กรอกใบเบิกเบี้ยเลี้ยง (เฉพาะเกณฑ์ที่ตั้งค่าไว้ว่า "ต้องจับพิกัด GPS")
- * เชื่อมจากปุ่ม "ดูแผนที่จุดเบิก GPS" ในหน้า TravelAllowanceScreen
+ * แผนที่จุดพิกัด GPS ที่จับตอนกรอกใบเบิกเบี้ยเลี้ยง — ต่อ API จริงแล้ว
  *
- * สถานะไฟล์นี้: UI MOCKUP — พิกัด/ข้อมูลจุดเป็น MOCK_POINTS ด้านล่าง
+ * ⚠️ หมายเหตุสำคัญ: fm_travel_API_mobile.php "ไม่มี" action สำหรับดึงจุดแผนที่รวมทุกคนขับในรอบ
+ * เดียว (ไม่มี get_map_points หรือเทียบเท่า) เอกสาร action มีแค่ get_list (รายชื่อคนขับ) กับ
+ * get_detail (รายละเอียด+jobs ของคนขับ "ทีละคน") จึงประกอบจุดแผนที่ขึ้นจากการเรียก 2 action
+ * ที่มีจริงนี้: get_list ก่อนเพื่อได้รายชื่อคนขับที่มีข้อมูลในรอบนี้ แล้วเรียก get_detail ของ
+ * แต่ละคนขับแบบขนาน (Promise.all) มาเก็บเฉพาะแถวที่ has_gps=1 — ไม่ได้เดา endpoint ใหม่ขึ้นมาเอง
+ * ยังใช้ get_master_data เพื่อรู้ว่าเกณฑ์ไหนตั้งค่า require_gps=1 ไว้บ้าง (ไว้คำนวณ "ต้องจับ N
+ * รายการ/ขาด Z" ให้ตรงของจริง ไม่ใช่แค่จำนวนจุดที่จับมาแล้ว)
  *
- * ตรงกับพฤติกรรมจริงจากแท็บแผนที่ของต้นฉบับ (initTravelMap/drawMapPoints/mapPopupHtml ฯลฯ):
- *  - แถบบนแผนที่: ปุ่มกลับไปหน้ารายการ, "รอบ X · N จุด", ถ้ามีเกณฑ์ต้องจับพิกัดจะโชว์
- *    "ต้องจับ Y รายการ" + ป้าย "ขาด Z"(แดง) หรือ "ครบแล้ว"(เขียว)
- *  - ตัวกรอง: ค้นหาคนขับ/เส้นทาง, คนขับ, เกณฑ์การเบิก, ช่วงวันที่ (ล็อกไว้ในรอบที่กำลังดู),
- *    ปุ่มล้างตัวกรอง — กรองแบบ AND ทั้งหมดตรงกับ matchMapPoint()
- *  - หมุด = สีตามเกณฑ์การเบิก (แจกสีอัตโนมัติทีละเกณฑ์ตรงกับ buildMapFilterOptions()), มีตัวอักษร
- *    ย่อชื่อคนขับตรงกลาง (ต้นฉบับใช้รูปคนขับจริงถ้ามี — mockup นี้ใช้ตัวอักษรย่อเป็นหลัก)
- *  - แตะหมุด/การ์ด -> รายละเอียดครบ: ชื่อคนขับ, วันเวลา, เส้นทาง, ยอดเงิน, เวลาที่จับพิกัด,
- *    ป้ายเกณฑ์ที่ใช้, ปุ่ม "เปิดใน Google Maps" + "เปิดใบเบิก" (ตรงกับ mapPopupHtml())
- *  - Legend มุมล่างซ้าย โชว์สีของแต่ละเกณฑ์
- *  - 2 สถานะว่าง: "ยังไม่มีพิกัดในรอบนี้" (ไม่มีจุดเลย) กับ "ไม่พบจุดที่ตรงกับตัวกรอง" (มีจุดแต่กรองแล้วไม่เจอ)
- *
- * ที่ปรับให้เหมาะกับมือถือ:
- *  - ใช้ react-native-maps (มีอยู่แล้วใน package.json ของโปรเจกต์) แทน Leaflet.js
- *  - หมุดใช้ตัวอักษรย่อ+สีเกณฑ์เป็นหลัก แทนที่จะพยายามโหลดรูปคนขับจริงพร้อม fallback หลายชั้น
- *    แบบต้นฉบับ (ของจริงมี logic ตรวจรูปขาวโล่ง/โลโก้บริษัทด้วย — ซับซ้อนเกินความจำเป็นของ mockup)
- *  - Android ต้องตั้งค่า Google Maps API key ใน app.json (expo.android.config.googleMaps.apiKey)
- *    ถึงจะเห็นแผนที่พื้นหลังจริง ไม่งั้นจะขึ้นตารางเทาว่างเปล่า
- *
- * ต้องติดตั้ง (ถ้ายังไม่มี): npx expo install @expo/vector-icons react-native-maps
+ * เปลี่ยนจาก mockup เดิม: ลบ MOCK_POINTS ออกทั้งหมด ที่เหลือ (ตัวกรอง/สี/ป้าย/popup) คงพฤติกรรม
+ * เดิมไว้ครบ เพราะยังใช้ react-native-maps ตัวเดียวกัน
  * ------------------------------------------------------------------
  */
 
 import { Ionicons } from '@expo/vector-icons';
-import { useMemo, useState } from 'react';
-import { Linking, Modal, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Linking, Modal, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import MapView, { Marker, Region } from 'react-native-maps';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-// ✅ Config
-import { API_BASE } from '../../constants/config';
+// ✅ Config + API helper กลาง
+import { API_MODULES } from '../../constants/config';
+import { useAuth } from '../_layout';
+import { apiMobileGet } from '../service/api_mobile';
+
+const FM_TRAVEL_API_URL = `${API_MODULES}/fm_travel_API_mobile.php`;
 
 // ====================================================================
 // Types
@@ -47,8 +37,8 @@ interface MapPoint {
   id: string;
   driver: string;
   driverId: number;
-  date: string; // YYYY-MM-DD ไว้เทียบกรอง
-  dateText: string; // ข้อความไทยไว้โชว์
+  dateYmd: string;
+  dateThai: string;
   time: string;
   route: string;
   rateKey: string;
@@ -56,37 +46,19 @@ interface MapPoint {
   amount: number;
   lat: number;
   lng: number;
-  at: string; // เวลาที่จับพิกัด
+  at: string;
+  mapUrl: string;
 }
 
 export interface TravelAllowanceMapScreenProps {
-  startDate?: string;
-  endDate?: string;
+  startDate?: string; // YYYY-MM-DD
+  endDate?: string; // YYYY-MM-DD
   cycleLabel?: string;
   onBack?: () => void;
   onOpenSubmission?: (driverId: number) => void;
 }
 
-// ====================================================================
-// Mock data — จุดรอบ จ.ชลบุรี/กรุงเทพฯ ให้พอเห็นภาพบนแผนที่จริง
-// ====================================================================
-
 const MAP_PALETTE = ['#2563eb', '#059669', '#d97706', '#dc2626', '#7c3aed', '#0891b2'];
-
-const MOCK_POINTS: MapPoint[] = [
-  { id: 'p1', driver: 'วิชัย ใจดี', driverId: 1, date: '2569-08-17', dateText: '17 สิงหาคม 2569', time: '14:20', route: 'ชลบุรี', rateKey: 'hotel', label: 'นอนโรงแรม (210)', amount: 210, lat: 13.3611, lng: 100.9847, at: '14:25' },
-  { id: 'p2', driver: 'สมชาย รักไทย', driverId: 2, date: '2569-09-03', dateText: '3 กันยายน 2569', time: '08:35', route: 'คลังสินค้าหลัก - โครงการ TJC69-030', rateKey: '1-200', label: '1-200 กม.', amount: 80, lat: 13.7367, lng: 100.5231, at: '08:40' },
-  { id: 'p3', driver: 'สมชาย รักไทย', driverId: 2, date: '2569-09-05', dateText: '5 กันยายน 2569', time: '07:10', route: 'คลังสินค้าหลัก - จ.ขอนแก่น', rateKey: '200-500', label: '200-500 กม.', amount: 160, lat: 16.4419, lng: 102.836, at: '07:15' },
-  { id: 'p4', driver: 'อรทัย ใจงาม', driverId: 4, date: '2569-09-06', dateText: '6 กันยายน 2569', time: '11:00', route: 'สมุทรปราการ', rateKey: 'vehicle', label: 'นอนรถ/นอนบ้านพัก', amount: 310, lat: 13.5991, lng: 100.5998, at: '11:05' },
-  { id: 'p5', driver: 'กานดา สุขใจ', driverId: 6, date: '2569-09-08', dateText: '8 กันยายน 2569', time: '09:40', route: 'คลังสินค้าหลัก - จ.นครราชสีมา', rateKey: '500+', label: '500 กม. ขึ้นไป', amount: 210, lat: 14.9799, lng: 102.0977, at: '09:45' },
-];
-
-let uidCounter = 1;
-function uid(): string {
-  uidCounter += 1;
-  return `pt_${Date.now()}_${uidCounter}`;
-}
-void uid; // เผื่อใช้ตอนต่อ backend จริง (สร้าง key ให้จุดที่โหลดมาใหม่)
 
 // ====================================================================
 // Helpers
@@ -107,14 +79,109 @@ function rateColorMap(points: MapPoint[]): Record<string, string> {
 // Main screen
 // ====================================================================
 
-export default function TravelAllowanceMapScreen({ startDate = '01/09/2569', endDate = '15/09/2569', cycleLabel, onBack, onOpenSubmission }: TravelAllowanceMapScreenProps) {
-  const allPoints = MOCK_POINTS;
+export default function TravelAllowanceMapScreen({ startDate = '', endDate = '', cycleLabel, onBack, onOpenSubmission }: TravelAllowanceMapScreenProps) {
+  const { user } = useAuth();
+
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [allPoints, setAllPoints] = useState<MapPoint[]>([]);
+  const [needGpsCount, setNeedGpsCount] = useState(0);
+  const [hasGpsCount, setHasGpsCount] = useState(0);
+
   const [search, setSearch] = useState('');
   const [driverFilter, setDriverFilter] = useState('');
   const [rateFilter, setRateFilter] = useState('');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [selected, setSelected] = useState<MapPoint | null>(null);
+
+  // ประกอบจุดแผนที่จาก get_list + get_detail (ดูคอมเมนต์หัวไฟล์) + get_master_data
+  // (require_gps) — ไม่มี action รวมจุดแผนที่ตัวเดียวในเอกสารจริง
+  const load = useCallback(async () => {
+    if (!user || !startDate || !endDate) return;
+    setLoading(true);
+    try {
+      const [listRes, masterRes] = await Promise.all([
+        apiMobileGet(FM_TRAVEL_API_URL, 'get_list', { user_id: user.id, start_date: startDate, end_date: endDate, limit: 200 }),
+        apiMobileGet(FM_TRAVEL_API_URL, 'get_master_data', { user_id: user.id }),
+      ]);
+
+      const allRateOptions = [
+        ...(Array.isArray(masterRes.rate_options_positive) ? masterRes.rate_options_positive : []),
+        ...(Array.isArray(masterRes.rate_options_negative) ? masterRes.rate_options_negative : []),
+      ];
+      const requireGpsKeys = new Set<string>(allRateOptions.filter((o: any) => !!o.require_gps).map((o: any) => String(o.opt_key)));
+
+      const driverRows: any[] = Array.isArray(listRes.list) ? listRes.list : [];
+      const withData = driverRows.filter((r) => !!(r.form_exists ?? r.has_data));
+
+      const details = await Promise.all(
+        withData.map((r) =>
+          apiMobileGet(FM_TRAVEL_API_URL, 'get_detail', {
+            user_id: user.id,
+            driver_id: r.driver_id ?? r.id,
+            start_date: startDate,
+            end_date: endDate,
+          }).catch(() => null)
+        )
+      );
+
+      const pts: MapPoint[] = [];
+      let needCount = 0;
+      let hasCount = 0;
+
+      details.forEach((res, idx) => {
+        if (!res) return;
+        const driverRow = withData[idx];
+        const driverId = Number(driverRow.driver_id ?? driverRow.id ?? 0);
+        const driverName = String(driverRow.driver_name ?? driverRow.name ?? '');
+        const jobs: any[] = Array.isArray(res.jobs) ? res.jobs : [];
+        jobs.forEach((j) => {
+          const needsGps = requireGpsKeys.has(String(j.rate_type));
+          const hasGps = Number(j.has_gps ?? 0) === 1 && typeof j.lat === 'number' && typeof j.lng === 'number';
+          if (needsGps) {
+            needCount += 1;
+            if (hasGps) hasCount += 1;
+          }
+          if (hasGps) {
+            pts.push({
+              id: `${driverId}_${j.job_id ?? 0}_${j.no ?? pts.length}`,
+              driver: driverName,
+              driverId,
+              dateYmd: String(j.date_ymd ?? ''),
+              dateThai: String(j.date_thai ?? ''),
+              time: String(j.time ?? ''),
+              route: String(j.route ?? ''),
+              rateKey: String(j.rate_type ?? ''),
+              label: String(j.rate_type_label ?? j.rate_type ?? ''),
+              amount: Number(j.amount ?? 0),
+              lat: j.lat,
+              lng: j.lng,
+              at: String(j.gps_at ?? ''),
+              mapUrl: String(j.gps_map_url ?? ''),
+            });
+          }
+        });
+      });
+
+      setAllPoints(pts);
+      setNeedGpsCount(needCount);
+      setHasGpsCount(hasCount);
+      setLoadError(null);
+    } catch (e: any) {
+      // ไม่บล็อกทั้งหน้าถ้าโหลดพิกัดไม่สำเร็จ — แต่ต้องแยกให้ออกจาก "รอบนี้ไม่มีพิกัดจริงๆ"
+      // ไม่งั้นผู้ใช้เข้าใจผิดว่าไม่มีใครลืมจับพิกัด ทั้งที่จริงคือโหลดข้อมูลพัง
+      console.error('fm_report_travel_map load failed', e);
+      setAllPoints([]);
+      setLoadError(e?.message || 'โหลดพิกัดไม่สำเร็จ');
+    } finally {
+      setLoading(false);
+    }
+  }, [user, startDate, endDate]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   const colorOf = useMemo(() => rateColorMap(allPoints), [allPoints]);
 
@@ -126,16 +193,15 @@ export default function TravelAllowanceMapScreen({ startDate = '01/09/2569', end
     return map;
   }, [allPoints]);
 
-  // ตรงกับ matchMapPoint() ของต้นฉบับ — กรองแบบ AND ทุกเงื่อนไข
   const points = useMemo(() => {
     const q = search.trim().toLowerCase();
     return allPoints.filter((p) => {
       if (driverFilter && p.driver !== driverFilter) return false;
       if (rateFilter && p.rateKey !== rateFilter) return false;
-      if (fromDate && p.date < fromDate) return false;
-      if (toDate && p.date > toDate) return false;
+      if (fromDate && p.dateYmd < fromDate) return false;
+      if (toDate && p.dateYmd > toDate) return false;
       if (q) {
-        const hay = `${p.driver} ${p.route} ${p.label} ${p.date} ${p.dateText}`.toLowerCase();
+        const hay = `${p.driver} ${p.route} ${p.label} ${p.dateYmd} ${p.dateThai}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -149,9 +215,6 @@ export default function TravelAllowanceMapScreen({ startDate = '01/09/2569', end
     setFromDate('');
     setToDate('');
   }
-
-  const needGpsCount = 0; // TODO: ต่อ backend จริง -> นับจากแถวที่ rate_type ต้องจับพิกัดทั้งหมดในรอบนี้ (ไม่ใช่แค่ที่จับสำเร็จ)
-  const hasGpsCount = allPoints.length;
 
   const initialRegion: Region | undefined = points.length
     ? { latitude: points[0].lat, longitude: points[0].lng, latitudeDelta: 6, longitudeDelta: 6 }
@@ -207,8 +270,8 @@ export default function TravelAllowanceMapScreen({ startDate = '01/09/2569', end
         </ScrollView>
 
         <View style={styles.dateFilterRow}>
-          <TextInput style={styles.dateFilterInput} placeholder="ตั้งแต่ (ทั้งรอบ)" placeholderTextColor="#94a3b8" value={fromDate} onChangeText={setFromDate} />
-          <TextInput style={styles.dateFilterInput} placeholder="ถึง (ทั้งรอบ)" placeholderTextColor="#94a3b8" value={toDate} onChangeText={setToDate} />
+          <TextInput style={styles.dateFilterInput} placeholder="ตั้งแต่ (YYYY-MM-DD)" placeholderTextColor="#94a3b8" value={fromDate} onChangeText={setFromDate} />
+          <TextInput style={styles.dateFilterInput} placeholder="ถึง (YYYY-MM-DD)" placeholderTextColor="#94a3b8" value={toDate} onChangeText={setToDate} />
           <TouchableOpacity style={styles.resetFilterBtn} onPress={resetFilters}>
             <Ionicons name="refresh" size={12} color="#475569" />
           </TouchableOpacity>
@@ -216,7 +279,20 @@ export default function TravelAllowanceMapScreen({ startDate = '01/09/2569', end
       </View>
 
       <View style={styles.mapWrap}>
-        {allPoints.length === 0 ? (
+        {loading ? (
+          <View style={styles.emptyBox}>
+            <ActivityIndicator color="#4338ca" />
+          </View>
+        ) : loadError ? (
+          <View style={styles.emptyBox}>
+            <Ionicons name="cloud-offline-outline" size={30} color="#ef4444" />
+            <Text style={styles.emptyTitle}>โหลดพิกัดไม่สำเร็จ</Text>
+            <Text style={styles.emptyText}>{loadError}</Text>
+            <TouchableOpacity onPress={() => void load()} style={{ marginTop: 10, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, backgroundColor: '#eef2ff' }}>
+              <Text style={{ color: '#4338ca', fontWeight: '700', fontSize: 12.5 }}>ลองใหม่</Text>
+            </TouchableOpacity>
+          </View>
+        ) : allPoints.length === 0 ? (
           <View style={styles.emptyBox}>
             <Ionicons name="location-outline" size={30} color="#cbd5e1" />
             <Text style={styles.emptyTitle}>ยังไม่มีพิกัดในรอบนี้</Text>
@@ -244,9 +320,11 @@ export default function TravelAllowanceMapScreen({ startDate = '01/09/2569', end
           </MapView>
         )}
 
-        <View style={styles.mapCountBadge}>
-          <Text style={styles.mapCountBadgeText}>{points.length} จุด</Text>
-        </View>
+        {!loading && allPoints.length > 0 && (
+          <View style={styles.mapCountBadge}>
+            <Text style={styles.mapCountBadgeText}>{points.length} จุด</Text>
+          </View>
+        )}
 
         {points.length > 0 && (
           <View style={styles.legendBox}>
@@ -264,7 +342,7 @@ export default function TravelAllowanceMapScreen({ startDate = '01/09/2569', end
         )}
       </View>
 
-      {/* Modal: รายละเอียดจุด — ตรงกับ mapPopupHtml() ของต้นฉบับ */}
+      {/* Modal: รายละเอียดจุด */}
       <Modal visible={!!selected} transparent animationType="fade">
         <TouchableOpacity style={styles.popupOverlay} activeOpacity={1} onPress={() => setSelected(null)}>
           {selected && (
@@ -278,7 +356,7 @@ export default function TravelAllowanceMapScreen({ startDate = '01/09/2569', end
               <View style={styles.popupRow}>
                 <Ionicons name="calendar-outline" size={12} color="#64748b" />
                 <Text style={styles.popupRowText}>
-                  {selected.dateText} {selected.time}
+                  {selected.dateThai} {selected.time}
                 </Text>
               </View>
               {!!selected.route && (
@@ -291,17 +369,19 @@ export default function TravelAllowanceMapScreen({ startDate = '01/09/2569', end
                 <Ionicons name="cash-outline" size={12} color="#64748b" />
                 <Text style={styles.popupRowText}>{moneyFmt(selected.amount)} บาท</Text>
               </View>
-              <View style={styles.popupRow}>
-                <Ionicons name="time-outline" size={12} color="#64748b" />
-                <Text style={styles.popupRowText}>จับพิกัด {selected.at}</Text>
-              </View>
+              {!!selected.at && (
+                <View style={styles.popupRow}>
+                  <Ionicons name="time-outline" size={12} color="#64748b" />
+                  <Text style={styles.popupRowText}>จับพิกัด {selected.at}</Text>
+                </View>
+              )}
               <View style={[styles.popupTag, { backgroundColor: colorOf[selected.rateKey] + '18' }]}>
                 <Text style={[styles.popupTagText, { color: colorOf[selected.rateKey] }]}>{selected.label}</Text>
               </View>
               <View style={styles.popupLinksRow}>
                 <TouchableOpacity
                   style={styles.popupLinkBtn}
-                  onPress={() => Linking.openURL(`https://www.google.com/maps?q=${selected.lat},${selected.lng}`)}
+                  onPress={() => Linking.openURL(selected.mapUrl || `https://www.google.com/maps?q=${selected.lat},${selected.lng}`)}
                 >
                   <Ionicons name="navigate" size={13} color="#2563eb" />
                   <Text style={styles.popupLinkBtnText}>เปิดใน Google Maps</Text>

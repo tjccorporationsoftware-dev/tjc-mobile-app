@@ -1,53 +1,39 @@
 /**
  * TravelAllowanceScreen.tsx
  * ------------------------------------------------------------------
- * Mobile mockup ของหน้า fm_report_travel.php ("รายการเบิกเบี้ยเลี้ยง" — โมดูลขนส่ง)
- * สำหรับแอป tjc-mobile-app (Expo / React Native)
+ * หน้ารายการ "เบี้ยเลี้ยงขนส่ง" (fm_report_travel.php, mode=list) — ต่อ API จริงแล้ว
+ * ผ่าน fm_travel_API_mobile.php (${API_MODULES}/fm_travel_API_mobile.php)
  *
- * ไฟล์ต้นฉบับใหญ่มาก (4,300+ บรรทัด) รวม 3 อย่างไว้ในไฟล์เดียว: หน้ารายการคนขับ (list),
- * แท็บแผนที่ GPS จุดเบิก (map), และกล่องสรุป "ใบขออนุมัติเบิกจ่ายค่าเบี้ยเลี้ยง" (e-form
- * อนุมัติหลายขั้นตอน) — ส่วนฟอร์มกรอกข้อมูลจริงของคนขับแต่ละคนอยู่คนละไฟล์ (fm_report_travel_form.php)
- * ซึ่งยังไม่ได้ส่งมา — mockup รอบนี้จึงทำเฉพาะ "หน้ารายการ" (mode=list) + "ตั้งค่าตัวเลือก
- * เบี้ยเลี้ยง" ให้ครบเต็มรูปแบบ ส่วนที่เหลือ (แผนที่/ใบขออนุมัติ/ฟอร์มกรอกจริง) เป็น stub
- * ดูรายละเอียดท้ายไฟล์
- *
- * สถานะไฟล์นี้: UI MOCKUP — ข้อมูลทั้งหมดเป็น MOCK_DRIVERS/MOCK_RATE_OPTIONS ด้านล่าง
- *
- * ตรงกับพฤติกรรม/สูตรจริงจาก fm_report_travel.php:
- *  - หัวข้อ + ช่วงวันที่รอบเบิก + ปุ่ม "รอบก่อนหน้า/รอบถัดไป" (เปลี่ยนช่วงวันที่ทั้งก้อน)
- *  - สรุปสถานะ: บันทึกแล้ว / ยังไม่ทำ / รวม N คน / ใบงานในช่วงนี้ M ใบ
- *  - การ์ดคนขับแต่ละคน: รูป/ตัวอักษรย่อ, badge สถานะ (บันทึกแล้ว/ยังไม่ทำรายการ), ยอดเงินรวม
- *    (ถ้ามี), จำนวนใบงานในช่วงนี้ + ปิดงานแล้วกี่ใบ, วันที่บันทึกล่าสุด, ปุ่ม "ดูใบเบิก"+
- *    "แก้ไขข้อมูล" (ถ้ามีข้อมูลแล้ว) หรือ "กรอกข้อมูลใหม่" (ถ้ายังไม่มี)
- *  - ตั้งค่าตัวเลือกเบี้ยเลี้ยง: จัดการ "เกณฑ์" (opt_key/label/rate/group) แบ่งกลุ่มอัตโนมัติ,
- *    ใส่ค่าติดลบ = ไปอยู่กลุ่ม "หักออก" แทน (RateOptsPos/RateOptsNeg), toggle "ต้องจับพิกัด GPS"
- *  - สูตร MoneyFmt: จำนวนเต็มไม่โชว์ทศนิยม มีเศษถึงโชว์ 2 ตำแหน่ง (210 / 210.50)
- *
- * ที่เป็น stub (นอกขอบเขตรอบนี้ — ต้องไฟล์เพิ่ม/ไลบรารีแผนที่/ซับซ้อนเกินไป):
- *  - "ดูใบเบิก" (mode=view) และ "กรอกข้อมูลใหม่/แก้ไขข้อมูล" (fm_report_travel_form.php)
- *    — ฟอร์มกรอกจริงของคนขับแต่ละคน ยังไม่มีไฟล์ต้นฉบับให้ดู ส่งมาได้จะทำต่อให้
- *  - แท็บแผนที่ GPS จุดเบิก — ต้องมี react-native-maps + ข้อมูลพิกัดจริง
- *  - กล่องสรุป "ใบขออนุมัติเบิกจ่ายค่าเบี้ยเลี้ยง" (multi-step e-form อนุมัติ) — ซับซ้อนพอ
- *    เป็นอีกโมดูลนึงได้เลย รอส่งรายละเอียดเพิ่ม
- *
- * ต้องติดตั้ง (ถ้ายังไม่มี): npx expo install @expo/vector-icons
+ * เปลี่ยนจาก mockup เดิม:
+ *  - ลบ MOCK_DRIVERS/DEFAULT_RATE_OPTIONS + ฟีเจอร์ "ตั้งค่าตัวเลือกเบี้ยเลี้ยง" (เพิ่ม/แก้/ลบ
+ *    เกณฑ์) ออกทั้งหมด — ไม่มี action สำหรับ CRUD เกณฑ์ใน backend จริง (มีแค่ get_master_data
+ *    ที่ "อ่าน" เกณฑ์ที่มีอยู่แล้วเพื่อใช้ในฟอร์มกรอกข้อมูล) ตามกติกา "ไม่มี action = ตัดทิ้ง"
+ *  - ช่วงวันที่รอบเบิกเปลี่ยนเป็น "อ่านอย่างเดียว" ผูกกับ get_pay_cycle/get_master_data.pay_cycle
+ *    แทนช่องกรอกวันที่เอง (ของเดิมให้พิมพ์วันที่มั่ว ๆ ได้ ซึ่งไม่มี action รองรับการ "ตั้งวันที่เอง"
+ *    มีแต่ปุ่มรอบก่อนหน้า/รอบถัดไปที่ตรงกับ get_pay_cycle.prev/next จริง ๆ)
+ *  - การ์ดคนขับ, แถบสรุปสถานะ ดึงจาก get_list/get_dashboard จริง ไม่ได้ reduce เองฝั่งไคลเอนต์
+ *  - ปุ่ม "แก้ไขข้อมูล/กรอกข้อมูลใหม่" ถูกซ่อนถ้า can_save = false (สิทธิ์จากเซิร์ฟเวอร์)
  * ------------------------------------------------------------------
  */
 
 import { Ionicons } from '@expo/vector-icons';
-import { useMemo, useState } from 'react';
-import { Alert, FlatList, Modal, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, FlatList, RefreshControl, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-// ✅ Config
-import { API_BASE } from '../../constants/config';
-// ปรับ path นี้ให้ตรงกับตำแหน่งไฟล์จริงในโปรเจกต์ ถ้าไม่ได้วางไว้โฟลเดอร์เดียวกัน
-import TravelAllowanceFormScreen from './fm_report_travel_form'; // ฟอร์มกรอกข้อมูลจริงของคนขับแต่ละคน (mode=form) — ยังไม่มีต้นฉบับให้ดู
-import TravelAllowanceMapScreen from './fm_report_travel_map'; // แท็บแผนที่ GPS จุดเบิก — ยังไม่มีต้นฉบับให้ดู
-import TravelAllowanceViewScreen from './fm_report_travel_view'; // ดูใบเบิกของคนขับแต่ละคน (mode=view) — ยังไม่มีต้นฉบับให้ดู
+// ✅ Config + API helper กลาง (ตรงกับ pattern ที่ใช้ทั่วโปรเจกต์: apiMobileGet/apiMobilePost)
+import { useAuth } from '../_layout';
+import { apiMobileGet } from '../service/api_mobile';
+import TravelAllowanceFormScreen from './fm_report_travel_form';
+import TravelAllowanceMapScreen from './fm_report_travel_map';
+import TravelAllowanceViewScreen from './fm_report_travel_view';
+
+// 🌟 [ใหม่] URL โมดูลจริง — ตามธรรมเนียมของไฟล์นี้: ประกาศ const local ในไฟล์ (ดู accounting_dashboard.tsx)
+import { API_MODULES } from '../../constants/config';
+const FM_TRAVEL_API_URL = `${API_MODULES}/fm_travel_API_mobile.php`;
 
 // ====================================================================
-// Types
+// Types — สะท้อน field จริงจาก get_list / get_dashboard / get_master_data
 // ====================================================================
 
 interface DriverRow {
@@ -58,46 +44,35 @@ interface DriverRow {
   totalAmount: number;
   jobTotal: number;
   jobDone: number;
-  lastUpdateShow?: string; // "19 ส.ค. 69"
-  lastUpdateTime?: string; // "14:25"
+  lastUpdateShow?: string; // ส่วนวันที่ของ updated_at_thai
+  lastUpdateTime?: string; // ส่วนเวลาของ updated_at_thai
+  statusEffective?: string;
+  statusEffectiveText?: string;
 }
 
-interface RateOption {
-  id: string;
-  optKey: string;
-  label: string;
-  rate: number;
-  group: string;
-  requiresGps: boolean;
+interface DashboardStats {
+  savedCount: number;
+  unsavedCount: number;
+  totalCount: number;
+  jobSum: number;
+  jobDoneSum: number;
+  totalAmountSum: number;
+}
+
+interface PermFlags {
+  canSave: boolean;
+  canSignRequester: boolean;
+  canSignChecker: boolean;
+  canSignApprover: boolean;
+  canFullAccess: boolean;
+  myDriverId: number;
+  myDriverName: string;
+  lockedToSelf: boolean;
 }
 
 export interface TravelAllowanceScreenProps {
   onBack?: () => void;
 }
-
-// ====================================================================
-// Mock data
-// ====================================================================
-
-const DEFAULT_RATE_OPTIONS: RateOption[] = [
-  { id: 'hotel', optKey: 'hotel', label: 'นอนโรงแรม', rate: 210, group: 'ที่พัก', requiresGps: false },
-  { id: 'vehicle', optKey: 'vehicle', label: 'นอนรถ/นอนบ้านพัก', rate: 310, group: 'ที่พัก', requiresGps: false },
-  { id: 'roundtrip', optKey: 'roundtrip', label: 'ไป-กลับ', rate: 80, group: 'ที่พัก', requiresGps: false },
-  { id: '1-200', optKey: '1-200', label: '1-200 กม.', rate: 80, group: 'หน้างานสุดท้ายถึงบริษัท', requiresGps: true },
-  { id: '200-500', optKey: '200-500', label: '200-500 กม.', rate: 160, group: 'หน้างานสุดท้ายถึงบริษัท', requiresGps: true },
-  { id: '500+', optKey: '500+', label: '500 กม. ขึ้นไป', rate: 210, group: 'หน้างานสุดท้ายถึงบริษัท', requiresGps: true },
-  { id: 'deduct50', optKey: 'deduct50', label: 'พักเกิน 50 กม. ห่างจากหน้างาน', rate: -100, group: 'หักออก', requiresGps: true },
-];
-
-const MOCK_DRIVERS: DriverRow[] = [
-  { id: 1, name: 'วิชัย ใจดี', hasData: true, totalAmount: 890, jobTotal: 5, jobDone: 5, lastUpdateShow: '08 ก.ย. 69', lastUpdateTime: '16:40' },
-  { id: 2, name: 'สมชาย รักไทย', hasData: true, totalAmount: 1240.5, jobTotal: 7, jobDone: 6, lastUpdateShow: '09 ก.ย. 69', lastUpdateTime: '09:15' },
-  { id: 3, name: 'ประไพ ยิ้มแย้ม', hasData: false, totalAmount: 0, jobTotal: 3, jobDone: 1, lastUpdateShow: undefined },
-  { id: 4, name: 'อรทัย ใจงาม', hasData: true, totalAmount: 420, jobTotal: 2, jobDone: 2, lastUpdateShow: '05 ก.ย. 69', lastUpdateTime: '11:20' },
-  { id: 5, name: 'ธนกร มั่นคง', hasData: false, totalAmount: 0, jobTotal: 0, jobDone: 0, lastUpdateShow: undefined },
-  { id: 6, name: 'กานดา สุขใจ', hasData: true, totalAmount: 1560, jobTotal: 9, jobDone: 9, lastUpdateShow: '10 ก.ย. 69', lastUpdateTime: '18:02' },
-  { id: 7, name: 'ปิยะ เจริญสุข', hasData: false, totalAmount: 0, jobTotal: 4, jobDone: 2, lastUpdateShow: undefined },
-];
 
 // ====================================================================
 // Helpers
@@ -109,33 +84,26 @@ function moneyFmt(v: number): string {
   return n === Math.floor(n) ? n.toLocaleString('en-US') : n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function groupRateOptions(opts: RateOption[]): { group: string; items: RateOption[] }[] {
-  const order: string[] = [];
-  const map: Record<string, RateOption[]> = {};
-  opts.forEach((o) => {
-    if (!map[o.group]) {
-      map[o.group] = [];
-      order.push(o.group);
-    }
-    map[o.group].push(o);
-  });
-  return order.map((g) => ({ group: g, items: map[g] }));
-}
-
-function addDaysToDate(dateStr: string, days: number): string {
-  const m = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (!m) return dateStr;
-  const [, dd, mm, yyyy] = m;
-  const d = new Date(parseInt(yyyy, 10), parseInt(mm, 10) - 1, parseInt(dd, 10));
-  d.setDate(d.getDate() + days);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
-}
-
-let uidCounter = 1;
-function uid(): string {
-  uidCounter += 1;
-  return `rate_${Date.now()}_${uidCounter}`;
+// หมายเหตุ: ฟิลด์รายแถวของ get_list ไม่ได้ระบุชื่อ field แบบเป๊ะ ๆ ในเอกสาร (มีแค่ "list[]"
+// เฉย ๆ + ระบุเพิ่มว่ามี signed_requester/signed_checker/signed_approver ต่อแถว) จึง map
+// แบบมี fallback หลายชื่อ โดยยึดรูปแบบการตั้งชื่อเดียวกับ action อื่นในไฟล์เดียวกัน
+// (get_dashboard: job_sum/job_done_sum/total_amount_sum, get_detail: grand_total/form_exists)
+function mapDriverRow(row: any): DriverRow {
+  const updatedThai: string = row.updated_at_thai || '';
+  const [dateShow, timeShow] = updatedThai ? updatedThai.split(' ') : [undefined, undefined];
+  return {
+    id: Number(row.driver_id ?? row.id ?? 0),
+    name: String(row.driver_name ?? row.name ?? ''),
+    photoUrl: row.photo_url || undefined,
+    hasData: !!(row.form_exists ?? row.has_data ?? Number(row.grand_total ?? 0) > 0),
+    totalAmount: Number(row.grand_total ?? row.total_amount ?? 0),
+    jobTotal: Number(row.job_total ?? row.jobs_count ?? 0),
+    jobDone: Number(row.job_done ?? row.job_done_count ?? 0),
+    lastUpdateShow: dateShow,
+    lastUpdateTime: timeShow,
+    statusEffective: row.status_effective,
+    statusEffectiveText: row.status_effective_text,
+  };
 }
 
 // ====================================================================
@@ -143,100 +111,125 @@ function uid(): string {
 // ====================================================================
 
 export default function TravelAllowanceScreen({ onBack }: TravelAllowanceScreenProps) {
-  const [startDate, setStartDate] = useState('01/09/2569');
-  const [endDate, setEndDate] = useState('15/09/2569');
-  const [drivers] = useState<DriverRow[]>(MOCK_DRIVERS);
-  const [rateOptions, setRateOptions] = useState<RateOption[]>(DEFAULT_RATE_OPTIONS);
+  const { user } = useAuth();
 
-  const [rateModalVisible, setRateModalVisible] = useState(false);
-  const [editingRateId, setEditingRateId] = useState<string | null>(null);
-  const [rateGroup, setRateGroup] = useState('');
-  const [rateLabel, setRateLabel] = useState('');
-  const [rateValue, setRateValue] = useState('');
-  const [rateGps, setRateGps] = useState(false);
+  const [startDate, setStartDate] = useState(''); // YYYY-MM-DD ไว้ส่งเข้า API
+  const [endDate, setEndDate] = useState('');
+  const [startDateThai, setStartDateThai] = useState('');
+  const [endDateThai, setEndDateThai] = useState('');
 
-  // 🌟 [เพิ่มใหม่] สลับไปหน้า TravelAllowanceFormScreen (กรอกข้อมูลใหม่/แก้ไข) เองภายในไฟล์นี้
+  const [drivers, setDrivers] = useState<DriverRow[]>([]);
+  const [stats, setStats] = useState<DashboardStats>({ savedCount: 0, unsavedCount: 0, totalCount: 0, jobSum: 0, jobDoneSum: 0, totalAmountSum: 0 });
+  const [perm, setPerm] = useState<PermFlags>({
+    canSave: false,
+    canSignRequester: false,
+    canSignChecker: false,
+    canSignApprover: false,
+    canFullAccess: false,
+    myDriverId: 0,
+    myDriverName: '',
+    lockedToSelf: false,
+  });
+
+  const [initializing, setInitializing] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [cycleLoading, setCycleLoading] = useState(false);
+
   const [formScreen, setFormScreen] = useState<{ visible: boolean; driver?: DriverRow }>({ visible: false });
   const [viewScreen, setViewScreen] = useState<{ visible: boolean; driver?: DriverRow }>({ visible: false });
   const [mapVisible, setMapVisible] = useState(false);
 
-  const stats = useMemo(() => {
-    const saved = drivers.filter((d) => d.hasData).length;
-    const total = drivers.length;
-    const jobSum = drivers.reduce((s, d) => s + d.jobTotal, 0);
-    return { saved, unsaved: total - saved, total, jobSum };
-  }, [drivers]);
-
-  const groupedRates = useMemo(() => groupRateOptions(rateOptions), [rateOptions]);
-  const knownGroups = useMemo(() => Array.from(new Set(rateOptions.map((o) => o.group))), [rateOptions]);
-
-  function goCycle(direction: -1 | 1) {
-    // ตรงกับ PayCycle()/รอบก่อนหน้า-รอบถัดไป ของต้นฉบับแบบย่อ — เลื่อนทั้งช่วงตามความยาวเดิม
-    const spanDays = 14; // ประมาณรอบ 15 วันแบบเดียวกับ mock เริ่มต้น
-    if (direction === -1) {
-      setEndDate(addDaysToDate(startDate, -1));
-      setStartDate(addDaysToDate(startDate, -1 - spanDays));
-    } else {
-      setStartDate(addDaysToDate(endDate, 1));
-      setEndDate(addDaysToDate(endDate, 1 + spanDays));
+  // โหลดช่วงรอบเบิกเริ่มต้นจาก get_master_data.pay_cycle (ไม่คำนวณรอบเองฝั่งไคลเอนต์)
+  const initCycle = useCallback(async () => {
+    if (!user) return;
+    setInitializing(true);
+    try {
+      const res = await apiMobileGet(FM_TRAVEL_API_URL, 'get_master_data', { user_id: user.id });
+      const cycle = res.pay_cycle;
+      if (cycle) {
+        setStartDate(cycle.start_date);
+        setEndDate(cycle.end_date);
+        setStartDateThai(cycle.start_date_thai);
+        setEndDateThai(cycle.end_date_thai);
+      }
+    } catch (e: any) {
+      Alert.alert('โหลดข้อมูลตั้งต้นไม่สำเร็จ', e.message || 'เกิดข้อผิดพลาด');
+    } finally {
+      setInitializing(false);
     }
-  }
+  }, [user]);
 
-  function resetRateForm() {
-    setEditingRateId(null);
-    setRateGroup('');
-    setRateLabel('');
-    setRateValue('');
-    setRateGps(false);
-  }
+  useEffect(() => {
+    void initCycle();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
-  function startEditRate(o: RateOption) {
-    setEditingRateId(o.id);
-    setRateGroup(o.group);
-    setRateLabel(o.label);
-    setRateValue(String(o.rate));
-    setRateGps(o.requiresGps);
-  }
+  // โหลดรายการคนขับ + สรุป KPI ของรอบเบิกปัจจุบัน
+  const loadPeriodData = useCallback(
+    async (refresh = false) => {
+      if (!user || !startDate || !endDate) return;
+      refresh ? setRefreshing(true) : setLoading(true);
+      try {
+        const [listRes, dashRes] = await Promise.all([
+          apiMobileGet(FM_TRAVEL_API_URL, 'get_list', { user_id: user.id, start_date: startDate, end_date: endDate, limit: 200 }),
+          apiMobileGet(FM_TRAVEL_API_URL, 'get_dashboard', { user_id: user.id, start_date: startDate, end_date: endDate }),
+        ]);
+        setDrivers(Array.isArray(listRes.list) ? listRes.list.map(mapDriverRow) : []);
+        setPerm({
+          canSave: !!listRes.can_save,
+          canSignRequester: !!listRes.can_sign_requester,
+          canSignChecker: !!listRes.can_sign_checker,
+          canSignApprover: !!listRes.can_sign_approver,
+          canFullAccess: !!listRes.can_full_access,
+          myDriverId: Number(listRes.my_driver_id ?? 0),
+          myDriverName: String(listRes.my_driver_name ?? ''),
+          lockedToSelf: !!listRes.locked_to_self,
+        });
+        setStats({
+          savedCount: Number(dashRes.saved_count ?? 0),
+          unsavedCount: Number(dashRes.unsaved_count ?? 0),
+          totalCount: Number(dashRes.total_count ?? 0),
+          jobSum: Number(dashRes.job_sum ?? 0),
+          jobDoneSum: Number(dashRes.job_done_sum ?? 0),
+          totalAmountSum: Number(dashRes.total_amount_sum ?? 0),
+        });
+      } catch (e: any) {
+        Alert.alert('โหลดรายการไม่สำเร็จ', e.message || 'เกิดข้อผิดพลาด');
+      } finally {
+        refresh ? setRefreshing(false) : setLoading(false);
+      }
+    },
+    [user, startDate, endDate]
+  );
 
-  function saveRateOpt() {
-    // TODO: ต่อ backend จริง -> POST expense_rate_options (opt_key/label/rate/group_name/sort_order)
-    if (!rateGroup.trim() || !rateLabel.trim() || rateValue.trim() === '') {
-      Alert.alert('กรอกข้อมูลไม่ครบ', 'กรุณากรอกกลุ่ม, ชื่อตัวเลือก และเบี้ยเลี้ยงให้ครบ');
-      return;
+  useEffect(() => {
+    if (startDate && endDate) void loadPeriodData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startDate, endDate]);
+
+  // ปุ่ม "รอบก่อนหน้า/รอบถัดไป" — ตรงกับ get_pay_cycle.prev/next จริง ไม่ได้คำนวณวันที่เอง
+  async function goCycle(direction: -1 | 1) {
+    if (!user || cycleLoading) return;
+    setCycleLoading(true);
+    try {
+      const res = await apiMobileGet(FM_TRAVEL_API_URL, 'get_pay_cycle', { user_id: user.id, date: startDate });
+      const target = direction === -1 ? res.prev : res.next;
+      if (target) {
+        setStartDate(target.start_date);
+        setEndDate(target.end_date);
+        setStartDateThai(target.start_date_thai);
+        setEndDateThai(target.end_date_thai);
+      }
+    } catch (e: any) {
+      Alert.alert('เปลี่ยนรอบเบิกไม่สำเร็จ', e.message || 'เกิดข้อผิดพลาด');
+    } finally {
+      setCycleLoading(false);
     }
-    const rateNum = parseFloat(rateValue);
-    if (isNaN(rateNum)) {
-      Alert.alert('ข้อมูลไม่ถูกต้อง', 'เบี้ยเลี้ยง/วัน ต้องเป็นตัวเลข');
-      return;
-    }
-    if (editingRateId) {
-      setRateOptions((prev) => prev.map((o) => (o.id === editingRateId ? { ...o, group: rateGroup.trim(), label: rateLabel.trim(), rate: rateNum, requiresGps: rateGps } : o)));
-    } else {
-      setRateOptions((prev) => [...prev, { id: uid(), optKey: uid(), group: rateGroup.trim(), label: rateLabel.trim(), rate: rateNum, requiresGps: rateGps }]);
-    }
-    resetRateForm();
-  }
-
-  function deleteRateOpt(o: RateOption) {
-    Alert.alert('ยืนยันการลบ?', `ลบตัวเลือก "${o.label}" — ใบเบิกเก่าที่เคยใช้ตัวเลือกนี้จะยังโชว์ชื่อเดิมไว้`, [
-      { text: 'ยกเลิก', style: 'cancel' },
-      {
-        text: 'ลบ',
-        style: 'destructive',
-        onPress: () => {
-          setRateOptions((prev) => prev.filter((x) => x.id !== o.id));
-          if (editingRateId === o.id) resetRateForm();
-        },
-      },
-    ]);
-  }
-
-  function stubFeature(name: string, detail: string) {
-    Alert.alert(name, detail);
   }
 
   function renderDriverCard({ item: d }: { item: DriverRow }) {
-    const initial = d.name.trim().charAt(0);
+    const initial = d.name.trim().charAt(0) || '?';
     return (
       <View style={styles.card}>
         <View style={[styles.cardStripe, { backgroundColor: d.hasData ? '#10b981' : '#f59e0b' }]} />
@@ -247,9 +240,7 @@ export default function TravelAllowanceScreen({ onBack }: TravelAllowanceScreenP
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.driverName}>{d.name}</Text>
-              <Text style={styles.driverSeq}>
-                ลำดับที่ {drivers.indexOf(d) + 1} จาก {drivers.length}
-              </Text>
+              {!!d.statusEffectiveText && <Text style={styles.driverSeq}>{d.statusEffectiveText}</Text>}
             </View>
           </View>
 
@@ -284,8 +275,8 @@ export default function TravelAllowanceScreen({ onBack }: TravelAllowanceScreenP
             <View style={styles.dateBadge}>
               <Ionicons name="calendar-outline" size={12} color="#475569" />
               <Text style={styles.dateBadgeText}>
-                บันทึกล่าสุด: <Text style={styles.dateBadgeStrong}>{d.lastUpdateShow}</Text>{' '}
-                <Text style={styles.dateBadgeTime}>({d.lastUpdateTime} น.)</Text>
+                บันทึกล่าสุด: <Text style={styles.dateBadgeStrong}>{d.lastUpdateShow}</Text>
+                {d.lastUpdateTime ? <Text style={styles.dateBadgeTime}> ({d.lastUpdateTime} น.)</Text> : null}
               </Text>
             </View>
           ) : (
@@ -295,27 +286,27 @@ export default function TravelAllowanceScreen({ onBack }: TravelAllowanceScreenP
             </View>
           )}
 
-          {d.hasData ? (
-            <View style={styles.cardActionsRow}>
-              <TouchableOpacity
-                style={[styles.cardActionBtn, styles.cardActionBtnSaved]}
-                onPress={() => setViewScreen({ visible: true, driver: d })}
-              >
+          <View style={styles.cardActionsRow}>
+            {d.hasData && (
+              <TouchableOpacity style={[styles.cardActionBtn, styles.cardActionBtnSaved]} onPress={() => setViewScreen({ visible: true, driver: d })}>
                 <Ionicons name="eye-outline" size={13} color="#0369a1" />
                 <Text style={[styles.cardActionBtnText, { color: '#0369a1' }]}>ดูใบเบิก</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.cardActionBtn, styles.cardActionBtnEdit]} onPress={() => setFormScreen({ visible: true, driver: d })}>
-                <Ionicons name="pencil-outline" size={13} color="#0ea5e9" />
-                <Text style={[styles.cardActionBtnText, { color: '#0ea5e9' }]}>แก้ไขข้อมูล</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            <TouchableOpacity style={styles.cardActionBtnNew} onPress={() => setFormScreen({ visible: true, driver: d })}>
-              <Ionicons name="add" size={14} color="#fff" />
-
-              <Text style={styles.cardActionBtnNewText}>กรอกข้อมูลใหม่</Text>
-            </TouchableOpacity>
-          )}
+            )}
+            {/* 🌟 [เปลี่ยน] ซ่อนปุ่มแก้ไข/กรอกใหม่ถ้าไม่มีสิทธิ์ can_save จากเซิร์ฟเวอร์ */}
+            {perm.canSave &&
+              (d.hasData ? (
+                <TouchableOpacity style={[styles.cardActionBtn, styles.cardActionBtnEdit]} onPress={() => setFormScreen({ visible: true, driver: d })}>
+                  <Ionicons name="pencil-outline" size={13} color="#0ea5e9" />
+                  <Text style={[styles.cardActionBtnText, { color: '#0ea5e9' }]}>แก้ไขข้อมูล</Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity style={styles.cardActionBtnNew} onPress={() => setFormScreen({ visible: true, driver: d })}>
+                  <Ionicons name="add" size={14} color="#fff" />
+                  <Text style={styles.cardActionBtnNewText}>กรอกข้อมูลใหม่</Text>
+                </TouchableOpacity>
+              ))}
+          </View>
         </View>
       </View>
     );
@@ -328,9 +319,14 @@ export default function TravelAllowanceScreen({ onBack }: TravelAllowanceScreenP
         driverName={formScreen.driver.name}
         startDate={startDate}
         endDate={endDate}
+        startDateThai={startDateThai}
+        endDateThai={endDateThai}
         hasSavedData={formScreen.driver.hasData}
         onBack={() => setFormScreen({ visible: false })}
-        onSaved={() => setFormScreen({ visible: false })}
+        onSaved={() => {
+          setFormScreen({ visible: false });
+          void loadPeriodData(true);
+        }}
         onViewSubmission={() => {
           setFormScreen({ visible: false });
           setViewScreen({ visible: true, driver: formScreen.driver });
@@ -342,10 +338,14 @@ export default function TravelAllowanceScreen({ onBack }: TravelAllowanceScreenP
   if (viewScreen.visible && viewScreen.driver) {
     return (
       <TravelAllowanceViewScreen
+        driverId={String(viewScreen.driver.id)}
         requesterName={viewScreen.driver.name}
         startDate={startDate}
         endDate={endDate}
-        onBack={() => setViewScreen({ visible: false })}
+        onBack={() => {
+          setViewScreen({ visible: false });
+          void loadPeriodData(true);
+        }}
         onEditFull={() => {
           setViewScreen({ visible: false });
           setFormScreen({ visible: true, driver: viewScreen.driver });
@@ -359,6 +359,7 @@ export default function TravelAllowanceScreen({ onBack }: TravelAllowanceScreenP
       <TravelAllowanceMapScreen
         startDate={startDate}
         endDate={endDate}
+        cycleLabel={`${startDateThai} - ${endDateThai}`}
         onBack={() => setMapVisible(false)}
         onOpenSubmission={(driverId) => {
           const driver = drivers.find((d) => d.id === driverId);
@@ -376,6 +377,19 @@ export default function TravelAllowanceScreen({ onBack }: TravelAllowanceScreenP
         data={drivers}
         keyExtractor={(d) => String(d.id)}
         renderItem={renderDriverCard}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => loadPeriodData(true)} tintColor="#4338ca" />}
+        ListEmptyComponent={
+          initializing || loading ? (
+            <View style={styles.emptyBox}>
+              <ActivityIndicator color="#4338ca" />
+            </View>
+          ) : (
+            <View style={styles.emptyBox}>
+              <Ionicons name="people-outline" size={26} color="#cbd5e1" />
+              <Text style={styles.emptyText}>ไม่พบคนขับในรอบนี้</Text>
+            </View>
+          )
+        }
         ListHeaderComponent={
           <View>
             <View style={styles.titleBar}>
@@ -392,34 +406,21 @@ export default function TravelAllowanceScreen({ onBack }: TravelAllowanceScreenP
               </View>
             </View>
             <Text style={styles.subtitle}>
-              ประจำวันที่ {startDate} ถึง {endDate}
+              ประจำวันที่ {startDateThai || '...'} ถึง {endDateThai || '...'}
             </Text>
 
-            <View style={styles.dateRow}>
-              <TextInput style={styles.dateInput} placeholder="วว/ดด/ปปปป" placeholderTextColor="#94a3b8" value={startDate} onChangeText={setStartDate} />
-              <Text style={styles.dateSep}>ถึง</Text>
-              <TextInput style={styles.dateInput} placeholder="วว/ดด/ปปปป" placeholderTextColor="#94a3b8" value={endDate} onChangeText={setEndDate} />
-            </View>
-
             <View style={styles.actionButtonsRow}>
-              <TouchableOpacity style={styles.rateSetupBtn} onPress={() => setRateModalVisible(true)}>
-                <Ionicons name="settings-outline" size={13} color="#475569" />
-                <Text style={styles.rateSetupBtnText}>ตั้งค่าตัวเลือก</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.cycleBtn} onPress={() => goCycle(-1)}>
-                <Ionicons name="chevron-back" size={13} color="#4338ca" />
+              <TouchableOpacity style={styles.cycleBtn} onPress={() => goCycle(-1)} disabled={cycleLoading}>
+                {cycleLoading ? <ActivityIndicator size="small" color="#4338ca" /> : <Ionicons name="chevron-back" size={13} color="#4338ca" />}
                 <Text style={styles.cycleBtnText}>รอบก่อนหน้า</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.cycleBtn} onPress={() => goCycle(1)}>
+              <TouchableOpacity style={styles.cycleBtn} onPress={() => goCycle(1)} disabled={cycleLoading}>
                 <Text style={styles.cycleBtnText}>รอบถัดไป</Text>
                 <Ionicons name="chevron-forward" size={13} color="#4338ca" />
               </TouchableOpacity>
             </View>
 
-            <TouchableOpacity
-              style={styles.mapTabHint}
-              onPress={() => setMapVisible(true)}
-            >
+            <TouchableOpacity style={styles.mapTabHint} onPress={() => setMapVisible(true)}>
               <Ionicons name="map-outline" size={13} color="#64748b" />
               <Text style={styles.mapTabHintText}>ดูแผนที่จุดเบิก GPS</Text>
             </TouchableOpacity>
@@ -428,17 +429,17 @@ export default function TravelAllowanceScreen({ onBack }: TravelAllowanceScreenP
               <View style={styles.statsItem}>
                 <View style={[styles.dot, { backgroundColor: '#10b981' }]} />
                 <Text style={styles.statsText}>
-                  บันทึกแล้ว <Text style={styles.statsStrong}>{stats.saved}</Text>
+                  บันทึกแล้ว <Text style={styles.statsStrong}>{stats.savedCount}</Text>
                 </Text>
               </View>
               <View style={styles.statsItem}>
                 <View style={[styles.dot, { backgroundColor: '#f59e0b' }]} />
                 <Text style={styles.statsText}>
-                  ยังไม่ทำ <Text style={styles.statsStrong}>{stats.unsaved}</Text>
+                  ยังไม่ทำ <Text style={styles.statsStrong}>{stats.unsavedCount}</Text>
                 </Text>
               </View>
               <View style={styles.statsItem}>
-                <Text style={[styles.statsText, { color: '#4338ca', fontWeight: '800' }]}>รวม {stats.total} คน</Text>
+                <Text style={[styles.statsText, { color: '#4338ca', fontWeight: '800' }]}>รวม {stats.totalCount} คน</Text>
               </View>
               <View style={styles.statsItem}>
                 <Text style={styles.statsTextMuted}>
@@ -448,110 +449,9 @@ export default function TravelAllowanceScreen({ onBack }: TravelAllowanceScreenP
             </View>
           </View>
         }
-        contentContainerStyle={{ paddingBottom: 24 }}
+        contentContainerStyle={{ paddingBottom: 24, flexGrow: 1 }}
         showsVerticalScrollIndicator={false}
       />
-
-      {/* Modal: ตั้งค่าตัวเลือกเบี้ยเลี้ยง */}
-      <Modal visible={rateModalVisible} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeadRow}>
-              <Text style={styles.modalTitle}>
-                <Ionicons name="settings-outline" size={15} color="#334155" /> ตั้งค่าตัวเลือก ที่พัก / ระยะทาง
-              </Text>
-              <TouchableOpacity
-                onPress={() => {
-                  setRateModalVisible(false);
-                  resetRateForm();
-                }}
-                hitSlop={8}
-              >
-                <Ionicons name="close" size={20} color="#64748b" />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView showsVerticalScrollIndicator={false} style={{ marginTop: 10 }}>
-              <Text style={styles.rateColTitle}>
-                ตัวเลือกทั้งหมด <Text style={styles.rateColCount}>({rateOptions.length})</Text>
-              </Text>
-
-              {groupedRates.map((g) => (
-                <View key={g.group} style={{ marginBottom: 10 }}>
-                  <Text style={styles.rateGroupLabel}>{g.group}</Text>
-                  {g.items.map((o) => (
-                    <View key={o.id} style={styles.rateListItem}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.rateItemLabel}>{o.label}</Text>
-                        <View style={styles.rateItemMetaRow}>
-                          <Text style={[styles.rateItemRate, { color: o.rate < 0 ? '#dc2626' : '#059669' }]}>{o.rate >= 0 ? `+${moneyFmt(o.rate)}` : moneyFmt(o.rate)} บาท</Text>
-                          {o.requiresGps && (
-                            <View style={styles.gpsTag}>
-                              <Ionicons name="location" size={9} color="#2563eb" />
-                              <Text style={styles.gpsTagText}>GPS</Text>
-                            </View>
-                          )}
-                        </View>
-                      </View>
-                      <TouchableOpacity style={styles.rateItemBtn} onPress={() => startEditRate(o)}>
-                        <Ionicons name="pencil" size={13} color="#0ea5e9" />
-                      </TouchableOpacity>
-                      <TouchableOpacity style={styles.rateItemBtn} onPress={() => deleteRateOpt(o)}>
-                        <Ionicons name="trash" size={13} color="#ef4444" />
-                      </TouchableOpacity>
-                    </View>
-                  ))}
-                </View>
-              ))}
-
-              <View style={styles.rateFormBox}>
-                <Text style={styles.rateFormTitle}>
-                  <Ionicons name={editingRateId ? 'pencil' : 'add'} size={13} color="#334155" /> {editingRateId ? 'แก้ไขตัวเลือก' : 'เพิ่มตัวเลือกใหม่'}
-                </Text>
-
-                <Text style={styles.rateFieldLabel}>กลุ่ม</Text>
-                <TextInput style={styles.rateInput} placeholder="เช่น ที่พัก" placeholderTextColor="#94a3b8" value={rateGroup} onChangeText={setRateGroup} />
-                {knownGroups.length > 0 && (
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.groupChipsRow}>
-                    {knownGroups.map((g) => (
-                      <TouchableOpacity key={g} onPress={() => setRateGroup(g)} style={styles.groupChip}>
-                        <Text style={styles.groupChipText}>{g}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                )}
-
-                <Text style={styles.rateFieldLabel}>ชื่อตัวเลือก</Text>
-                <TextInput style={styles.rateInput} placeholder="เช่น นอนโรงแรม" placeholderTextColor="#94a3b8" value={rateLabel} onChangeText={setRateLabel} />
-
-                <Text style={styles.rateFieldLabel}>เบี้ยเลี้ยง / วัน (บาท)</Text>
-                <TextInput style={styles.rateInput} placeholder="210" placeholderTextColor="#94a3b8" keyboardType="numbers-and-punctuation" value={rateValue} onChangeText={setRateValue} />
-                <Text style={styles.rateHint}>
-                  ใส่ตัวเลข<Text style={{ fontWeight: '800' }}> ติดลบ </Text>เช่น <Text style={{ fontWeight: '800' }}>-100</Text> รายการนั้นจะไปอยู่กลุ่ม <Text style={{ fontWeight: '800' }}>หักออก</Text> แทน
-                </Text>
-
-                <TouchableOpacity style={styles.gpsToggleRow} onPress={() => setRateGps((v) => !v)}>
-                  <Ionicons name={rateGps ? 'checkbox' : 'square-outline'} size={19} color="#2563eb" />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.gpsToggleTitle}>ต้องจับพิกัด GPS</Text>
-                    <Text style={styles.gpsToggleDesc}>เลือกตัวเลือกนี้ในใบเบิก จะมีปุ่มจับพิกัดขึ้นมา และต้องกดก่อนบันทึก</Text>
-                  </View>
-                </TouchableOpacity>
-
-                <View style={styles.rateFormActions}>
-                  <TouchableOpacity style={styles.rateResetBtn} onPress={resetRateForm}>
-                    <Text style={styles.rateResetBtnText}>ล้างฟอร์ม</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.rateSaveBtn} onPress={saveRateOpt}>
-                    <Ionicons name="save-outline" size={14} color="#fff" />
-                    <Text style={styles.rateSaveBtnText}>บันทึก</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -568,13 +468,7 @@ const styles = StyleSheet.create({
   title: { fontSize: 16, fontWeight: '800', color: '#0f172a' },
   subtitle: { marginHorizontal: 14, marginTop: 4, fontSize: 11.5, color: '#64748b', fontWeight: '600' },
 
-  dateRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 14, marginTop: 12 },
-  dateInput: { flex: 1, borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 9, paddingHorizontal: 11, paddingVertical: 9, fontSize: 12.5, color: '#0f172a', backgroundColor: '#fff' },
-  dateSep: { fontSize: 12, color: '#64748b', fontWeight: '600' },
-
-  actionButtonsRow: { flexDirection: 'row', gap: 6, marginHorizontal: 14, marginTop: 10, flexWrap: 'wrap' },
-  rateSetupBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 8, paddingHorizontal: 11, paddingVertical: 8 },
-  rateSetupBtnText: { fontSize: 11, fontWeight: '700', color: '#475569' },
+  actionButtonsRow: { flexDirection: 'row', gap: 6, marginHorizontal: 14, marginTop: 12, flexWrap: 'wrap' },
   cycleBtn: { flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: '#eef2ff', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8 },
   cycleBtnText: { fontSize: 11, fontWeight: '700', color: '#4338ca' },
 
@@ -623,41 +517,9 @@ const styles = StyleSheet.create({
   cardActionBtnSaved: { backgroundColor: '#f0f9ff', borderColor: '#bae6fd' },
   cardActionBtnEdit: { backgroundColor: '#f0f9ff', borderColor: '#bae6fd' },
   cardActionBtnText: { fontSize: 11.5, fontWeight: '700' },
-  cardActionBtnNew: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: '#4338ca', borderRadius: 9, paddingVertical: 10, marginTop: 12 },
+  cardActionBtnNew: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: '#4338ca', borderRadius: 9, paddingVertical: 10 },
   cardActionBtnNewText: { color: '#fff', fontSize: 12, fontWeight: '700' },
 
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', justifyContent: 'center', padding: 16 },
-  modalCard: { backgroundColor: '#fff', borderRadius: 18, padding: 16, maxHeight: '88%' },
-  modalHeadRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  modalTitle: { fontSize: 13.5, fontWeight: '800', color: '#334155', flexShrink: 1 },
-
-  rateColTitle: { fontSize: 11.5, fontWeight: '800', color: '#334155', marginBottom: 8 },
-  rateColCount: { color: '#94a3b8', fontWeight: '600' },
-  rateGroupLabel: { fontSize: 10.5, fontWeight: '800', color: '#4338ca', marginBottom: 6, textTransform: 'uppercase' },
-  rateListItem: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#f8fafc', borderRadius: 9, padding: 9, marginBottom: 6 },
-  rateItemLabel: { fontSize: 12, fontWeight: '700', color: '#1e293b' },
-  rateItemMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 },
-  rateItemRate: { fontSize: 11, fontWeight: '800' },
-  gpsTag: { flexDirection: 'row', alignItems: 'center', gap: 2, backgroundColor: '#eff6ff', borderRadius: 5, paddingHorizontal: 5, paddingVertical: 1 },
-  gpsTagText: { fontSize: 8.5, fontWeight: '800', color: '#2563eb' },
-  rateItemBtn: { width: 28, height: 28, borderRadius: 7, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
-
-  rateFormBox: { backgroundColor: '#f8fafc', borderRadius: 12, padding: 12, marginTop: 6, borderWidth: 1, borderColor: '#e2e8f0' },
-  rateFormTitle: { fontSize: 12, fontWeight: '800', color: '#334155', marginBottom: 8 },
-  rateFieldLabel: { fontSize: 10.5, fontWeight: '700', color: '#64748b', marginBottom: 5, marginTop: 8 },
-  rateInput: { borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 9, paddingHorizontal: 11, paddingVertical: 9, fontSize: 12.5, color: '#0f172a', backgroundColor: '#fff' },
-  groupChipsRow: { gap: 6, marginTop: 6 },
-  groupChip: { backgroundColor: '#eef2ff', borderRadius: 50, paddingHorizontal: 10, paddingVertical: 5 },
-  groupChipText: { fontSize: 10.5, fontWeight: '700', color: '#4338ca' },
-  rateHint: { fontSize: 10, color: '#64748b', marginTop: 6, lineHeight: 15 },
-
-  gpsToggleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginTop: 12, backgroundColor: '#fff', borderRadius: 9, padding: 10, borderWidth: 1, borderColor: '#e2e8f0' },
-  gpsToggleTitle: { fontSize: 11.5, fontWeight: '700', color: '#1e293b' },
-  gpsToggleDesc: { fontSize: 10, color: '#94a3b8', marginTop: 2, lineHeight: 14 },
-
-  rateFormActions: { flexDirection: 'row', gap: 8, marginTop: 14 },
-  rateResetBtn: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f1f5f9', borderRadius: 9, paddingVertical: 11 },
-  rateResetBtnText: { fontSize: 12, fontWeight: '700', color: '#475569' },
-  rateSaveBtn: { flex: 1.4, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: '#059669', borderRadius: 9, paddingVertical: 11 },
-  rateSaveBtnText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+  emptyBox: { alignItems: 'center', justifyContent: 'center', paddingVertical: 60, gap: 8 },
+  emptyText: { color: '#94a3b8', fontSize: 12, textAlign: 'center' },
 });

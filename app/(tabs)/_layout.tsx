@@ -101,7 +101,7 @@ const MENU_GROUPS = [
   {
     id: "accounting_group",
     title: "หมวดบัญชี-การเงิน (โครงการ)",
-    items: ["accounting_dashboard"],
+    items: ["accounting_dashboard", "CostCheckScreen"],
   },
   {
     id: "document_group",
@@ -818,6 +818,14 @@ export default function DrawerLayout() {
       />
       <Drawer.Screen name="projectfollowup" options={{ drawerItemStyle: { display: "none" } }} />
       <Drawer.Screen name="projectaccounting" options={{ drawerItemStyle: { display: "none" } }} />
+      <Drawer.Screen
+        name="CostCheckScreen"
+        options={getDrawerOptions(
+          "ตรวจสอบต้นทุน",
+          "calculator-outline",
+          "cost_check.php",
+        )}
+      />
       {/* 10. หมวดเอกสารโครงการ */}
       <Drawer.Screen
         name="document_dashboard"
