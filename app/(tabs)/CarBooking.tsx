@@ -39,6 +39,10 @@ import {
 // 🔥 Import Calendar
 import { Calendar, LocaleConfig } from "react-native-calendars";
 
+import {
+  formatShortThaiDate,
+  formatShortThaiDateTime,
+} from "../../components/DateTimeField";
 import { API_BASE } from "../../constants/config";
 import { useAuth } from "../_layout";
 
@@ -147,12 +151,15 @@ const stripHtml = (s: string) =>
     .trim();
 
 // --- 📅 Helper Functions ---
+// เดิม format เป็น "dd/mm/พ.ศ." (4 หลัก) เอง — เปลี่ยนให้ delegate ไปใช้
+// formatShortThaiDate ของ DateTimeField.tsx เพื่อให้หน้าตาตรงกับที่อื่นทั้งแอป ("5/9/69")
+// โดยยังคงรับพารามิเตอร์เป็น Date เหมือนเดิม (จุดเรียกใช้เดิมส่ง Date object) เพื่อไม่ต้องแก้ทุกจุดเรียก
 const formatDateDisplay = (date: Date) => {
   const d = new Date(date);
-  const year = d.getFullYear() + 543;
-  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
-  return `${day}/${month}/${year}`;
+  return formatShortThaiDate(`${y}-${m}-${day}`);
 };
 
 const formatTimeDisplay = (date: Date) => {
@@ -180,7 +187,7 @@ const formatJustDateThai = (dateStr: string) => {
     "พฤศจิกายน",
     "ธันวาคม",
   ];
-  return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear() + 543}`;
+  return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
 };
 
 const cleanNoteText = (rawNote: string) => {
@@ -708,7 +715,7 @@ export default function CarBookingScreen() {
   const pickPlanImages = async (target: "self" | number) => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         allowsMultipleSelection: true,
         quality: 0.7,
       });
@@ -1586,8 +1593,7 @@ export default function CarBookingScreen() {
                 numberOfLines={1}
                 adjustsFontSizeToFit
               >
-                {formatDateDisplay(selectedDetail.start)} -{" "}
-                {selectedDetail.start?.split(" ")[1]?.slice(0, 5) || "00:00"}
+                {formatShortThaiDateTime(selectedDetail.start)}
               </Text>
             </View>
             <View style={{ flex: 1, padding: 12, justifyContent: "center" }}>
@@ -1609,8 +1615,7 @@ export default function CarBookingScreen() {
                 numberOfLines={1}
                 adjustsFontSizeToFit
               >
-                {formatDateDisplay(selectedDetail.end)} -{" "}
-                {selectedDetail.end?.split(" ")[1]?.slice(0, 5) || "00:00"}
+                {formatShortThaiDateTime(selectedDetail.end)}
               </Text>
             </View>
           </View>
@@ -1852,7 +1857,7 @@ export default function CarBookingScreen() {
                   marginBottom: 10,
                 }}
               >
-                รายการ: {formatJustDateThai(calendarSelectedDate)}
+                รายการ: {formatShortThaiDate(calendarSelectedDate)}
               </Text>
 
               {/* Legend Bar */}
@@ -1971,13 +1976,8 @@ export default function CarBookingScreen() {
                             >
                               ออก{" "}
                               {item.start
-                                ? formatDateDisplay(
-                                    new Date(item.start.replace(" ", "T")),
-                                  )
-                                : "-"}{" "}
-                              {item.start?.split(" ")[1]?.slice(0, 5) ||
-                                "00:00"}{" "}
-                              น.
+                                ? formatShortThaiDateTime(item.start)
+                                : "-"}
                             </Text>
                             <Text
                               style={{
@@ -1991,12 +1991,8 @@ export default function CarBookingScreen() {
                             >
                               คืน{" "}
                               {item.end
-                                ? formatDateDisplay(
-                                    new Date(item.end.replace(" ", "T")),
-                                  )
-                                : "-"}{" "}
-                              {item.end?.split(" ")[1]?.slice(0, 5) || "00:00"}{" "}
-                              น.
+                                ? formatShortThaiDateTime(item.end)
+                                : "-"}
                             </Text>
                           </View>
                         </View>
@@ -2543,8 +2539,7 @@ export default function CarBookingScreen() {
                 )}
 
                 <Text style={{ color: themeColors.subText }}>
-                  เริ่ม: {formatDateDisplay(new Date(b.start_date))}{" "}
-                  {formatTimeDisplay(new Date(b.start_date))} น.
+                  เริ่ม: {formatShortThaiDateTime(b.start_date)}
                 </Text>
                 <Text
                   style={{
@@ -2552,8 +2547,7 @@ export default function CarBookingScreen() {
                     fontWeight: isOverdue ? "bold" : "normal",
                   }}
                 >
-                  คืน: {formatDateDisplay(new Date(b.end_date))}{" "}
-                  {formatTimeDisplay(new Date(b.end_date))} น.
+                  คืน: {formatShortThaiDateTime(b.end_date)}
                 </Text>
 
                 {/* 👥 ผู้เดินทาง / คนขับ / แผนงาน */}
@@ -3703,8 +3697,7 @@ export default function CarBookingScreen() {
                   }
                   mode={pickerConfig.mode}
                   display="spinner"
-                  onChange={(e, d) =>
-                    d &&
+                  onValueChange={(e, d) =>
                     handleDateChange(
                       pickerConfig.target,
                       d,
@@ -3713,7 +3706,7 @@ export default function CarBookingScreen() {
                     )
                   }
                   minimumDate={new Date()}
-                  locale="th-TH"
+                  locale="th-TH@calendar=gregorian"
                   themeVariant={isDark ? "dark" : "light"}
                 />
               </View>

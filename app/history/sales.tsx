@@ -22,6 +22,8 @@ import Animated, { FadeInDown } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { API_BASE, IMG_BASE_URL } from "../../constants/config";
+// 🌟 รูปแบบวันที่สั้น "d/m/yy" มาตรฐานเดียวกันทั้งแอป (แทน toLocaleDateString("th-TH") ที่โชว์ปี ค.ศ. 4 หลัก)
+import { formatShortThaiDate } from "../../components/DateTimeField";
 import { useAuth } from "../_layout";
 
 const PRIMARY_COLOR = "#2563eb";
@@ -44,6 +46,17 @@ const TH_MONTHS_FULL = [
   "พฤศจิกายน",
   "ธันวาคม",
 ];
+
+// แปลง Date -> YYYY-MM-DD ตามเวลาท้องถิ่น (ไม่ใช้ toISOString เพราะเลื่อน timezone) ให้ formatShortThaiDate ใช้ได้
+const toYmdLocal = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+// ดึงเฉพาะเวลา "HH:MM น." จาก timestamp เต็ม (YYYY-MM-DD HH:MM:SS) ใช้คู่กับ formatShortThaiDate ตอนที่ต้องโชว์วันที่/เวลาคนละฟิลด์กัน
+const formatTimeHM = (dt?: string | null) => {
+  if (!dt) return "-";
+  const m = String(dt).match(/(\d{2}):(\d{2})(?::\d{2})?$/);
+  return m ? `${m[1]}:${m[2]} น.` : "-";
+};
 
 export default function HistorySales() {
   const router = useRouter();
@@ -193,7 +206,7 @@ export default function HistorySales() {
   ) => {
     let result;
     const options: ImagePicker.ImagePickerOptions = {
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       quality: 0.7,
       allowsEditing: false,
     };
@@ -659,7 +672,7 @@ export default function HistorySales() {
               },
             ]}
           >
-            {i + 543}
+            {i}
           </Text>
         </TouchableOpacity>,
       );
@@ -741,12 +754,8 @@ export default function HistorySales() {
           <View style={styles.cardHeader}>
             <View>
               <Text style={styles.dateText}>
-                {new Date(item.report_date).toLocaleDateString("th-TH")} •{" "}
-                {new Date(item.created_at).toLocaleTimeString("th-TH", {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })}{" "}
-                น.
+                {formatShortThaiDate(item.report_date)} •{" "}
+                {formatTimeHM(item.created_at)}
               </Text>
               <View
                 style={{
@@ -979,7 +988,7 @@ export default function HistorySales() {
                 style={styles.dateInput}
               >
                 <Text>
-                  {startDate ? startDate.toLocaleDateString("th-TH") : "เริ่ม"}
+                  {startDate ? formatShortThaiDate(toYmdLocal(startDate)) : "เริ่ม"}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -987,7 +996,7 @@ export default function HistorySales() {
                 style={styles.dateInput}
               >
                 <Text>
-                  {endDate ? endDate.toLocaleDateString("th-TH") : "ถึง"}
+                  {endDate ? formatShortThaiDate(toYmdLocal(endDate)) : "ถึง"}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -1218,7 +1227,7 @@ export default function HistorySales() {
                 <TouchableOpacity onPress={() => setPickerView("year")}>
                   <Text style={styles.calTitle}>
                     {" "}
-                    {pickerDate.getFullYear() + 543}
+                    {pickerDate.getFullYear()}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -1338,9 +1347,7 @@ export default function HistorySales() {
                     <View style={styles.detailRow}>
                       <Text style={styles.detailLabel}>วันที่:</Text>
                       <Text style={styles.detailValue}>
-                        {new Date(currentItem.report_date).toLocaleDateString(
-                          "th-TH",
-                        )}
+                        {formatShortThaiDate(currentItem.report_date)}
                       </Text>
                     </View>
 
@@ -1693,9 +1700,7 @@ export default function HistorySales() {
                       >
                         <Text style={{ fontWeight: "bold", color: "#333" }}>
                           <Ionicons name="calendar-outline" />{" "}
-                          {new Date(item.report_date).toLocaleDateString(
-                            "th-TH",
-                          )}
+                          {formatShortThaiDate(item.report_date)}
                         </Text>
                         {parseFloat(item.total_expense) > 0 && (
                           <Text style={{ color: DANGER_COLOR, fontSize: 12 }}>

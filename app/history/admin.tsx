@@ -18,6 +18,8 @@ import Animated, { FadeInDown } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { API_BASE } from "../../constants/config";
+// 🌟 รูปแบบวันที่สั้น "d/m/yy" มาตรฐานเดียวกันทั้งแอป (แทน dd/mm/yyyy ปี พ.ศ. 4 หลัก)
+import { formatShortThaiDate } from "../../components/DateTimeField";
 import { useAuth } from "../_layout";
 
 const ACTIVE_COLOR = "#f97316"; // 🟠 สีส้ม Admin
@@ -45,13 +47,7 @@ const formatMoney = (amount: any) => {
   }).format(num);
 };
 
-const formatDate = (dateStr: string) => {
-  if (!dateStr) return "-";
-  const date = new Date(dateStr);
-  return `${date.getDate().toString().padStart(2, "0")}/${(date.getMonth() + 1)
-    .toString()
-    .padStart(2, "0")}/${date.getFullYear() + 543}`;
-};
+const formatDate = (dateStr: string) => formatShortThaiDate(dateStr);
 
 const formatTime = (dateStr: string) => {
   if (!dateStr) return "";
@@ -138,7 +134,7 @@ const CustomCalendarModal = ({ visible, onClose, onSelect }: any) => {
               <Ionicons name="chevron-back" size={24} color="#333" />
             </TouchableOpacity>
             <Text style={styles.calTitle}>
-              {THAI_MONTHS[month]} {year + 543}
+              {THAI_MONTHS[month]} {year}
             </Text>
             <TouchableOpacity
               onPress={() => changeMonth(1)}

@@ -2,10 +2,16 @@
  * CostCheckScreen.tsx
  * ------------------------------------------------------------------
  * "ตรวจสอบต้นทุน" (project cost check / approval) — มือถือ
- * เชื่อม API จริงของโมดูลนี้ทั้งหมด: cost_check_API_mobile.php (9 actions)
+ * เชื่อม API จริงของโมดูลนี้ครบทั้ง 9 action: cost_check_API_mobile.php
  *   get_cost_detail, get_purchase_history, get_cost_history, get_pending_pos,
  *   get_po_details, approve_cost, exec_approve_cost, approve_installment,
  *   update_cost_price
+ *
+ * ปุ่ม "ประวัติการซื้อ"/"ประวัติแก้ไขราคา"/"PO ค้างอนุมัติ" เปิด modal จริง (ไม่ใช่ stub) —
+ * "PO ค้างอนุมัติ" กดต่อเข้า get_po_details แสดงงวดชำระย่อยของแต่ละรายการ พร้อมปุ่มอนุมัติ
+ * รายงวด (approve_installment) แยกระดับผจก./ผู้บริหาร ตาม can_approve_mgr/can_approve_exec
+ * ที่ backend ส่งมา (คนละ flow กับปุ่มอนุมัติทั้งรายการใน CostItemCard ที่ใช้ approve_cost/
+ * exec_approve_cost)
  *
  * หน้านี้ทำงานแบบ "รายโครงการ" (ต้องมี project_id) เหมือน ProjectAccountingScreen /
  * ProjectFollowupScreen ในชุดนี้ — รับ id ผ่าน prop `id` (ถ้า embed จากหน้าอื่น) หรือผ่าน
@@ -40,9 +46,11 @@ import {
   View,
 } from 'react-native';
 
+// 🌟 รูปแบบวันที่/เวลาสั้น "d/m/yy" มาตรฐานเดียวกันทั้งแอป
+import { formatShortThaiDate, formatShortThaiDateTime } from '../../components/DateTimeField';
 // ✅ Config + API helpers กลาง (ตรงกับ pattern ของ accounting_dashboard.tsx)
 import { API_MODULES } from '../../constants/config';
-import { apiMobileGet, apiMobilePost } from '../service/api_mobile';
+import { apiMobileGet, apiMobilePost } from '../../service/api_mobile';
 import { useAuth } from '../_layout';
 
 const COST_CHECK_API_URL = `${API_MODULES}/cost_check_API_mobile.php`;
@@ -156,6 +164,61 @@ interface CostDetailResponse {
   can_approve_mgr: boolean;
   can_approve_exec: boolean;
   can_update_cost_price: boolean;
+}
+
+interface PurchaseHistoryRow {
+  project_item_id: number;
+  item_name: string;
+  po_number: string;
+  supplier_name: string;
+  orderer_name: string;
+  order_date?: string;
+  order_date_thai?: string;
+  buy_quantity: number;
+  buy_unit_price: number;
+  total_price: number;
+  cost_approved_by?: string;
+  exec_approved_by?: string;
+}
+
+interface CostHistoryRow {
+  item_name: string;
+  user: string;
+  time?: string;
+  time_thai: string;
+  old_unit: number;
+  new_unit: number;
+  old_total: number;
+  new_total: number;
+  note?: string;
+}
+
+interface PendingPoRow {
+  po_number: string;
+  project_count: number;
+  item_count: number;
+}
+
+interface PoDetailInstallment {
+  id: number;
+  amount: number;
+  cost_approved_by?: string;
+  exec_approved_by?: string;
+}
+
+interface PoDetailItem {
+  item_id: number;
+  item_name: string;
+  project_id: number;
+  project_name: string;
+  display_code?: string;
+  buy_quantity: number;
+  total_price: number;
+  order_date?: string;
+  order_date_thai?: string;
+  poi_cost_pending: number;
+  poi_exec_pending: number;
+  installments: PoDetailInstallment[];
 }
 
 export interface CostCheckScreenProps {
@@ -388,6 +451,15 @@ export default function CostCheckScreen({ id, onBack }: CostCheckScreenProps) {
 
   const [search, setSearch] = useState('');
 
+  const [purchaseHistoryModal, setPurchaseHistoryModal] = useState<{ visible: boolean; loading: boolean; rows: PurchaseHistoryRow[] }>({ visible: false, loading: false, rows: [] });
+  const [costHistoryModal, setCostHistoryModal] = useState<{ visible: boolean; loading: boolean; rows: CostHistoryRow[] }>({ visible: false, loading: false, rows: [] });
+  const [pendingPosModal, setPendingPosModal] = useState<{ visible: boolean; loading: boolean; rows: PendingPoRow[] }>({ visible: false, loading: false, rows: [] });
+  const [poDetailModal, setPoDetailModal] = useState<{
+    visible: boolean; loading: boolean; poNumber: string; items: PoDetailItem[]; canApproveMgr: boolean; canApproveExec: boolean;
+  }>({ visible: false, loading: false, poNumber: '', items: [], canApproveMgr: false, canApproveExec: false });
+  const [busyInstId, setBusyInstId] = useState<number | null>(null);
+  const [busyPoItemId, setBusyPoItemId] = useState<number | null>(null);
+
   const load = useCallback(async (refresh = false) => {
     if (!projectId || !user?.id) return;
     refresh ? setRefreshing(true) : setLoading(true);
@@ -474,10 +546,96 @@ export default function CostCheckScreen({ id, onBack }: CostCheckScreenProps) {
     }
   }
 
-  // ยังไม่ได้ทำ (v1 ตัดสโคปตามที่วางแผนไว้) — โมดัลจริงต้องเรียก action เหล่านี้เพิ่ม:
-  //   get_purchase_history, get_cost_history, get_pending_pos, get_po_details
-  function stubAction(title: string, action: string) {
-    setToast(`ยังไม่ได้ทำ: ${title} (TODO: action=${action})`);
+  async function openPurchaseHistory() {
+    if (!user?.id || !projectId) return;
+    setPurchaseHistoryModal({ visible: true, loading: true, rows: [] });
+    try {
+      const res = await apiMobileGet(COST_CHECK_API_URL, 'get_purchase_history', { user_id: user.id, project_id: projectId });
+      setPurchaseHistoryModal({ visible: true, loading: false, rows: ((res as any).history ?? []) as PurchaseHistoryRow[] });
+    } catch (e: any) {
+      setToast(e?.message || 'โหลดประวัติการซื้อไม่สำเร็จ');
+      setPurchaseHistoryModal({ visible: false, loading: false, rows: [] });
+    }
+  }
+
+  async function openCostHistory() {
+    if (!user?.id || !projectId) return;
+    setCostHistoryModal({ visible: true, loading: true, rows: [] });
+    try {
+      const res = await apiMobileGet(COST_CHECK_API_URL, 'get_cost_history', { user_id: user.id, project_id: projectId });
+      setCostHistoryModal({ visible: true, loading: false, rows: ((res as any).data ?? []) as CostHistoryRow[] });
+    } catch (e: any) {
+      setToast(e?.message || 'โหลดประวัติแก้ไขราคาไม่สำเร็จ');
+      setCostHistoryModal({ visible: false, loading: false, rows: [] });
+    }
+  }
+
+  async function openPendingPos() {
+    if (!user?.id) return;
+    setPendingPosModal({ visible: true, loading: true, rows: [] });
+    try {
+      const res = await apiMobileGet(COST_CHECK_API_URL, 'get_pending_pos', { user_id: user.id });
+      setPendingPosModal({ visible: true, loading: false, rows: ((res as any).data ?? []) as PendingPoRow[] });
+    } catch (e: any) {
+      setToast(e?.message || 'โหลดรายการ PO ค้างอนุมัติไม่สำเร็จ');
+      setPendingPosModal({ visible: false, loading: false, rows: [] });
+    }
+  }
+
+  async function openPoDetail(poNumber: string) {
+    if (!user?.id) return;
+    setPoDetailModal({ visible: true, loading: true, poNumber, items: [], canApproveMgr: false, canApproveExec: false });
+    try {
+      const res = await apiMobileGet(COST_CHECK_API_URL, 'get_po_details', { user_id: user.id, po_number: poNumber });
+      setPoDetailModal({
+        visible: true,
+        loading: false,
+        poNumber,
+        items: ((res as any).data ?? []) as PoDetailItem[],
+        canApproveMgr: !!(res as any).can_approve_mgr,
+        canApproveExec: !!(res as any).can_approve_exec,
+      });
+    } catch (e: any) {
+      setToast(e?.message || 'โหลดรายละเอียด PO ไม่สำเร็จ');
+      setPoDetailModal({ visible: false, loading: false, poNumber: '', items: [], canApproveMgr: false, canApproveExec: false });
+    }
+  }
+
+  async function handleApprovePoItem(item: PoDetailItem, level: 'mgr' | 'exec') {
+    if (!user?.id || busyPoItemId !== null) return;
+    setBusyPoItemId(item.item_id);
+    try {
+      const action = level === 'mgr' ? 'approve_cost' : 'exec_approve_cost';
+      const res = await apiMobilePost(COST_CHECK_API_URL, action, {
+        user_id: user.id,
+        item_id: item.item_id,
+        po_number: poDetailModal.poNumber,
+      });
+      setToast((res as any).message || 'อนุมัติเรียบร้อย');
+      const poNumber = poDetailModal.poNumber;
+      if (poNumber) await openPoDetail(poNumber);
+      if (projectId) await load(true);
+    } catch (e: any) {
+      setToast(e?.message || 'อนุมัติไม่สำเร็จ');
+    } finally {
+      setBusyPoItemId(null);
+    }
+  }
+
+  async function handleApproveInstallment(instId: number, role: 'mgr' | 'exec') {
+    if (!user?.id || busyInstId !== null) return;
+    setBusyInstId(instId);
+    try {
+      const res = await apiMobilePost(COST_CHECK_API_URL, 'approve_installment', { user_id: user.id, inst_id: instId, role });
+      setToast((res as any).message || 'อนุมัติงวดเรียบร้อย');
+      const poNumber = poDetailModal.poNumber;
+      if (poNumber) await openPoDetail(poNumber);
+      if (projectId) await load(true);
+    } catch (e: any) {
+      setToast(e?.message || 'อนุมัติงวดไม่สำเร็จ');
+    } finally {
+      setBusyInstId(null);
+    }
   }
 
   const projectLabel = data?.project
@@ -632,17 +790,17 @@ export default function CostCheckScreen({ id, onBack }: CostCheckScreenProps) {
           </View>
         ) : null}
 
-        {/* -------------------- Secondary features (stub v1) -------------------- */}
+        {/* -------------------- Secondary features -------------------- */}
         <View style={styles.secondaryRow}>
-          <Pressable onPress={() => stubAction('ประวัติการซื้อ', 'get_purchase_history')} style={styles.secondaryBtn}>
+          <Pressable onPress={openPurchaseHistory} style={styles.secondaryBtn}>
             <Ionicons name="time-outline" size={14} color="#0e9fb4" />
             <Text style={styles.secondaryBtnText}>ประวัติการซื้อ</Text>
           </Pressable>
-          <Pressable onPress={() => stubAction('ประวัติแก้ไขราคาทุน', 'get_cost_history')} style={styles.secondaryBtn}>
+          <Pressable onPress={openCostHistory} style={styles.secondaryBtn}>
             <Ionicons name="document-text-outline" size={14} color="#0e9fb4" />
             <Text style={styles.secondaryBtnText}>ประวัติแก้ไขราคา</Text>
           </Pressable>
-          <Pressable onPress={() => stubAction('PO ค้างอนุมัติ (ข้ามโครงการ)', 'get_pending_pos')} style={styles.secondaryBtn}>
+          <Pressable onPress={openPendingPos} style={styles.secondaryBtn}>
             <Ionicons name="albums-outline" size={14} color="#0e9fb4" />
             <Text style={styles.secondaryBtnText}>PO ค้างอนุมัติ</Text>
           </Pressable>
@@ -739,7 +897,7 @@ export default function CostCheckScreen({ id, onBack }: CostCheckScreenProps) {
                       <Ionicons name="checkmark-done-outline" size={13} color="#0e9fb4" /> อนุมัติระดับผู้จัดการ (ล่าสุด)
                     </Text>
                     <ModalRow label="โดย" value={detailModal.item.cost_approved_by} />
-                    <ModalRow label="เมื่อ" value={detailModal.item.cost_approved_at ?? '-'} />
+                    <ModalRow label="เมื่อ" value={formatShortThaiDateTime(detailModal.item.cost_approved_at)} />
                   </View>
                 ) : null}
 
@@ -749,7 +907,7 @@ export default function CostCheckScreen({ id, onBack }: CostCheckScreenProps) {
                       <Ionicons name="ribbon-outline" size={13} color="#0e9fb4" /> อนุมัติระดับผู้บริหาร (ล่าสุด)
                     </Text>
                     <ModalRow label="โดย" value={detailModal.item.exec_approved_by} />
-                    <ModalRow label="เมื่อ" value={detailModal.item.exec_approved_at ?? '-'} />
+                    <ModalRow label="เมื่อ" value={formatShortThaiDateTime(detailModal.item.exec_approved_at)} />
                   </View>
                 ) : null}
 
@@ -757,7 +915,7 @@ export default function CostCheckScreen({ id, onBack }: CostCheckScreenProps) {
                   <View style={styles.modalBox}>
                     <Text style={styles.modalBoxTitle}>ประวัติอนุมัติ (ผจก.)</Text>
                     {detailModal.item.mgr_approve_history!.map((h, i) => (
-                      <ModalRow key={i} label={h.po_number} value={`${h.approved_by} • ${h.approved_at}`} />
+                      <ModalRow key={i} label={h.po_number} value={`${h.approved_by} • ${formatShortThaiDateTime(h.approved_at)}`} />
                     ))}
                   </View>
                 )}
@@ -766,7 +924,7 @@ export default function CostCheckScreen({ id, onBack }: CostCheckScreenProps) {
                   <View style={styles.modalBox}>
                     <Text style={styles.modalBoxTitle}>ประวัติอนุมัติ (ผู้บริหาร)</Text>
                     {detailModal.item.exec_approve_history!.map((h, i) => (
-                      <ModalRow key={i} label={h.po_number} value={`${h.approved_by} • ${h.approved_at}`} />
+                      <ModalRow key={i} label={h.po_number} value={`${h.approved_by} • ${formatShortThaiDateTime(h.approved_at)}`} />
                     ))}
                   </View>
                 )}
@@ -825,6 +983,198 @@ export default function CostCheckScreen({ id, onBack }: CostCheckScreenProps) {
               {savingPrice ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="save-outline" size={16} color="#fff" />}
               <Text style={styles.pickerBtnText}>บันทึกราคาทุน</Text>
             </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      {/* -------------------- Purchase history modal -------------------- */}
+      <Modal visible={purchaseHistoryModal.visible} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeadRow}>
+              <Text style={styles.modalTitle}>ประวัติการซื้อ</Text>
+              <Pressable onPress={() => setPurchaseHistoryModal({ visible: false, loading: false, rows: [] })} hitSlop={8}>
+                <Ionicons name="close" size={20} color="#64748b" />
+              </Pressable>
+            </View>
+            {purchaseHistoryModal.loading ? (
+              <ActivityIndicator color="#0e9fb4" style={{ marginTop: 20 }} />
+            ) : purchaseHistoryModal.rows.length === 0 ? (
+              <Text style={styles.stateText}>ยังไม่มีประวัติการซื้อ</Text>
+            ) : (
+              <ScrollView style={{ marginTop: 8, maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+                {purchaseHistoryModal.rows.map((r, i) => (
+                  <View key={i} style={styles.historyRow}>
+                    <Text style={styles.historyRowTitle} numberOfLines={2}>{r.item_name}</Text>
+                    <Text style={styles.historyRowSub}>PO {r.po_number || '-'} • {r.supplier_name || '-'}</Text>
+                    <Text style={styles.historyRowSub}>สั่งโดย {r.orderer_name || '-'} • {r.order_date ? formatShortThaiDate(r.order_date) : r.order_date_thai || '-'}</Text>
+                    <View style={styles.historyRowFoot}>
+                      <Text style={styles.historyRowAmount}>{fmt(r.buy_quantity)} x {fmt(r.buy_unit_price)} = {fmt(r.total_price)}</Text>
+                      <Text style={styles.historyRowApprove}>
+                        {r.cost_approved_by ? 'ผจก. ✓' : 'ผจก. รออนุมัติ'} / {r.exec_approved_by ? 'ผู้บริหาร ✓' : 'ผู้บริหาร รออนุมัติ'}
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* -------------------- Cost edit history modal -------------------- */}
+      <Modal visible={costHistoryModal.visible} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeadRow}>
+              <Text style={styles.modalTitle}>ประวัติแก้ไขราคาทุน</Text>
+              <Pressable onPress={() => setCostHistoryModal({ visible: false, loading: false, rows: [] })} hitSlop={8}>
+                <Ionicons name="close" size={20} color="#64748b" />
+              </Pressable>
+            </View>
+            {costHistoryModal.loading ? (
+              <ActivityIndicator color="#0e9fb4" style={{ marginTop: 20 }} />
+            ) : costHistoryModal.rows.length === 0 ? (
+              <Text style={styles.stateText}>ยังไม่มีประวัติแก้ไขราคาทุน</Text>
+            ) : (
+              <ScrollView style={{ marginTop: 8, maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+                {costHistoryModal.rows.map((r, i) => (
+                  <View key={i} style={styles.historyRow}>
+                    <Text style={styles.historyRowTitle} numberOfLines={2}>{r.item_name}</Text>
+                    <Text style={styles.historyRowSub}>โดย {r.user || '-'} • {r.time ? formatShortThaiDateTime(r.time) : r.time_thai || '-'}</Text>
+                    <Text style={styles.historyRowAmount}>
+                      {fmt(r.old_unit)} → {fmt(r.new_unit)} /หน่วย (รวม {fmt(r.old_total)} → {fmt(r.new_total)})
+                    </Text>
+                    {!!r.note && <Text style={styles.historyRowSub}>หมายเหตุ: {r.note}</Text>}
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* -------------------- Pending POs modal (ข้ามโครงการ) -------------------- */}
+      <Modal visible={pendingPosModal.visible} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeadRow}>
+              <Text style={styles.modalTitle}>PO ค้างอนุมัติ (ข้ามโครงการ)</Text>
+              <Pressable onPress={() => setPendingPosModal({ visible: false, loading: false, rows: [] })} hitSlop={8}>
+                <Ionicons name="close" size={20} color="#64748b" />
+              </Pressable>
+            </View>
+            {pendingPosModal.loading ? (
+              <ActivityIndicator color="#0e9fb4" style={{ marginTop: 20 }} />
+            ) : pendingPosModal.rows.length === 0 ? (
+              <Text style={styles.stateText}>ไม่มี PO ค้างอนุมัติ</Text>
+            ) : (
+              <ScrollView style={{ marginTop: 8, maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+                {pendingPosModal.rows.map((r, i) => (
+                  <Pressable
+                    key={i}
+                    style={({ pressed }) => [styles.historyRow, pressed && styles.pressed]}
+                    onPress={() => openPoDetail(r.po_number)}
+                  >
+                    <Text style={styles.historyRowTitle}>PO {r.po_number}</Text>
+                    <Text style={styles.historyRowSub}>{r.project_count} โครงการ • {r.item_count} รายการ</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* -------------------- PO detail modal — อนุมัติรายงวด (approve_installment) -------------------- */}
+      <Modal visible={poDetailModal.visible} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeadRow}>
+              <Text style={styles.modalTitle}>PO {poDetailModal.poNumber}</Text>
+              <Pressable onPress={() => setPoDetailModal({ visible: false, loading: false, poNumber: '', items: [], canApproveMgr: false, canApproveExec: false })} hitSlop={8}>
+                <Ionicons name="close" size={20} color="#64748b" />
+              </Pressable>
+            </View>
+            {poDetailModal.loading ? (
+              <ActivityIndicator color="#0e9fb4" style={{ marginTop: 20 }} />
+            ) : poDetailModal.items.length === 0 ? (
+              <Text style={styles.stateText}>ไม่พบรายการของ PO นี้</Text>
+            ) : (
+              <ScrollView style={{ marginTop: 8, maxHeight: 460 }} showsVerticalScrollIndicator={false}>
+                {poDetailModal.items.map((it) => (
+                  <View key={it.item_id} style={styles.historyRow}>
+                    <Text style={styles.historyRowTitle} numberOfLines={2}>{it.item_name}</Text>
+                    <Text style={styles.historyRowSub}>{it.display_code || it.project_name} • {it.order_date ? formatShortThaiDate(it.order_date) : it.order_date_thai || '-'}</Text>
+                    <Text style={styles.historyRowAmount}>{fmt(it.buy_quantity)} • รวม {fmt(it.total_price)}</Text>
+
+                    {it.installments.length === 0 ? (
+                      (it.poi_cost_pending || it.poi_exec_pending) ? (
+                        <View style={styles.instRow}>
+                          <Text style={styles.instRowAmount}>บิลนี้ไม่มีงวดย่อย — อนุมัติทั้งบิล</Text>
+                          <View style={styles.instRowActions}>
+                            {poDetailModal.canApproveMgr && !!it.poi_cost_pending ? (
+                              <Pressable
+                                disabled={busyPoItemId === it.item_id}
+                                onPress={() => handleApprovePoItem(it, 'mgr')}
+                                style={[styles.rowAction, styles.mgrAction, busyPoItemId === it.item_id && styles.disabled]}
+                              >
+                                {busyPoItemId === it.item_id ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.rowActionText}>อนุมัติ (ผจก.)</Text>}
+                              </Pressable>
+                            ) : !it.poi_cost_pending ? (
+                              <Text style={styles.instRowStatus}>ผจก. ✓</Text>
+                            ) : null}
+                            {poDetailModal.canApproveExec && !!it.poi_exec_pending ? (
+                              <Pressable
+                                disabled={busyPoItemId === it.item_id}
+                                onPress={() => handleApprovePoItem(it, 'exec')}
+                                style={[styles.rowAction, styles.execAction, busyPoItemId === it.item_id && styles.disabled]}
+                              >
+                                {busyPoItemId === it.item_id ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.rowActionText}>อนุมัติ (ผู้บริหาร)</Text>}
+                              </Pressable>
+                            ) : !it.poi_exec_pending ? (
+                              <Text style={styles.instRowStatus}>ผู้บริหาร ✓</Text>
+                            ) : null}
+                          </View>
+                        </View>
+                      ) : (
+                        <Text style={[styles.historyRowSub, { marginTop: 4 }]}>อนุมัติครบแล้ว</Text>
+                      )
+                    ) : (
+                      it.installments.map((inst) => (
+                        <View key={inst.id} style={styles.instRow}>
+                          <Text style={styles.instRowAmount}>งวด {fmt(inst.amount)}</Text>
+                          <View style={styles.instRowActions}>
+                            {poDetailModal.canApproveMgr && !inst.cost_approved_by ? (
+                              <Pressable
+                                disabled={busyInstId === inst.id}
+                                onPress={() => handleApproveInstallment(inst.id, 'mgr')}
+                                style={[styles.rowAction, styles.mgrAction, busyInstId === inst.id && styles.disabled]}
+                              >
+                                {busyInstId === inst.id ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.rowActionText}>อนุมัติ (ผจก.)</Text>}
+                              </Pressable>
+                            ) : (
+                              <Text style={styles.instRowStatus}>{inst.cost_approved_by ? `ผจก. ✓ ${inst.cost_approved_by}` : 'ผจก. รออนุมัติ'}</Text>
+                            )}
+                            {poDetailModal.canApproveExec && !inst.exec_approved_by ? (
+                              <Pressable
+                                disabled={busyInstId === inst.id}
+                                onPress={() => handleApproveInstallment(inst.id, 'exec')}
+                                style={[styles.rowAction, styles.execAction, busyInstId === inst.id && styles.disabled]}
+                              >
+                                {busyInstId === inst.id ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.rowActionText}>อนุมัติ (ผู้บริหาร)</Text>}
+                              </Pressable>
+                            ) : (
+                              <Text style={styles.instRowStatus}>{inst.exec_approved_by ? `ผู้บริหาร ✓ ${inst.exec_approved_by}` : 'ผู้บริหาร รออนุมัติ'}</Text>
+                            )}
+                          </View>
+                        </View>
+                      ))
+                    )}
+                  </View>
+                ))}
+              </ScrollView>
+            )}
           </View>
         </View>
       </Modal>
@@ -945,6 +1295,18 @@ const styles = StyleSheet.create({
   modalRowValue: { flex: 1, textAlign: 'right', color: '#2b3746', fontSize: 12.5, fontWeight: '700' },
   modalCloseBtn: { marginTop: 6, alignItems: 'center', paddingVertical: 12, borderRadius: 14, backgroundColor: '#f1f5f9' },
   modalCloseBtnText: { color: '#3f5266', fontSize: 13, fontWeight: '800' },
+
+  historyRow: { borderWidth: 1, borderColor: '#e7ecf2', borderRadius: 14, padding: 12, marginBottom: 8, backgroundColor: '#fbfcfd' },
+  historyRowTitle: { color: '#0f2438', fontSize: 13, fontWeight: '800' },
+  historyRowSub: { color: '#77879a', fontSize: 11.5, marginTop: 2 },
+  historyRowFoot: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 6, flexWrap: 'wrap', gap: 4 },
+  historyRowAmount: { color: '#2b3746', fontSize: 12.5, fontWeight: '700', marginTop: 4 },
+  historyRowApprove: { color: '#5a6b7e', fontSize: 10.5, fontWeight: '700' },
+
+  instRow: { marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#eef2f6' },
+  instRowAmount: { color: '#2b3746', fontSize: 12, fontWeight: '700', marginBottom: 6 },
+  instRowActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
+  instRowStatus: { color: '#8b98a8', fontSize: 11, fontWeight: '600' },
 
   fieldLabel: { color: '#5a6b7e', fontSize: 12, fontWeight: '700', marginTop: 10, marginBottom: 6 },
   priceInput: { borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, color: '#2b3746' },

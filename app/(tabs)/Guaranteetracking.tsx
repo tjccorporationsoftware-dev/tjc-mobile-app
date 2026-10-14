@@ -4,8 +4,9 @@
  * Mobile mockup ของหน้า guarantee_tracking.php (รายการติดตามหนังสือค้ำประกัน)
  * สำหรับแอป tjc-mobile-app (Expo / React Native)
  *
- * สถานะไฟล์นี้: เชื่อม API จริงแล้ว (GET action=list, POST action=delete) ผ่าน guarantee_tracking.php
- * — action='list' เป็นการเดา, action='delete' อ้างอิงจาก TODO เดิม ยังไม่ได้ยืนยันกับ backend จริง
+ * สถานะไฟล์นี้: เชื่อม API จริงแล้ว — action=list/delete ใน guarantee_API_mobile.php (เพิ่มใหม่ เพราะ
+ * guarantee_tracking.php ต้นทางเป็นหน้า HTML เต็ม ไม่มี GET action=list จริง มีแค่ POST action=delete
+ * ที่ port เอาเงื่อนไข/สิทธิ์เดิมมาเป๊ะ — ดู mobile_api/modules/guarantee_API_mobile.php)
  *
  * ตรงกับพฤติกรรม/สูตรจริงจาก guarantee_tracking.php:
  *  - การ์ดสรุป: ทั้งหมด + 7 สถานะการติดตาม (ยังไม่หมดสัญญา/แจ้งซ่อม/กำลังดำเนินการ/ตรวจชำรุด/
@@ -29,17 +30,16 @@
  */
 
 import { FontAwesome5, Ionicons } from '@expo/vector-icons';
-import axios from 'axios';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Modal, RefreshControl, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Modal, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
-// ✅ Config
-import { API_BASE } from '../../constants/config';
+import { useAuth } from '../_layout';
+import { API_MODULES } from '../../constants/config';
+import { apiMobileGet, apiMobilePost } from '../../service/api_mobile';
 
-// action สำหรับดึงรายการเป็นการเดา ('list') — ส่วน action: 'delete' อ้างอิงจาก TODO เดิมของไฟล์นี้
-// ยังไม่ได้ยืนยันกับ backend จริงทั้งคู่
-const API_URL = `${API_BASE}/guarantee_tracking.php`;
+const GUARANTEE_API_URL = `${API_MODULES}/guarantee_API_mobile.php`;
 
 // ====================================================================
 // Types
@@ -172,6 +172,8 @@ function conditionMeta(cond: LgCondition): { icon: keyof typeof FontAwesome5.gly
 
 export default function GuaranteeTrackingScreen({ onBack }: GuaranteeTrackingScreenProps) {
   const router = useRouter();
+  const { user } = useAuth();
+  const userId = user?.id;
   const [guarantees, setGuarantees] = useState<Guarantee[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -182,21 +184,21 @@ export default function GuaranteeTrackingScreen({ onBack }: GuaranteeTrackingScr
   const [detailModal, setDetailModal] = useState<{ visible: boolean; item?: Guarantee }>({ visible: false });
 
   const loadData = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!userId) return;
     if (!opts?.silent) setLoading(true);
     setError(null);
     try {
-      const res = await axios.get(API_URL, { params: { action: 'list' } });
-      const raw = res.data;
-      const list = Array.isArray(raw) ? raw : raw?.data ?? [];
+      const res = await apiMobileGet(GUARANTEE_API_URL, 'list', { user_id: userId });
+      const list = Array.isArray(res.data) ? res.data : [];
       setGuarantees(list.map(mapGuarantee));
     } catch (e) {
-      console.error('load guarantee_tracking failed', e);
+      console.error('guarantee_API_mobile action=list failed', e);
       setError('โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [userId]);
 
   useEffect(() => {
     loadData();
@@ -234,6 +236,7 @@ export default function GuaranteeTrackingScreen({ onBack }: GuaranteeTrackingScr
   }, [guarantees, search, statusFilter, companyFilter]);
 
   function handleDelete(item: Guarantee) {
+    if (!userId) return;
     Alert.alert('ยืนยันลบข้อมูล', `ยืนยันลบข้อมูลการขอเปิด LG หน้างาน: ${item.projectCode} ?`, [
       { text: 'ยกเลิก', style: 'cancel' },
       {
@@ -243,17 +246,11 @@ export default function GuaranteeTrackingScreen({ onBack }: GuaranteeTrackingScr
           const prev = guarantees;
           setGuarantees((g) => g.filter((x) => x.id !== item.id));
           try {
-            const fd = new FormData();
-            fd.append('action', 'delete');
-            fd.append('id', String(item.id));
-            const res = await axios.post(API_URL, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-            if (!(res.data?.status === 'success' || res.data?.success)) {
-              throw new Error(res.data?.message || 'delete failed');
-            }
-          } catch (e) {
-            console.error('delete guarantee failed', e);
+            await apiMobilePost(GUARANTEE_API_URL, 'delete', { user_id: userId, id: item.id });
+          } catch (e: any) {
+            console.error('guarantee_API_mobile action=delete failed', e);
             setGuarantees(prev); // rollback ถ้าลบไม่สำเร็จ
-            Alert.alert('ลบไม่สำเร็จ', 'กรุณาลองใหม่อีกครั้ง');
+            Alert.alert('ลบไม่สำเร็จ', e?.message || 'กรุณาลองใหม่อีกครั้ง');
           }
         },
       },

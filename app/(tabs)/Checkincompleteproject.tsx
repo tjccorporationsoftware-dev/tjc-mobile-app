@@ -1,11 +1,12 @@
 /**
  * CheckIncompleteProjectsScreen.tsx
  * ------------------------------------------------------------------
- * Mobile mockup ของหน้า check_incomplete_projects.php (ตรวจสอบข้อมูลตกหล่น)
+ * พอร์ตของหน้า check_incomplete_projects.php (ตรวจสอบข้อมูลตกหล่น)
  * สำหรับแอป tjc-mobile-app (Expo / React Native)
  *
- * สถานะไฟล์นี้: เชื่อม API จริงแล้ว (GET action=get_incomplete_projects) — action/param name เป็นการเดา
- * ยังไม่ได้ยืนยันกับ backend จริง (คำนวณ missing/severity ฝั่ง client จาก field ที่ backend ส่งมา)
+ * เชื่อม API จริงแล้ว — action=get_incomplete_projects ใน project_API_mobile.php (เพิ่มใหม่ เพราะ
+ * check_incomplete_projects.php ต้นทางเป็นหน้า HTML เต็ม ไม่ใช่ JSON endpoint) SQL + เงื่อนไข missing[]
+ * คัดมาจากต้นฉบับทั้งชุด (บรรทัด 26-158) ตัวเลข/ป้ายจึงตรงกับเว็บ 100%
  *
  * ตรงกับพฤติกรรม/สูตรจริงจาก check_incomplete_projects.php:
  *  - 4 การ์ดสรุป: โครงการไม่ครบ / ระดับวิกฤต (ขาด≥5) / ระดับปานกลาง (ขาด 3-4) / จุดรวมที่ต้องกรอก
@@ -23,17 +24,17 @@
  */
 
 import { Ionicons } from '@expo/vector-icons';
-import axios from 'axios';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, RefreshControl, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, FlatList, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
-// ✅ Config
-import { API_BASE } from '../../constants/config';
+import { useAuth } from '../_layout';
+import { API_MODULES } from '../../constants/config';
+import { apiMobileGet } from '../../service/api_mobile';
 
-// action ด้านล่างเป็นการเดาจากชื่อไฟล์ check_incomplete_projects.php — ยังไม่ได้ยืนยันกับ backend จริง
-// ปรับ action/param ให้ตรงถ้าไม่ตรง
-const API_URL = `${API_BASE}/check_incomplete_projects.php`;
+// action=get_incomplete_projects ใน project_API_mobile.php (README_project.md ยังไม่มีบรรทัดนี้ — เพิ่มใหม่)
+const PROJECT_API_URL = `${API_MODULES}/project_API_mobile.php`;
 
 // ====================================================================
 // Types
@@ -64,6 +65,8 @@ interface IncompleteProject {
 
 export interface CheckIncompleteProjectsScreenProps {
   onBack?: () => void;
+  /** ไปหน้าแก้ไขโครงการ — ถ้าไม่ส่งมา (ใช้แบบ route เดี่ยว) จะ router.push('/createproject') แทน */
+  onEditProject?: (projectId: string) => void;
 }
 
 // ====================================================================
@@ -81,8 +84,6 @@ const CAT_META: Record<CatKey, { label: string; color: string; bg: string; dot: 
 
 const CAT_ORDER: CatKey[] = ['main', 'contract', 'guarantee', 'bidding'];
 
-const AVAILABLE_YEARS = [2569, 2568, 2567];
-
 const FILTER_BUTTONS: { key: FilterKey; label: string }[] = [
   { key: 'all', label: 'ทั้งหมด' },
   { key: 'high', label: '🔴 วิกฤต' },
@@ -96,23 +97,22 @@ const SORT_OPTIONS: { key: SortKey; label: string }[] = [
   { key: 'code_desc', label: 'รหัสใหม่สุดขึ้นก่อน' },
 ];
 
-// แปลงข้อมูลดิบจาก backend ให้เข้ารูป IncompleteProject — รองรับหลายชื่อ field เพราะยังไม่มี spec ยืนยัน
+// แปลงข้อมูลดิบจาก action=get_incomplete_projects (project_API_mobile.php) ให้เข้ารูป IncompleteProject
 function mapProject(raw: any): IncompleteProject {
-  const code = String(raw.code ?? raw.project_code ?? '');
   const missingRaw = raw.missing ?? {};
   return {
-    id: Number(raw.id ?? raw.project_id ?? 0),
-    code,
-    display: String(raw.display ?? code.split('-')[1] ?? raw.id ?? ''),
-    name: String(raw.name ?? raw.project_name ?? ''),
-    customer: String(raw.customer ?? raw.customer_name ?? ''),
-    company: String(raw.company ?? raw.company_name ?? ''),
-    total: Number(raw.total ?? raw.missing_total ?? 0),
+    id: Number(raw.id ?? 0),
+    code: String(raw.code ?? ''),
+    display: String(raw.display ?? ''),
+    name: String(raw.name ?? ''),
+    customer: String(raw.customer ?? ''),
+    company: String(raw.company ?? ''),
+    total: Number(raw.total ?? 0),
     missing: {
-      main: missingRaw.main ?? raw.missing_main ?? [],
-      contract: missingRaw.contract ?? raw.missing_contract ?? [],
-      guarantee: missingRaw.guarantee ?? raw.missing_guarantee ?? [],
-      bidding: missingRaw.bidding ?? raw.missing_bidding ?? [],
+      main: missingRaw.main ?? [],
+      contract: missingRaw.contract ?? [],
+      guarantee: missingRaw.guarantee ?? [],
+      bidding: missingRaw.bidding ?? [],
     },
   };
 }
@@ -141,9 +141,14 @@ function categoriesOf(p: IncompleteProject): { key: CatKey; items: string[] }[] 
 // Main screen
 // ====================================================================
 
-export default function CheckIncompleteProjectsScreen({ onBack }: CheckIncompleteProjectsScreenProps) {
+export default function CheckIncompleteProjectsScreen({ onBack, onEditProject }: CheckIncompleteProjectsScreenProps) {
   const router = useRouter();
-  const [selectedYear, setSelectedYear] = useState(AVAILABLE_YEARS[0]);
+  const { user } = useAuth();
+  const userId = user?.id;
+
+  // ปีที่เลือกได้มาจาก backend เสมอ (DISTINCT YEAR(created_at) จริงในตาราง projects) ไม่ hardcode
+  const [availableYears, setAvailableYears] = useState<number[]>([]);
+  const [selectedYear, setSelectedYear] = useState<number | null>(null);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<FilterKey>('all');
   const [sort, setSort] = useState<SortKey>('miss_desc');
@@ -155,26 +160,38 @@ export default function CheckIncompleteProjectsScreen({ onBack }: CheckIncomplet
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const loadData = useCallback(async (opts?: { silent?: boolean }) => {
+  const loadData = useCallback(async (opts?: { silent?: boolean; year?: number }) => {
+    if (!userId) return;
     if (!opts?.silent) setLoading(true);
     setError(null);
     try {
-      const res = await axios.get(API_URL, { params: { action: 'get_incomplete_projects', year: selectedYear } });
-      const raw = res.data;
-      const list = Array.isArray(raw) ? raw : raw?.data ?? [];
+      const res = await apiMobileGet(PROJECT_API_URL, 'get_incomplete_projects', {
+        user_id: userId,
+        year: opts?.year ?? selectedYear ?? undefined,
+      });
+      const list = Array.isArray(res.data) ? res.data : [];
       setProjects(list.map(mapProject));
+      setAvailableYears(Array.isArray(res.available_years) ? res.available_years : []);
+      setSelectedYear(Number(res.year));
     } catch (e) {
-      console.error('load check_incomplete_projects failed', e);
+      console.error('project_API_mobile action=get_incomplete_projects failed', e);
       setError('โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [selectedYear]);
+  }, [userId, selectedYear]);
 
   useEffect(() => {
     loadData();
-  }, [loadData]);
+    // โหลดครั้งแรกเท่านั้น — เปลี่ยนปีทำผ่าน selectYear() ด้านล่างเพื่อคุม opts.year ตรงๆ ไม่ชนกับปีเก่าใน state
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  function selectYear(y: number) {
+    setSelectedYear(y);
+    loadData({ year: y });
+  }
 
   function onRefresh() {
     setRefreshing(true);
@@ -222,7 +239,7 @@ export default function CheckIncompleteProjectsScreen({ onBack }: CheckIncomplet
   }
 
   function goEditProject(p: IncompleteProject) {
-    // ปรับ pathname นี้ให้ตรงกับไฟล์จริงเมื่อสร้างหน้า create_project แล้ว
+    if (onEditProject) return onEditProject(String(p.id));
     router.push({ pathname: '/createproject', params: { edit_id: String(p.id) } });
   }
 
@@ -244,10 +261,10 @@ export default function CheckIncompleteProjectsScreen({ onBack }: CheckIncomplet
         </View>
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.yearRow}>
-          {AVAILABLE_YEARS.map((y) => {
+          {availableYears.map((y) => {
             const active = selectedYear === y;
             return (
-              <TouchableOpacity key={y} onPress={() => setSelectedYear(y)} style={[styles.yearChip, active && styles.yearChipActive]}>
+              <TouchableOpacity key={y} onPress={() => selectYear(y)} style={[styles.yearChip, active && styles.yearChipActive]}>
                 <Text style={[styles.yearChipText, active && styles.yearChipTextActive]}>ปี ค.ศ. {y}</Text>
               </TouchableOpacity>
             );
@@ -436,7 +453,7 @@ export default function CheckIncompleteProjectsScreen({ onBack }: CheckIncomplet
             <View style={styles.emptyBox}>
               <Ionicons name="checkmark-circle" size={36} color="#22c55e" />
               <Text style={styles.emptyTitle}>ยอดเยี่ยมมาก!</Text>
-              <Text style={styles.emptyText}>ทุกโครงการในปี {selectedYear} มีข้อมูลครบถ้วนสมบูรณ์ครับ</Text>
+              <Text style={styles.emptyText}>ทุกโครงการในปี ค.ศ. {selectedYear ?? 0} มีข้อมูลครบถ้วนสมบูรณ์ครับ</Text>
             </View>
           )
         }

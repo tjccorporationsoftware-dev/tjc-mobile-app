@@ -6,8 +6,13 @@
  *   router.push({ pathname: '/ProjectFollowup', params: { id } })
  * จึงอ่าน id ผ่าน useLocalSearchParams() ตรงๆ เหมือนไฟล์อื่นในชุดนี้
  *
- * สถานะไฟล์นี้: เชื่อม API จริงแล้ว (GET โหลดข้อมูลโครงการ+ประวัติติดตาม, POST ajax_save บันทึก)
- * ผ่าน project_followup.php — action/param names เป็นการเดาตาม TODO เดิม ยังไม่ได้ยืนยันกับ backend จริง
+ * สถานะไฟล์นี้: เชื่อม API จริงแล้ว — project_followup.php (เว็บ) ถูกบังคับผ่าน auth.php ที่ต้อง
+ * มี PHP session cookie จาก login หน้าเว็บ แต่แอปมือถือ login แบบ stateless (ไม่มี session) จึงยิง
+ * ตรงไม่ได้เลย (โดน redirect ไป login.php เงียบๆ) เปลี่ยนมาใช้ project_API_mobile.php แทน:
+ * action=get_followup_detail (โหลดข้อมูลโครงการ+ประวัติติดตาม+ตัวเลือกสถานะ/ธนาคารจริง) และ
+ * action=save_followup (บันทึกทั้งชุด) — พอร์ตตรรกะจาก project_followup.php มาไว้ในโมดูลมือถือ
+ * ยืนยันตัวตนด้วย user_id แทน session ทั้งสอง action ยืนยันแล้วว่าทำงานจริง (ทดสอบ insert/edit/
+ * delete/cross-user-attribution ครบก่อนส่งมอบ)
  *
  * ตรงกับพฤติกรรมจริงจาก project_followup.php:
  *  - หน้านี้บันทึก "เฉพาะสถานะกลุ่มติดตาม" เท่านั้น (ไม่ใช่สถานะจ่ายเงิน — อันนั้นอยู่หน้า
@@ -31,14 +36,16 @@ import { Ionicons } from '@expo/vector-icons';
 import axios from 'axios';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Modal, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { useAuth } from '../_layout';
 // ✅ Config
-import { API_BASE } from '../../constants/config';
+import { API_MODULES } from '../../constants/config';
+import { formatShortThaiDateTime } from '../../components/DateTimeField';
+import { apiMobileGet } from '../../service/api_mobile';
 
-// endpoint นี้ไม่มี action param ตาม TODO เดิมของไฟล์นี้ (?id=projectId, ajax_save=1 ตอนบันทึก)
-// ส่วนฝั่งโหลดข้อมูล (project info + ประวัติการติดตามที่มีอยู่แล้ว) เป็นการเดา — ยังไม่ได้ยืนยันกับ backend จริงทั้งคู่
-const API_URL = `${API_BASE}/project_followup.php`;
+const PROJECT_API_URL = `${API_MODULES}/project_API_mobile.php`;
 
 // ====================================================================
 // Types
@@ -74,40 +81,40 @@ export interface ProjectFollowupScreenProps {
 }
 
 // ====================================================================
-// Mock data — ใช้ id เดียวกับ AccountingDashboard.tsx (544-548) เพื่อความสอดคล้อง
+// ค่าเริ่มต้น/ตัวช่วย — ตัวเลือกสถานะติดตาม/ธนาคารจริงโหลดจาก get_followup_detail (call_statuses/
+// bank_list) ตอนเปิดหน้า ไม่ใช่ mock อีกต่อไป — ใช้ fallback นี้แค่ระหว่างรอโหลดครั้งแรก
 // ====================================================================
 
-const CURRENT_USER = 'คุณธนา';
-const CALL_STATUSES = ['กำลังติดตาม', 'นัดโทรกลับ', 'ติดต่อไม่ได้', 'รอเอกสารจากลูกค้า', 'ปิดติดตามแล้ว'];
-const BANK_LIST = ['ธนาคารกรุงไทย', 'ธนาคารกสิกรไทย', 'ธนาคารไทยพาณิชย์', 'ธนาคารกรุงเทพ'];
+const FALLBACK_STATUSES = ['กำลังติดตาม', 'นัดโทรกลับ', 'ติดต่อไม่ได้', 'รอเอกสารจากลูกค้า', 'ปิดติดตามแล้ว'];
 
 const EMPTY_PROJECT: ProjectInfo = { jobNo: '', company: '', projectName: '', customer: '', budget: 0, paid: 0 };
 
-// แปลงข้อมูลดิบจาก backend ให้เข้ารูป ProjectInfo/FollowupEntry — รองรับหลายชื่อ field เพราะยังไม่มี spec ยืนยัน
+// แปลงข้อมูลดิบจาก get_followup_detail (project_API_mobile.php) ให้เข้ารูป ProjectInfo/FollowupEntry
+// ชื่อคีย์ยึดตาม action จริงที่ยืนยันแล้ว (ไม่ใช่การเดาอีกต่อไป)
 function mapProjectInfo(raw: any): ProjectInfo {
   return {
-    jobNo: String(raw.jobNo ?? raw.job_no ?? ''),
-    company: String(raw.company ?? raw.company_name ?? ''),
-    projectName: String(raw.projectName ?? raw.project_name ?? ''),
-    customer: String(raw.customer ?? raw.customer_name ?? ''),
-    budget: Number(raw.budget ?? raw.project_budget ?? 0),
-    paid: Number(raw.paid ?? raw.paid_gross ?? 0),
-    contact: raw.contact ?? undefined,
-    address: raw.address ?? undefined,
+    jobNo: String(raw.job_no ?? ''),
+    company: String(raw.company_name ?? ''),
+    projectName: String(raw.project_name ?? ''),
+    customer: String(raw.customer_name ?? ''),
+    budget: Number(raw.project_budget ?? 0),
+    paid: Number(raw.paid_gross ?? 0),
+    contact: raw.contact || undefined,
+    address: raw.address || undefined,
   };
 }
 
-function mapFollowupEntry(raw: any): FollowupEntry {
+function mapFollowupEntry(raw: any, currentUser: string): FollowupEntry {
   return {
-    id: String(raw.id ?? raw.fu_id ?? uid()),
+    id: String(raw.id ?? uid()),
     isNew: false,
-    name: String(raw.name ?? raw.followup_name ?? ''),
-    status: String(raw.status ?? raw.call_status ?? CALL_STATUSES[0]),
-    bankName: String(raw.bankName ?? raw.bank_name ?? ''),
+    name: String(raw.followup_name ?? ''),
+    status: String(raw.call_status ?? ''),
+    bankName: String(raw.bank_name ?? ''),
     remark: String(raw.remark ?? ''),
-    owner: String(raw.owner ?? raw.owner_name ?? CURRENT_USER),
-    createdAtShow: raw.createdAtShow ?? raw.created_at_show ?? undefined,
-    editedBy: raw.editedBy ?? raw.edited_by ?? undefined,
+    owner: String(raw.created_by || currentUser),
+    createdAtShow: raw.created_at || raw.status_updated_at || undefined,
+    editedBy: raw.edited_by || undefined,
   };
 }
 
@@ -117,8 +124,8 @@ function uid(): string {
   return `fu_new_${Date.now()}_${uidCounter}`;
 }
 
-function mkEntry(): FollowupEntry {
-  return { id: uid(), isNew: true, name: '', status: CALL_STATUSES[0], bankName: '', remark: '', owner: CURRENT_USER };
+function mkEntry(currentUser: string, defaultStatus: string): FollowupEntry {
+  return { id: uid(), isNew: true, name: '', status: defaultStatus, bankName: '', remark: '', owner: currentUser };
 }
 
 function num(n: number): string {
@@ -133,35 +140,57 @@ export default function ProjectFollowupScreen({ id, onBack, onSaved }: ProjectFo
   const router = useRouter();
   const params = useLocalSearchParams<{ id?: string }>();
   const projectId = id ?? params.id ?? '547';
+  const { user } = useAuth();
+  const userId = (user as any)?.id;
+  const currentUserName = (user as any)?.fullname || 'ไม่ระบุ';
 
   const [project, setProject] = useState<ProjectInfo>(EMPTY_PROJECT);
-  const [entries, setEntries] = useState<FollowupEntry[]>([mkEntry()]);
+  const [entries, setEntries] = useState<FollowupEntry[]>([]);
+  const [callStatuses, setCallStatuses] = useState<string[]>(FALLBACK_STATUSES);
+  const [bankList, setBankList] = useState<string[]>([]);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  // ป๊อปอัพเลือกตัวเลือกแบบใช้ร่วมกันทุกช่อง (แทนที่ chip picker แบบเลื่อนแนวนอนเดิม)
+  const [pickerModal, setPickerModal] = useState<{
+    visible: boolean;
+    title: string;
+    options: { value: string; label: string }[];
+    current: string;
+    onSelect: (v: string) => void;
+  }>({ visible: false, title: '', options: [], current: '', onSelect: () => {} });
+  function openPicker(title: string, options: { value: string; label: string }[], current: string, onSelect: (v: string) => void) {
+    setPickerModal({ visible: true, title, options, current, onSelect });
+  }
   const [saving, setSaving] = useState(false);
 
   const outstanding = Math.max(project.budget - project.paid, 0);
 
   const loadData = useCallback(async () => {
+    if (!userId) return;
     setLoading(true);
     setLoadError(null);
     try {
-      const res = await axios.get(API_URL, { params: { id: projectId } });
-      const d = res.data?.data ?? res.data;
-      const proj = mapProjectInfo(d?.project ?? d ?? {});
-      const rawEntries = Array.isArray(d?.followups ?? d?.entries) ? d.followups ?? d.entries : [];
-      const mapped: FollowupEntry[] = rawEntries.length > 0 ? rawEntries.map(mapFollowupEntry) : [mkEntry()];
+      const res = await apiMobileGet(PROJECT_API_URL, 'get_followup_detail', { user_id: userId, project_id: projectId });
+      const proj = mapProjectInfo(res.project ?? {});
+      const statuses: string[] = Array.isArray(res.call_statuses) && res.call_statuses.length > 0 ? res.call_statuses : FALLBACK_STATUSES;
+      const banks: string[] = Array.isArray(res.bank_list) ? res.bank_list : [];
+      const actor = String(res.current_user || currentUserName);
+      const rawEntries: any[] = Array.isArray(res.followups) ? res.followups : [];
+      const mapped: FollowupEntry[] = rawEntries.length > 0 ? rawEntries.map((r) => mapFollowupEntry(r, actor)) : [mkEntry(actor, statuses[0] ?? '')];
       setProject(proj);
+      setCallStatuses(statuses);
+      setBankList(banks);
       setEntries(mapped);
       setExpandedIds(new Set(mapped.filter((e) => e.isNew).map((e) => e.id)));
-    } catch (e) {
-      console.error('load project_followup failed', e);
-      setLoadError('โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+    } catch (e: any) {
+      console.error('load project_API_mobile get_followup_detail failed', e);
+      setLoadError(e?.message || 'โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
     } finally {
       setLoading(false);
     }
-  }, [projectId]);
+  }, [projectId, userId, currentUserName]);
 
   useEffect(() => {
     loadData();
@@ -183,7 +212,7 @@ export default function ProjectFollowupScreen({ id, onBack, onSaved }: ProjectFo
   }
 
   function addEntry() {
-    const e = mkEntry();
+    const e = mkEntry(currentUserName, callStatuses[0] ?? '');
     e.name = `ครั้งที่ ${entries.length + 1}`;
     setEntries((prev) => [...prev, e]);
     setExpandedIds((prev) => new Set(prev).add(e.id));
@@ -205,35 +234,39 @@ export default function ProjectFollowupScreen({ id, onBack, onSaved }: ProjectFo
   }
 
   async function handleSave() {
+    if (!userId) return;
     const invalid = entries.some((e) => !e.name.trim());
     if (invalid) {
       Alert.alert('กรอกข้อมูลไม่ครบ', 'กรุณาระบุ "ชื่อครั้ง" ให้ครบทุกรายการก่อนบันทึก');
       return;
     }
 
-    // payload ตรงกับ TODO เดิมของไฟล์นี้ — ชื่อ field แบบ array ต่อครั้ง เรียงตามลำดับ entries
-    const fd = new FormData();
-    fd.append('ajax_save', '1');
+    // save_followup (project_API_mobile.php) อ่าน $_REQUEST['followup_name'] เป็น array ต่อครั้ง
+    // เรียงตามลำดับ entries เหมือนเดิม — apiMobilePost ไม่รองรับ key ซ้ำ จึงประกอบ body เองตรงนี้
+    const body = new URLSearchParams();
+    body.append('action', 'save_followup');
+    body.append('user_id', String(userId));
+    body.append('project_id', String(projectId));
     entries.forEach((e) => {
-      fd.append('fu_id[]', e.isNew ? '' : e.id);
-      fd.append('followup_name[]', e.name);
-      fd.append('call_status[]', e.status);
-      fd.append('bank_name[]', e.bankName);
-      fd.append('remark[]', e.remark);
+      body.append('fu_id[]', e.isNew ? '' : e.id);
+      body.append('followup_name[]', e.name);
+      body.append('call_status[]', e.status);
+      body.append('bank_name[]', e.bankName);
+      body.append('remark[]', e.remark);
     });
 
     setSaving(true);
     try {
-      const res = await axios.post(`${API_URL}?id=${encodeURIComponent(projectId)}`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      if (res.data?.status === 'success' || res.data?.success) {
-        Alert.alert('บันทึกสำเร็จ', `บันทึกการติดตาม ${entries.length} รายการเรียบร้อยแล้ว!`, [
+      const res = await axios.post(PROJECT_API_URL, body.toString(), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+      if (res.data?.status === 'success') {
+        Alert.alert('บันทึกสำเร็จ', `บันทึกการติดตาม ${res.data.saved ?? entries.length} รายการเรียบร้อยแล้ว!`, [
           { text: 'ตกลง', onPress: () => (onSaved ? onSaved() : handleBack()) },
         ]);
       } else {
         Alert.alert('บันทึกไม่สำเร็จ', res.data?.message || 'กรุณาลองใหม่อีกครั้ง');
       }
-    } catch (e) {
-      console.error('save project_followup failed', e);
+    } catch (e: any) {
+      console.error('save_followup failed', e);
       Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถบันทึกข้อมูลได้ กรุณาลองใหม่อีกครั้ง');
     } finally {
       setSaving(false);
@@ -338,7 +371,7 @@ export default function ProjectFollowupScreen({ id, onBack, onSaved }: ProjectFo
                   <TouchableOpacity onPress={() => toggleExpand(e.id)} activeOpacity={0.7}>
                     <Text style={styles.collapsedName}>{e.name || `ครั้งที่ ${idx + 1}`}</Text>
                     <View style={styles.collapsedMetaRow}>
-                      <Text style={styles.collapsedMeta}>🕐 {e.createdAtShow}</Text>
+                      <Text style={styles.collapsedMeta}>🕐 {formatShortThaiDateTime(e.createdAtShow)}</Text>
                       <Text style={styles.collapsedMeta}>👤 {e.owner}</Text>
                     </View>
                     <View style={styles.collapsedStatusBadge}>
@@ -363,29 +396,29 @@ export default function ProjectFollowupScreen({ id, onBack, onSaved }: ProjectFo
                     <FieldLabel text="วันเวลาที่บันทึก" />
                     <View style={styles.stampBox}>
                       <Ionicons name="calendar-outline" size={13} color="#d97706" />
-                      <Text style={styles.stampBoxText}>{e.isNew ? 'ระบบจะประทับให้เมื่อกดบันทึก' : e.createdAtShow}</Text>
+                      <Text style={styles.stampBoxText}>{e.isNew ? 'ระบบจะประทับให้เมื่อกดบันทึก' : formatShortThaiDateTime(e.createdAtShow)}</Text>
                     </View>
 
                     <FieldLabel text="สถานะติดตาม" />
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-                      {CALL_STATUSES.map((s) => (
-                        <TouchableOpacity key={s} onPress={() => updateEntry(e.id, 'status', s)} style={[styles.chip, e.status === s && styles.chipActive]}>
-                          <Text style={[styles.chipText, e.status === s && styles.chipTextActive]}>{s}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
+                    <PickerTrigger
+                      label={e.status}
+                      placeholder="เลือกสถานะ..."
+                      onPress={() => openPicker('สถานะติดตาม', callStatuses.map((s) => ({ value: s, label: s })), e.status, (v) => updateEntry(e.id, 'status', v))}
+                    />
 
                     <FieldLabel text="ธนาคาร (เข้าเช็ค)" />
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-                      <TouchableOpacity onPress={() => updateEntry(e.id, 'bankName', '')} style={[styles.chip, e.bankName === '' && styles.chipActive]}>
-                        <Text style={[styles.chipText, e.bankName === '' && styles.chipTextActive]}>ไม่ระบุ</Text>
-                      </TouchableOpacity>
-                      {BANK_LIST.map((b) => (
-                        <TouchableOpacity key={b} onPress={() => updateEntry(e.id, 'bankName', b)} style={[styles.chip, e.bankName === b && styles.chipActive]}>
-                          <Text style={[styles.chipText, e.bankName === b && styles.chipTextActive]}>{b}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
+                    <PickerTrigger
+                      label={e.bankName}
+                      placeholder="ไม่ระบุ"
+                      onPress={() =>
+                        openPicker(
+                          'ธนาคาร (เข้าเช็ค)',
+                          [{ value: '', label: 'ไม่ระบุ' }, ...bankList.map((b) => ({ value: b, label: b }))],
+                          e.bankName,
+                          (v) => updateEntry(e.id, 'bankName', v)
+                        )
+                      }
+                    />
 
                     <FieldLabel text="ผู้บันทึก" />
                     <View style={styles.stampBox}>
@@ -427,6 +460,36 @@ export default function ProjectFollowupScreen({ id, onBack, onSaved }: ProjectFo
           </View>
         </View>
       </ScrollView>
+
+      {/* ป๊อปอัพเลือกตัวเลือกแบบใช้ร่วมกันทุกช่อง (แทนที่ chip picker แบบเลื่อนแนวนอนเดิม) */}
+      <Modal visible={pickerModal.visible} transparent animationType="fade" onRequestClose={() => setPickerModal((s) => ({ ...s, visible: false }))}>
+        <TouchableOpacity style={styles.pickerModalOverlay} activeOpacity={1} onPress={() => setPickerModal((s) => ({ ...s, visible: false }))}>
+          <View style={styles.pickerModalSheet}>
+            <Text style={styles.pickerModalTitle}>{pickerModal.title}</Text>
+            <ScrollView style={{ maxHeight: 380 }}>
+              {pickerModal.options.map((opt) => {
+                const active = pickerModal.current === opt.value;
+                return (
+                  <TouchableOpacity
+                    key={opt.value || '__none__'}
+                    style={[styles.pickerModalOption, active && styles.pickerModalOptionActive]}
+                    onPress={() => {
+                      pickerModal.onSelect(opt.value);
+                      setPickerModal((s) => ({ ...s, visible: false }));
+                    }}
+                  >
+                    <Text style={styles.pickerModalOptionText}>{opt.label}</Text>
+                    {active && <Ionicons name="checkmark" size={16} color="#d97706" />}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+            <TouchableOpacity style={styles.pickerModalCloseBtn} onPress={() => setPickerModal((s) => ({ ...s, visible: false }))}>
+              <Text style={styles.pickerModalCloseBtnText}>ปิด</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -457,6 +520,18 @@ function InfoItem({
       <Text style={[styles.infoItemValue, valueColor ? { color: valueColor } : null, small && { fontSize: 11.5, fontWeight: '600' }]}>{value}</Text>
       {!!sub && <Text style={styles.infoItemSub}>{sub}</Text>}
     </View>
+  );
+}
+
+// ปุ่มกด-เปิดป๊อปอัพเลือกตัวเลือก — แทนที่ chip picker แบบเลื่อนแนวนอนเดิม
+function PickerTrigger({ label, placeholder, onPress }: { label: string; placeholder: string; onPress: () => void }) {
+  return (
+    <TouchableOpacity style={styles.pickerTrigger} onPress={onPress}>
+      <Text style={[styles.pickerTriggerText, !label && styles.pickerTriggerPlaceholder]} numberOfLines={1}>
+        {label || placeholder}
+      </Text>
+      <Ionicons name="chevron-down" size={16} color="#64748b" />
+    </TouchableOpacity>
   );
 }
 
@@ -528,11 +603,17 @@ const styles = StyleSheet.create({
   stampBox: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#cbd5e1', borderStyle: 'dashed', borderRadius: 9, paddingHorizontal: 11, paddingVertical: 9 },
   stampBoxText: { fontSize: 11.5, color: '#64748b', fontWeight: '600' },
 
-  chipsRow: { gap: 6, paddingVertical: 2 },
-  chip: { backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 50, paddingHorizontal: 11, paddingVertical: 7 },
-  chipActive: { backgroundColor: '#d97706', borderColor: '#d97706' },
-  chipText: { fontSize: 11, color: '#475569', fontWeight: '600' },
-  chipTextActive: { color: '#fff' },
+  pickerTrigger: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#fff' },
+  pickerTriggerText: { fontSize: 13, color: '#0f172a', fontWeight: '600', flexShrink: 1 },
+  pickerTriggerPlaceholder: { color: '#94a3b8', fontWeight: '400' },
+  pickerModalOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', justifyContent: 'center', padding: 24 },
+  pickerModalSheet: { backgroundColor: '#fff', borderRadius: 16, padding: 16 },
+  pickerModalTitle: { fontSize: 13.5, fontWeight: '800', color: '#0f172a', marginBottom: 10 },
+  pickerModalOption: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, paddingHorizontal: 10, borderRadius: 8 },
+  pickerModalOptionActive: { backgroundColor: '#fffbeb' },
+  pickerModalOptionText: { fontSize: 12.5, fontWeight: '700', color: '#334155', flexShrink: 1 },
+  pickerModalCloseBtn: { marginTop: 8, alignSelf: 'center', paddingVertical: 8, paddingHorizontal: 20 },
+  pickerModalCloseBtnText: { fontSize: 12, fontWeight: '700', color: '#94a3b8' },
 
   collapseBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, alignSelf: 'center', backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 50, paddingHorizontal: 14, paddingVertical: 7, marginTop: 14 },
   collapseBtnText: { fontSize: 11.5, fontWeight: '700', color: '#475569' },

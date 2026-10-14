@@ -5,10 +5,16 @@
  * "แก้ไขเอกสาร" (มี docId) เหมือนต้นฉบับที่เป็นไฟล์เดียวกันสลับโหมดด้วย $is_edit_mode
  * เชื่อมจากปุ่ม "แก้ไข" ในการ์ดเอกสารของ DocumentDashboardScreen
  *
- * สถานะไฟล์นี้: เชื่อม API จริงแล้ว (GET action=detail ตอนแก้ไข, POST action=submit_doc ตอนบันทึก)
- * ผ่าน SubmitDocument.php — action='submit_doc'/param names อ้างอิงจาก TODO เดิม, action='detail'
- * เป็นการเดา ยังไม่ได้ยืนยันกับ backend จริงทั้งคู่ ตัวเลือกดรอปดาวน์ (บริษัท/ซัพพลายเออร์/บัญชี/
- * ธนาคาร) ยังเป็นข้อมูลตัวอย่างในเครื่อง — ยังไม่มี action สำหรับโหลดลิสต์จริง
+ * สถานะไฟล์นี้: เชื่อม API จริงแล้ว — SubmitDocument.php (เว็บ) ถูกบังคับผ่าน auth.php (ต้อง
+ * session เว็บ) เหมือนหน้าอื่นๆ ที่เจอมาก่อน จึงย้ายมาใช้ document_API_mobile.php แทนทั้งหมด:
+ *   get_submit_master_data — โหลดบริษัท/ธนาคาร(+เกณฑ์จำนวนหลัก)/ซัพพลายเออร์/ประวัติบัญชีจริง
+ *   get_detail             — โหลดข้อมูลเดิมตอนแก้ไข (action ที่มีอยู่แล้ว ไม่เคยถูกใช้มาก่อน)
+ *   submit_doc              — สร้างใหม่/แก้ไข (พอร์ตตรรกะจาก SubmitDocument.php ทุกขั้นตอน:
+ *                             auto-add supplier/bank_accounts, diff log ตอนแก้ไข, auto-resolve
+ *                             คำขอแก้ไขที่ค้างอยู่) ทดสอบ create+edit จริงแล้วก่อนส่งมอบ
+ *   ส่วนการลงรับใบกำกับภาษี 7% (ถ้าเลือกไว้) แยกไปเรียก receive_tax_warehouse/receive_tax_buyer/
+ *   receive_tax_acc ต่อด้วย doc_id ที่ได้ — action เดียวกับปุ่มในแดชบอร์ดเอกสาร (ทดสอบแล้วก่อนหน้านี้)
+ *   กันไม่ให้มี logic ลงรับใบกำกับซ้ำสองที่
  *
  * ตรงกับโครงสร้าง/สูตร/validation จริงจาก SubmitDocument.php:
  *  - ข้อมูลเอกสาร: doc_type (PO/AX แบบปุ่มสวิตช์), เลขที่เอกสาร (กรองให้เหลือแค่ตัวเลข/ขีด),
@@ -37,17 +43,23 @@
 
 import { Ionicons } from '@expo/vector-icons';
 import axios from 'axios';
+import * as ImagePicker from 'expo-image-picker';
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Linking, Modal, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAuth } from '../_layout';
 // ✅ Config
-import { API_BASE } from '../../constants/config';
+import { API_BASE, API_MODULES } from '../../constants/config';
+import { apiMobileGet, apiMobilePost } from '../../service/api_mobile';
 
-// action='detail' สำหรับโหลดข้อมูลตอนแก้ไขเป็นการเดา — ส่วน action='submit_doc' + payload
-// อ้างอิงจาก TODO เดิมของไฟล์นี้ ยังไม่ได้ยืนยันกับ backend จริงทั้งคู่
-const API_URL = `${API_BASE}/SubmitDocument.php`;
+const DOCUMENT_API_URL = `${API_MODULES}/document_API_mobile.php`;
+
+interface PickedFile {
+  uri: string;
+  name: string;
+  type: string;
+}
 
 // ====================================================================
 // Types
@@ -75,6 +87,10 @@ interface FormState {
   taxRecvDept: TaxDept;
   taxInvoiceNumbers: string[];
   taxNote: string;
+  taxFiles: PickedFile[];
+  // ชื่อไฟล์ใบกำกับที่แผนกนี้เคยแนบไว้แล้ว (โหลดมาตอนแก้ไขเอกสาร) — ต้องส่งกลับไปตอนบันทึกด้วย
+  // (existing_files[]) ไม่งั้น backend จะเขียนทับคอลัมน์ไฟล์เป็นค่าว่าง ไฟล์เดิมหายหมด
+  existingTaxFiles: string[];
   whtTax: WhtRate;
   whtAmount: string;
 }
@@ -86,14 +102,27 @@ export interface SubmitDocumentScreenProps {
 }
 
 // ====================================================================
-// Mock option lists
+// ตัวเลือกคงที่ / ชนิดข้อมูล master data จริง (get_submit_master_data)
 // ====================================================================
 
-const COMPANIES = ['บริษัท ทีเจซี กรุ๊ป จำกัด', 'บริษัท เอบีซี เอ็นจิเนียริ่ง จำกัด', 'บริษัท เอ็กซ์วายแซด จำกัด'];
-const SUPPLIERS_LIST = ['ร้าน สมมติอิเล็กทรอนิกส์', 'บริษัท วัสดุก่อสร้างสมมติ จำกัด', 'หจก. อะไหล่ปรับอากาศสมมติ', 'บริษัท ลิฟต์สมมติ จำกัด', 'ร้าน โซล่าเซลล์สมมติ', 'ร้านเครือข่ายสมมติ'];
-const ACCOUNT_NAMES = ['ร้าน สมมติอิเล็กทรอนิกส์', 'บริษัท วัสดุก่อสร้างสมมติ จำกัด', 'หจก. อะไหล่ปรับอากาศสมมติ', 'บริษัท ลิฟต์สมมติ จำกัด'];
-const BANK_ACCOUNTS = ['123-4-56789-0', '987-6-54321-0', '111-2-22222-3', '222-3-33333-4'];
-const BANKS = ['ธนาคารกรุงไทย', 'ธนาคารกสิกรไทย', 'ธนาคารไทยพาณิชย์', 'ธนาคารกรุงเทพ'];
+interface CompanyOption {
+  id: number;
+  company_name: string;
+}
+interface AccountHistoryEntry {
+  bank_account: string;
+  account_name: string;
+  bank_name: string;
+}
+interface SubmitMasterData {
+  companies: CompanyOption[];
+  banks: string[];
+  bank_rules: Record<string, number>;
+  suppliers: string[];
+  accounts_history: AccountHistoryEntry[];
+}
+const EMPTY_MASTER: SubmitMasterData = { companies: [], banks: [], bank_rules: {}, suppliers: [], accounts_history: [] };
+
 const CREDIT_PRESETS = [15, 30, 45, 60, 90];
 const ATTACHMENT_OPTIONS: { value: AttachmentType; icon: keyof typeof Ionicons.glyphMap; color: string }[] = [
   { value: 'ใบสำคัญจ่าย', icon: 'document-text-outline', color: '#0891b2' },
@@ -126,6 +155,8 @@ function initialForm(): FormState {
     taxRecvDept: '',
     taxInvoiceNumbers: [''],
     taxNote: '',
+    taxFiles: [],
+    existingTaxFiles: [],
     whtTax: 'ไม่มี',
     whtAmount: '',
   };
@@ -135,29 +166,57 @@ function initialForm(): FormState {
 // Helpers
 // ====================================================================
 
-// แปลงข้อมูลดิบจาก backend ให้เข้ารูป FormState (บางส่วน) — รองรับหลายชื่อ field เพราะยังไม่มี spec ยืนยัน
+// แปลงข้อมูลดิบจาก get_detail (document_API_mobile.php — action จริง ยืนยันแล้ว) ให้เข้ารูป FormState
+//
+// 🐛 [แก้บั๊ก] เดิมไม่ดึงฝ่ายที่ลงรับ/เลขที่ใบกำกับ/ไฟล์ที่เคยแนบไว้แล้วมาเติมฟอร์มตอนแก้ไขเอกสาร
+// เลยดูเหมือนไฟล์ที่แนบไว้ "หายไป" (แดชบอร์ดเอกสารเห็นว่าแนบแล้ว แต่หน้านี้ว่างเปล่า) และถ้ากด
+// บันทึกโดยไม่แนบไฟล์ใหม่ backend จะเขียนทับคอลัมน์ไฟล์เป็นค่าว่าง ไฟล์เดิมหายจริงๆ — ต้องดึง
+// ชื่อไฟล์เดิมมาเก็บไว้ใน existingTaxFiles แล้วส่งกลับไปเป็น existing_files[] ตอนบันทึกด้วยเสมอ
+// (ดู confirmDeptReceive/apiReceiveTaxDept ใน document_dashboard.tsx ที่ทำแบบเดียวกันอยู่แล้ว)
 function mapFormFromRaw(raw: any): Partial<FormState> {
+  const attachments: string[] = Array.isArray(raw.attachments) ? raw.attachments : [];
+
+  // แผนกไหนลงรับใบกำกับไปแล้ว (เช็คจากชื่อผู้รับ) — ใช้ตัวแรกที่เจอ (ปกติมีแค่แผนกเดียว ณ เวลาหนึ่ง)
+  let taxRecvDept: TaxDept = '';
+  let taxInvoiceNumbers: string[] = [''];
+  let existingTaxFiles: string[] = [];
+  let taxNote = '';
+  if (raw.wh_tax_receiver) {
+    taxRecvDept = 'wh';
+    taxInvoiceNumbers = Array.isArray(raw.wh_tax_invoice_no) && raw.wh_tax_invoice_no.length ? raw.wh_tax_invoice_no : [''];
+    existingTaxFiles = Array.isArray(raw.wh_tax_files) ? raw.wh_tax_files : [];
+    taxNote = String(raw.wh_tax_note ?? '');
+  } else if (raw.tax_receiver) {
+    taxRecvDept = 'buyer';
+    taxInvoiceNumbers = Array.isArray(raw.tax_invoice_no) && raw.tax_invoice_no.length ? raw.tax_invoice_no : [''];
+    existingTaxFiles = Array.isArray(raw.tax_files) ? raw.tax_files : [];
+    taxNote = String(raw.note_buyer ?? '');
+  } else if (raw.acc_receiver) {
+    taxRecvDept = 'acc';
+    existingTaxFiles = Array.isArray(raw.acc_files) ? raw.acc_files : [];
+    taxNote = String(raw.note_acc ?? '');
+  }
+
   return {
-    docType: (raw.docType ?? raw.doc_type ?? 'PO') as DocType,
-    docNumber: String(raw.docNumber ?? raw.doc_number ?? ''),
-    companyId: String(raw.companyId ?? raw.company_id ?? ''),
-    jobSite: String(raw.jobSite ?? raw.job_site ?? ''),
-    supplierName: String(raw.supplierName ?? raw.supplier_name ?? ''),
+    docType: (raw.doc_type || 'PO') as DocType,
+    docNumber: String(raw.doc_number ?? ''),
+    companyId: raw.company_id ? String(raw.company_id) : '',
+    jobSite: String(raw.job_site ?? ''),
+    supplierName: String(raw.supplier_name ?? ''),
     description: String(raw.description ?? ''),
-    amount: String(raw.amount ?? ''),
-    isCredit: Boolean(raw.isCredit ?? raw.is_credit ?? false),
-    creditTerm: raw.creditTerm != null ? String(raw.creditTerm) : raw.credit_term != null ? String(raw.credit_term) : '',
-    accountName: String(raw.accountName ?? raw.account_name ?? ''),
-    bankAccount: String(raw.bankAccount ?? raw.bank_account ?? ''),
-    bankName: String(raw.bankName ?? raw.bank_name ?? ''),
-    attachmentSelect: (raw.attachmentSelect ?? raw.attachment_select ?? '') as AttachmentType | '',
-    taxRecvDept: (raw.taxRecvDept ?? raw.tax_recv_dept ?? '') as TaxDept,
-    taxInvoiceNumbers: Array.isArray(raw.taxInvoiceNumbers ?? raw.tax_recv_inv) && (raw.taxInvoiceNumbers ?? raw.tax_recv_inv).length > 0
-      ? raw.taxInvoiceNumbers ?? raw.tax_recv_inv
-      : [''],
-    taxNote: String(raw.taxNote ?? raw.tax_recv_note ?? ''),
-    whtTax: (raw.whtTax ?? raw.wht_tax ?? 'ไม่มี') as WhtRate,
-    whtAmount: String(raw.whtAmount ?? raw.wht_amount ?? ''),
+    amount: raw.amount ? String(raw.amount) : '',
+    isCredit: !!raw.credit_term && Number(raw.credit_term) > 0,
+    creditTerm: raw.credit_term ? String(raw.credit_term) : '',
+    accountName: String(raw.account_name ?? ''),
+    bankAccount: String(raw.bank_account ?? ''),
+    bankName: String(raw.bank_name ?? ''),
+    attachmentSelect: (attachments[0] ?? '') as AttachmentType | '',
+    taxRecvDept,
+    taxInvoiceNumbers,
+    taxNote,
+    existingTaxFiles,
+    whtTax: (raw.wht_tax || 'ไม่มี') as WhtRate,
+    whtAmount: raw.wht_amount ? String(raw.wht_amount) : '',
   };
 }
 
@@ -197,21 +256,30 @@ function FieldLabel({ text, required }: { text: string; required?: boolean }) {
   );
 }
 
-function ChipPicker({ options, value, onChange }: { options: string[]; value: string; onChange: (v: string) => void }) {
+// ปุ่มกด-เปิดป๊อปอัพเลือกตัวเลือก — แทนที่ ChipPicker/CompanyPicker แบบเลื่อนแนวนอนเดิม
+// (ตัวเลือกเยอะแล้วต้องเลื่อนหาเป็นแถวยาว เปลี่ยนเป็นกดแล้วเลือกจากลิสต์แทน)
+function PickerTrigger({ label, placeholder, onPress }: { label: string; placeholder: string; onPress: () => void }) {
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-      {options.map((opt) => {
-        const active = value === opt;
-        return (
-          <TouchableOpacity key={opt} onPress={() => onChange(opt)} style={[styles.chip, active && styles.chipActive]}>
-            <Text style={[styles.chipText, active && styles.chipTextActive]} numberOfLines={1}>
-              {opt}
-            </Text>
-          </TouchableOpacity>
-        );
-      })}
-    </ScrollView>
+    <TouchableOpacity style={styles.pickerTrigger} onPress={onPress}>
+      <Text style={[styles.pickerTriggerText, !label && styles.pickerTriggerPlaceholder]} numberOfLines={1}>
+        {label || placeholder}
+      </Text>
+      <Ionicons name="chevron-down" size={16} color="#64748b" />
+    </TouchableOpacity>
   );
+}
+
+async function pickTaxFile(): Promise<PickedFile | null> {
+  const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+  if (!perm.granted) {
+    Alert.alert('แจ้งเตือน', 'กรุณาอนุญาตการเข้าถึงคลังรูป');
+    return null;
+  }
+  const r = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.7 });
+  if (r.canceled || !r.assets?.[0]) return null;
+  const uri = r.assets[0].uri;
+  const ext = (uri.split('.').pop() || 'jpg').toLowerCase();
+  return { uri, name: `tax_${Date.now()}.${ext}`, type: `image/${ext === 'jpg' ? 'jpeg' : ext}` };
 }
 
 // ====================================================================
@@ -220,28 +288,56 @@ function ChipPicker({ options, value, onChange }: { options: string[]; value: st
 
 export default function SubmitDocumentScreen({ docId, onBack, onSaved }: SubmitDocumentScreenProps) {
   const { user } = useAuth();
+  const userId = (user as any)?.id;
   const currentUserLabel = user?.fullname || user?.username || '';
 
   const isEditMode = !!docId;
   const [form, setForm] = useState<FormState>(initialForm());
+  const [master, setMaster] = useState<SubmitMasterData>(EMPTY_MASTER);
   const [loadingEdit, setLoadingEdit] = useState(isEditMode);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // ป๊อปอัพเลือกตัวเลือกแบบใช้ร่วมกันทุกช่อง (บริษัท/ซัพพลายเออร์/ชื่อบัญชี/เลขบัญชี/ธนาคาร)
+  const [pickerModal, setPickerModal] = useState<{
+    visible: boolean;
+    title: string;
+    options: { value: string; label: string }[];
+    current: string;
+    onSelect: (v: string) => void;
+  }>({ visible: false, title: '', options: [], current: '', onSelect: () => {} });
+  function openPicker(title: string, options: { value: string; label: string }[], current: string, onSelect: (v: string) => void) {
+    setPickerModal({ visible: true, title, options, current, onSelect });
+  }
+
   useEffect(() => {
-    if (!docId) return;
+    if (!userId) return;
+    apiMobileGet(DOCUMENT_API_URL, 'get_submit_master_data', { user_id: userId })
+      .then((res) =>
+        setMaster({
+          companies: res.companies ?? [],
+          banks: res.banks ?? [],
+          bank_rules: res.bank_rules ?? {},
+          suppliers: res.suppliers ?? [],
+          accounts_history: res.accounts_history ?? [],
+        })
+      )
+      .catch((e) => console.error('load get_submit_master_data failed', e));
+  }, [userId]);
+
+  useEffect(() => {
+    if (!docId || !userId) return;
     let cancelled = false;
     (async () => {
       setLoadingEdit(true);
       setLoadError(null);
       try {
-        const res = await axios.get(API_URL, { params: { action: 'detail', doc_id: docId } });
-        const raw = res.data?.data ?? res.data;
-        if (cancelled || !raw) return;
-        setForm((f) => ({ ...f, ...mapFormFromRaw(raw) }));
-      } catch (e) {
-        console.error('load SubmitDocument detail failed', e);
-        if (!cancelled) setLoadError('โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+        const res = await apiMobileGet(DOCUMENT_API_URL, 'get_detail', { user_id: userId, doc_id: docId });
+        if (cancelled || !res.detail) return;
+        setForm((f) => ({ ...f, ...mapFormFromRaw(res.detail) }));
+      } catch (e: any) {
+        console.error('load get_detail failed', e);
+        if (!cancelled) setLoadError(e?.message || 'โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
       } finally {
         if (!cancelled) setLoadingEdit(false);
       }
@@ -249,11 +345,14 @@ export default function SubmitDocumentScreen({ docId, onBack, onSaved }: SubmitD
     return () => {
       cancelled = true;
     };
-  }, [docId]);
+  }, [docId, userId]);
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
   }
+
+  const accountNameOptions = useMemo(() => Array.from(new Set(master.accounts_history.map((a) => a.account_name).filter(Boolean))), [master.accounts_history]);
+  const bankAccountOptions = useMemo(() => Array.from(new Set(master.accounts_history.map((a) => a.bank_account).filter(Boolean))), [master.accounts_history]);
 
   const whtAmount = useMemo(() => calcWht(form.amount, form.whtTax), [form.amount, form.whtTax]);
   const grossTotal = toFloat(form.amount) + whtAmount;
@@ -297,47 +396,70 @@ export default function SubmitDocumentScreen({ docId, onBack, onSaved }: SubmitD
     ]);
   }
 
+  // action จริง ยืนยันแล้ว (document_API_mobile.php) — submit_doc สร้าง/แก้ไขเอกสารเท่านั้น
+  // การลงรับใบกำกับภาษี 7% (ถ้าเลือกไว้) แยกยิงต่อด้วย receive_tax_warehouse/buyer/acc
+  // ด้วย doc_id ที่ได้กลับมา (action เดียวกับปุ่มในแดชบอร์ดเอกสาร ทดสอบแล้วก่อนหน้านี้)
   async function submitToBackend() {
-    // payload ตรงชื่อกับ $_POST[...] ที่ TODO เดิมของไฟล์นี้ระบุไว้ — ยังไม่ได้ยืนยันกับ backend จริง
-    const fd = new FormData();
-    fd.append('action', 'submit_doc');
-    if (isEditMode && docId) fd.append('edit_doc_id', docId);
-    fd.append('doc_type', form.docType);
-    fd.append('doc_number', form.docNumber);
-    fd.append('company_id', form.companyId);
-    fd.append('job_site', form.jobSite);
-    fd.append('ordered_by', currentUserLabel);
-    fd.append('supplier_name', form.supplierName);
-    fd.append('description', form.description);
-    fd.append('amount', form.amount);
-    fd.append('is_credit', form.isCredit ? '1' : '0');
-    if (form.isCredit) fd.append('credit_term', form.creditTerm);
-    fd.append('account_name', form.accountName);
-    fd.append('bank_account', form.bankAccount);
-    fd.append('bank_name', form.bankName);
-    fd.append('attachment_select', form.attachmentSelect);
-    if (form.attachmentSelect === 'ใบกำกับภาษี 7%') {
-      fd.append('tax_recv_dept', form.taxRecvDept);
-      form.taxInvoiceNumbers.filter((v) => v.trim()).forEach((v) => fd.append('tax_recv_inv[]', v.trim()));
-      fd.append('tax_recv_note', form.taxNote);
-    }
-    fd.append('wht_tax', form.whtTax);
-    fd.append('wht_amount', String(whtAmount));
-    // หมายเหตุ: การแนบไฟล์ใบกำกับภาษี (tax_file_upload[]) ยังเป็น stub — ต้องเพิ่ม expo-document-picker ก่อน
-
+    if (!userId) return;
     setSaving(true);
     try {
-      const res = await axios.post(API_URL, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      if (res.data?.status === 'success' || res.data?.success) {
-        Alert.alert('บันทึกสำเร็จ', isEditMode ? 'แก้ไขเอกสารเรียบร้อย!' : 'ลงสมุดเสนอเอกสารเรียบร้อย!', [
-          { text: 'ตกลง', onPress: () => (onSaved ? onSaved() : handleBack()) },
-        ]);
-      } else {
-        Alert.alert('บันทึกไม่สำเร็จ', res.data?.message || 'กรุณาลองใหม่อีกครั้ง');
+      const res = await apiMobilePost(DOCUMENT_API_URL, 'submit_doc', {
+        user_id: userId,
+        ...(isEditMode && docId ? { edit_doc_id: docId } : {}),
+        doc_type: form.docType,
+        doc_number: form.docNumber,
+        company_id: form.companyId,
+        job_site: form.jobSite,
+        ordered_by: currentUserLabel,
+        supplier_name: form.supplierName,
+        description: form.description,
+        amount: form.amount,
+        credit_term: form.isCredit ? form.creditTerm : '0',
+        account_name: form.accountName,
+        bank_account: form.bankAccount,
+        bank_name: form.bankName,
+        attachment_select: form.attachmentSelect,
+        tax_recv_dept: form.attachmentSelect === 'ใบกำกับภาษี 7%' ? form.taxRecvDept : '',
+        wht_tax: form.whtTax,
+        wht_amount: String(whtAmount),
+      });
+
+      const newDocId = res.doc_id;
+
+      // ลงรับใบกำกับภาษี 7% ต่อ ถ้าเลือกฝ่ายไว้ — ทำ "หลัง" สร้าง/แก้ไขเอกสารสำเร็จ เพราะต้องใช้ doc_id
+      if (form.attachmentSelect === 'ใบกำกับภาษี 7%' && form.taxRecvDept && newDocId) {
+        const taxAction = form.taxRecvDept === 'wh' ? 'receive_tax_warehouse' : form.taxRecvDept === 'buyer' ? 'receive_tax_buyer' : 'receive_tax_acc';
+        const invField = form.taxRecvDept === 'wh' ? 'wh_tax_inv_number[]' : 'tax_inv_number[]';
+        const noteField = form.taxRecvDept === 'wh' ? 'wh_action_note' : 'action_note';
+        const fileField = form.taxRecvDept === 'wh' ? 'wh_tax_file_upload[]' : form.taxRecvDept === 'buyer' ? 'tax_file_upload[]' : 'acc_file_upload[]';
+        const fdTax = new FormData();
+        fdTax.append('action', taxAction);
+        fdTax.append('user_id', String(userId));
+        fdTax.append('doc_id', String(newDocId));
+        form.taxInvoiceNumbers.filter((v) => v.trim()).forEach((v) => fdTax.append(invField, v.trim()));
+        fdTax.append(noteField, form.taxNote);
+        form.taxFiles.forEach((f) => fdTax.append(fileField, { uri: f.uri, name: f.name, type: f.type } as any));
+        // ไฟล์ที่แผนกนี้เคยแนบไว้แล้ว (โหลดมาตอนแก้ไข) — ต้องส่งกลับไปด้วยเสมอ ไม่งั้น backend จะ
+        // เขียนทับคอลัมน์ไฟล์เป็นค่าว่างเพราะไม่เห็นว่ามีไฟล์เดิมอยู่ (array_merge กับของใหม่ให้เอง)
+        form.existingTaxFiles.forEach((name) => fdTax.append('existing_files[]', name));
+        try {
+          const taxRes = await axios.post(DOCUMENT_API_URL, fdTax, { headers: { 'Content-Type': 'multipart/form-data' } });
+          if ((taxRes.data as any)?.status !== 'success') throw new Error((taxRes.data as any)?.message);
+        } catch (taxErr: any) {
+          // เอกสารหลักบันทึกสำเร็จไปแล้ว — แจ้งเตือนแยกว่าส่วนลงรับใบกำกับมีปัญหา ไม่ปนกับผลบันทึกหลัก
+          Alert.alert('บันทึกเอกสารสำเร็จ แต่ลงรับใบกำกับไม่สำเร็จ', taxErr?.message || 'กรุณาลงรับใบกำกับอีกครั้งที่หน้าเอกสาร PO/AX');
+          if (onSaved) onSaved();
+          else handleBack();
+          return;
+        }
       }
-    } catch (e) {
+
+      Alert.alert('บันทึกสำเร็จ', isEditMode ? 'แก้ไขเอกสารเรียบร้อย!' : 'ลงสมุดเสนอเอกสารเรียบร้อย!', [
+        { text: 'ตกลง', onPress: () => (onSaved ? onSaved() : handleBack()) },
+      ]);
+    } catch (e: any) {
       console.error('submit_doc failed', e);
-      Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถบันทึกข้อมูลได้ กรุณาลองใหม่อีกครั้ง');
+      Alert.alert('บันทึกไม่สำเร็จ', e?.message || 'ไม่สามารถบันทึกข้อมูลได้ กรุณาลองใหม่อีกครั้ง');
     } finally {
       setSaving(false);
     }
@@ -370,6 +492,7 @@ export default function SubmitDocumentScreen({ docId, onBack, onSaved }: SubmitD
   }
 
   return (
+    <>
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" />
       <ScrollView contentContainerStyle={{ paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
@@ -410,7 +533,18 @@ export default function SubmitDocumentScreen({ docId, onBack, onSaved }: SubmitD
             />
 
             <FieldLabel text="บริษัท (ผู้ซื้อ)" required />
-            <ChipPicker options={COMPANIES} value={form.companyId} onChange={(v) => set('companyId', v)} />
+            <PickerTrigger
+              label={master.companies.find((c) => String(c.id) === form.companyId)?.company_name ?? ''}
+              placeholder="เลือกบริษัท..."
+              onPress={() =>
+                openPicker(
+                  'เลือกบริษัท (ผู้ซื้อ)',
+                  master.companies.map((c) => ({ value: String(c.id), label: c.company_name })),
+                  form.companyId,
+                  (v) => set('companyId', v)
+                )
+              }
+            />
 
             <View style={styles.rowGap}>
               <View style={{ flex: 1 }}>
@@ -430,7 +564,18 @@ export default function SubmitDocumentScreen({ docId, onBack, onSaved }: SubmitD
             <SectionHeader icon="cash-outline" text="รายละเอียดการจ่ายเงิน" />
 
             <FieldLabel text="ชื่อร้านค้า / Supplier" required />
-            <ChipPicker options={SUPPLIERS_LIST} value={form.supplierName} onChange={(v) => set('supplierName', v)} />
+            <PickerTrigger
+              label={master.suppliers.includes(form.supplierName) ? form.supplierName : ''}
+              placeholder="เลือกจากประวัติ..."
+              onPress={() =>
+                openPicker(
+                  'เลือกชื่อร้านค้า / Supplier',
+                  master.suppliers.map((s) => ({ value: s, label: s })),
+                  form.supplierName,
+                  (v) => set('supplierName', v)
+                )
+              }
+            />
             <TextInput style={[styles.input, { marginTop: 6 }]} placeholder="หรือพิมพ์ชื่อร้านค้าใหม่..." placeholderTextColor="#94a3b8" value={form.supplierName} onChangeText={(v) => set('supplierName', v)} />
 
             <FieldLabel text="รายละเอียด / งวดงาน" required />
@@ -464,15 +609,54 @@ export default function SubmitDocumentScreen({ docId, onBack, onSaved }: SubmitD
             <SectionHeader icon="business-outline" text="บัญชีปลายทาง" />
 
             <FieldLabel text="ชื่อบัญชี (ค้นหาจากชื่อคนรับเงิน)" required />
-            <ChipPicker options={ACCOUNT_NAMES} value={form.accountName} onChange={(v) => set('accountName', v)} />
+            <PickerTrigger
+              label={accountNameOptions.includes(form.accountName) ? form.accountName : ''}
+              placeholder="เลือกจากประวัติ..."
+              onPress={() =>
+                openPicker(
+                  'เลือกชื่อบัญชี',
+                  accountNameOptions.map((s) => ({ value: s, label: s })),
+                  form.accountName,
+                  (v) => {
+                    const match = master.accounts_history.find((a) => a.account_name === v);
+                    setForm((f) => ({ ...f, accountName: v, bankAccount: match?.bank_account ?? f.bankAccount, bankName: match?.bank_name ?? f.bankName }));
+                  }
+                )
+              }
+            />
             <TextInput style={[styles.input, { marginTop: 6 }]} placeholder="หรือพิมพ์ชื่อบัญชีใหม่..." placeholderTextColor="#94a3b8" value={form.accountName} onChangeText={(v) => set('accountName', v)} />
 
             <FieldLabel text="เลขที่บัญชี" required />
-            <ChipPicker options={BANK_ACCOUNTS} value={form.bankAccount} onChange={(v) => set('bankAccount', v)} />
+            <PickerTrigger
+              label={bankAccountOptions.includes(form.bankAccount) ? form.bankAccount : ''}
+              placeholder="เลือกจากประวัติ..."
+              onPress={() =>
+                openPicker(
+                  'เลือกเลขที่บัญชี',
+                  bankAccountOptions.map((s) => ({ value: s, label: s })),
+                  form.bankAccount,
+                  (v) => {
+                    const match = master.accounts_history.find((a) => a.bank_account === v);
+                    setForm((f) => ({ ...f, bankAccount: v, accountName: match?.account_name ?? f.accountName, bankName: match?.bank_name ?? f.bankName }));
+                  }
+                )
+              }
+            />
             <TextInput style={[styles.input, { marginTop: 6 }]} placeholder="หรือพิมพ์เลขบัญชีใหม่..." placeholderTextColor="#94a3b8" value={form.bankAccount} onChangeText={(v) => set('bankAccount', v)} />
 
             <FieldLabel text="ธนาคาร" required />
-            <ChipPicker options={BANKS} value={form.bankName} onChange={(v) => set('bankName', v)} />
+            <PickerTrigger
+              label={master.banks.includes(form.bankName) ? form.bankName : ''}
+              placeholder="เลือกธนาคาร..."
+              onPress={() =>
+                openPicker(
+                  'เลือกธนาคาร',
+                  master.banks.map((s) => ({ value: s, label: s })),
+                  form.bankName,
+                  (v) => set('bankName', v)
+                )
+              }
+            />
           </View>
 
           <View style={styles.card}>
@@ -528,10 +712,57 @@ export default function SubmitDocumentScreen({ docId, onBack, onSaved }: SubmitD
                   <Ionicons name="add" size={13} color="#059669" />
                   <Text style={styles.addTaxInvBtnText}>เพิ่มเลขที่และไฟล์ใบกำกับ</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.attachFileBtn} onPress={() => Alert.alert('แนบไฟล์', 'ต้องเพิ่ม expo-document-picker เพื่อแนบไฟล์จริง')}>
+
+                {form.existingTaxFiles.length > 0 && (
+                  <>
+                    <FieldLabel text="ไฟล์ที่แนบไว้แล้ว" />
+                    <View style={styles.taxFileChipsRow}>
+                      {form.existingTaxFiles.map((name, i) => (
+                        <TouchableOpacity
+                          key={i}
+                          style={[styles.taxFileChip, { backgroundColor: '#ecfdf5', borderColor: '#a7f3d0' }]}
+                          onPress={() => Linking.openURL(`${API_BASE}/uploads/${name}`)}
+                        >
+                          <Ionicons name="checkmark-circle-outline" size={11} color="#059669" />
+                          <Text style={[styles.taxFileChipText, { color: '#059669' }]} numberOfLines={1}>
+                            ไฟล์ {i + 1}
+                          </Text>
+                          <TouchableOpacity
+                            onPress={() => setForm((s) => ({ ...s, existingTaxFiles: s.existingTaxFiles.filter((_, idx) => idx !== i) }))}
+                          >
+                            <Ionicons name="close" size={12} color="#ef4444" />
+                          </TouchableOpacity>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </>
+                )}
+
+                <TouchableOpacity
+                  style={styles.attachFileBtn}
+                  onPress={async () => {
+                    const f = await pickTaxFile();
+                    if (f) setForm((s) => ({ ...s, taxFiles: [...s.taxFiles, f] }));
+                  }}
+                >
                   <Ionicons name="attach-outline" size={13} color="#64748b" />
-                  <Text style={styles.attachFileBtnText}>แนบไฟล์ใบกำกับ (แต่ละรายการ)</Text>
+                  <Text style={styles.attachFileBtnText}>แนบไฟล์ใบกำกับเพิ่มเติม ({form.taxFiles.length})</Text>
                 </TouchableOpacity>
+                {form.taxFiles.length > 0 && (
+                  <View style={styles.taxFileChipsRow}>
+                    {form.taxFiles.map((f, i) => (
+                      <View key={i} style={styles.taxFileChip}>
+                        <Ionicons name="document-attach-outline" size={11} color="#475569" />
+                        <Text style={styles.taxFileChipText} numberOfLines={1}>
+                          {f.name}
+                        </Text>
+                        <TouchableOpacity onPress={() => setForm((s) => ({ ...s, taxFiles: s.taxFiles.filter((_, idx) => idx !== i) }))}>
+                          <Ionicons name="close" size={12} color="#ef4444" />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                  </View>
+                )}
 
                 <FieldLabel text="หมายเหตุ (ถ้ามี)" />
                 <TextInput style={[styles.input, styles.textarea]} placeholder="ระบุหมายเหตุ..." placeholderTextColor="#94a3b8" multiline value={form.taxNote} onChangeText={(v) => set('taxNote', v)} />
@@ -586,6 +817,40 @@ export default function SubmitDocumentScreen({ docId, onBack, onSaved }: SubmitD
         </View>
       </ScrollView>
     </SafeAreaView>
+
+    <Modal visible={pickerModal.visible} transparent animationType="fade" onRequestClose={() => setPickerModal((s) => ({ ...s, visible: false }))}>
+      <TouchableOpacity style={styles.pickerModalOverlay} activeOpacity={1} onPress={() => setPickerModal((s) => ({ ...s, visible: false }))}>
+        <View style={styles.pickerModalSheet}>
+          <Text style={styles.pickerModalTitle}>{pickerModal.title}</Text>
+          <ScrollView style={{ maxHeight: 380 }}>
+            {pickerModal.options.length === 0 ? (
+              <Text style={styles.pickerModalEmptyText}>ยังไม่มีตัวเลือก</Text>
+            ) : (
+              pickerModal.options.map((opt) => {
+                const active = pickerModal.current === opt.value;
+                return (
+                  <TouchableOpacity
+                    key={opt.value}
+                    style={[styles.pickerModalOption, active && styles.pickerModalOptionActive]}
+                    onPress={() => {
+                      pickerModal.onSelect(opt.value);
+                      setPickerModal((s) => ({ ...s, visible: false }));
+                    }}
+                  >
+                    <Text style={styles.pickerModalOptionText}>{opt.label}</Text>
+                    {active && <Ionicons name="checkmark" size={16} color="#4f46e5" />}
+                  </TouchableOpacity>
+                );
+              })
+            )}
+          </ScrollView>
+          <TouchableOpacity style={styles.pickerModalCloseBtn} onPress={() => setPickerModal((s) => ({ ...s, visible: false }))}>
+            <Text style={styles.pickerModalCloseBtnText}>ปิด</Text>
+          </TouchableOpacity>
+        </View>
+      </TouchableOpacity>
+    </Modal>
+    </>
   );
 }
 
@@ -620,11 +885,18 @@ const styles = StyleSheet.create({
   readonlyInput: { backgroundColor: '#f1f5f9', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10 },
   readonlyInputText: { fontSize: 13, color: '#64748b', fontWeight: '700' },
 
-  chipsRow: { gap: 6, paddingVertical: 2 },
-  chip: { backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 50, paddingHorizontal: 12, paddingVertical: 8, maxWidth: 220 },
-  chipActive: { backgroundColor: '#4f46e5', borderColor: '#4f46e5' },
-  chipText: { fontSize: 12, color: '#475569', fontWeight: '600' },
-  chipTextActive: { color: '#fff' },
+  pickerTrigger: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#fff' },
+  pickerTriggerText: { fontSize: 13, color: '#0f172a', fontWeight: '600', flexShrink: 1 },
+  pickerTriggerPlaceholder: { color: '#94a3b8', fontWeight: '400' },
+  pickerModalOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', justifyContent: 'center', padding: 24 },
+  pickerModalSheet: { backgroundColor: '#fff', borderRadius: 16, padding: 16 },
+  pickerModalTitle: { fontSize: 13.5, fontWeight: '800', color: '#0f172a', marginBottom: 10 },
+  pickerModalOption: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, paddingHorizontal: 10, borderRadius: 8 },
+  pickerModalOptionActive: { backgroundColor: '#eef2ff' },
+  pickerModalOptionText: { fontSize: 12.5, fontWeight: '700', color: '#334155', flexShrink: 1 },
+  pickerModalCloseBtn: { marginTop: 8, alignSelf: 'center', paddingVertical: 8, paddingHorizontal: 20 },
+  pickerModalCloseBtnText: { fontSize: 12, fontWeight: '700', color: '#94a3b8' },
+  pickerModalEmptyText: { fontSize: 12, color: '#94a3b8', textAlign: 'center', paddingVertical: 16 },
 
   docTypeSwitch: { flexDirection: 'row', gap: 8, marginBottom: 4 },
   docTypeBtn: { flex: 1, borderWidth: 1.5, borderColor: '#e2e8f0', borderRadius: 10, paddingVertical: 11, alignItems: 'center' },
@@ -657,6 +929,9 @@ const styles = StyleSheet.create({
   addTaxInvBtnText: { fontSize: 11, fontWeight: '700', color: '#059669' },
   attachFileBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 8, alignSelf: 'flex-start' },
   attachFileBtnText: { fontSize: 10.5, color: '#64748b', fontWeight: '600' },
+  taxFileChipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+  taxFileChip: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 50, paddingHorizontal: 9, paddingVertical: 5, maxWidth: 160 },
+  taxFileChipText: { fontSize: 10, color: '#475569', fontWeight: '600', flexShrink: 1 },
 
   whtRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   whtChip: { borderWidth: 1.5, borderColor: '#e2e8f0', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10, backgroundColor: '#fff' },

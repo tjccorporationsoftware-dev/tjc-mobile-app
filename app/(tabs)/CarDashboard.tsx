@@ -35,6 +35,12 @@ import { API_BASE } from "../../constants/config";
 // ✅ 2. Import Auth Context
 import { useAuth } from "../_layout";
 
+// ✅ 3. Import shared date/time display formatters
+import {
+  formatShortThaiDate,
+  formatShortThaiDateTime,
+} from "../../components/DateTimeField";
+
 // --- 🧭 กติกาการเดินทาง (ต้องตรงกับ CarManager::tripDays() ฝั่ง PHP) ---
 const PLAN_REQUIRED_OVER_DAYS = 2;
 
@@ -191,50 +197,18 @@ const getCarImageSource = (imagePath: string | null) => {
   return { uri: `${baseUrl}/uploads/cars/${imagePath}` };
 };
 
+// 🔁 ใช้รูปแบบย่อกลาง "5/9/69 14:30 น." จาก DateTimeField แทนชื่อเดือนเต็มเดิม
+// (คง guard clause เดิมไว้เพื่อรองรับค่า "0000-00-00 00:00:00" ที่ backend ส่งมา)
 const formatDateTimeThai = (dateStr: string) => {
   if (!dateStr || dateStr === "0000-00-00 00:00:00" || dateStr === "-")
     return "-";
-  const d = new Date(dateStr.replace(" ", "T"));
-  if (isNaN(d.getTime())) return dateStr;
-  const months = [
-    "ม.ค.",
-    "ก.พ.",
-    "มี.ค.",
-    "เม.ย.",
-    "พ.ค.",
-    "มิ.ย.",
-    "ก.ค.",
-    "ส.ค.",
-    "ก.ย.",
-    "ต.ค.",
-    "พ.ย.",
-    "ธ.ค.",
-  ];
-  const year = d.getFullYear() + 543;
-  const day = d.getDate();
-  const time = `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
-  return `${day} ${months[d.getMonth()]} ${year} ${time}`;
+  return formatShortThaiDateTime(dateStr);
 };
 
+// 🔁 ใช้รูปแบบย่อกลาง "5/9/69" จาก DateTimeField แทนชื่อเดือนเต็มเดิม
 const formatJustDateThai = (dateStr: string) => {
   if (!dateStr) return "-";
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return dateStr;
-  const months = [
-    "มกราคม",
-    "กุมภาพันธ์",
-    "มีนาคม",
-    "เมษายน",
-    "พฤษภาคม",
-    "มิถุนายน",
-    "กรกฎาคม",
-    "สิงหาคม",
-    "กันยายน",
-    "ตุลาคม",
-    "พฤศจิกายน",
-    "ธันวาคม",
-  ];
-  return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear() + 543}`;
+  return formatShortThaiDate(dateStr);
 };
 
 const cleanNoteText = (rawNote: string) => {
@@ -1244,15 +1218,10 @@ export default function CarDashboardScreen() {
   };
 
   const MaintenanceItem = ({ item }: { item: any }) => {
-    const repairDate = new Date(
-      item.repair_date || item.created_at || new Date(),
-    );
-    const formatDate = (d: Date) =>
-      d.toLocaleDateString("th-TH", {
-        day: "2-digit",
-        month: "long",
-        year: "numeric",
-      });
+    // 🔁 ใช้ formatShortThaiDate กลางแทนรูปแบบเดือนเต็มเดิม ("5/9/69")
+    const now = new Date();
+    const todayYmd = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const repairDateStr = item.repair_date || item.created_at || todayYmd;
     const isPending = item.status === "pending";
     const statusColor = isPending ? colors.warning : colors.success;
 
@@ -1283,7 +1252,7 @@ export default function CarDashboardScreen() {
                 fontSize: 14,
               }}
             >
-              {formatDate(repairDate)}
+              {formatShortThaiDate(repairDateStr)}
             </Text>
           </View>
           <Text

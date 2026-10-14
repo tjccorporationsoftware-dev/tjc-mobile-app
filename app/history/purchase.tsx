@@ -24,6 +24,8 @@ import Animated, { FadeInDown, FadeInUp } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { API_BASE, IMG_BASE_URL } from "../../constants/config";
+// 🌟 รูปแบบวันที่สั้น "d/m/yy" มาตรฐานเดียวกันทั้งแอป (แทน toLocaleDateString("th-TH") ที่โชว์ปี ค.ศ. 4 หลัก + ชื่อเดือนย่อ)
+import { formatShortThaiDate } from "../../components/DateTimeField";
 import { useAuth } from "../_layout";
 
 const ACTIVE_COLOR = "#059669"; // สีเขียว Purchase
@@ -199,12 +201,15 @@ export default function HistoryPurchase() {
     };
   };
 
-  const formatDate = (date: any) =>
-    new Date(date).toLocaleDateString("th-TH", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
+  // รับได้ทั้ง Date object (จาก startDate/endDate filter) และ string "YYYY-MM-DD..." (จาก report_date ของ API)
+  const formatDate = (date: any) => {
+    if (!date) return "-";
+    if (date instanceof Date) {
+      const ymd = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+      return formatShortThaiDate(ymd);
+    }
+    return formatShortThaiDate(String(date));
+  };
 
   const openImage = (filename: string) => {
     if (!filename) return;
@@ -826,7 +831,7 @@ export default function HistoryPurchase() {
                 </TouchableOpacity>
                 <Text style={styles.calTitle}>
                   {TH_MONTHS_FULL[pickerDate.getMonth()]}{" "}
-                  {pickerDate.getFullYear() + 543}
+                  {pickerDate.getFullYear()}
                 </Text>
                 <TouchableOpacity
                   onPress={() =>

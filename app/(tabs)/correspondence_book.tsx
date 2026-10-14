@@ -7,6 +7,9 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import axios from "axios";
 import { useFocusEffect } from "expo-router";
+// 🌟 รูปแบบวันที่สั้น "d/m/yy" มาตรฐานเดียวกันทั้งแอป (แทน book_date_thai แบบเต็ม
+// "5 กันยายน 2569" ของเซิร์ฟเวอร์ และแทนการแสดง book_date/doc_date ดิบ YYYY-MM-DD ตรงๆ)
+import { formatShortThaiDate } from "../../components/DateTimeField";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -518,7 +521,7 @@ export default function CorrespondenceBook() {
         >
           <Ionicons name="calendar-outline" size={16} color={c.primary} />
           <Text style={{ color: c.text, fontSize: 12 }}>
-            {filterDate || "วันที่"}
+            {filterDate ? formatShortThaiDate(filterDate) : "วันที่"}
           </Text>
         </TouchableOpacity>
         {filterDate ? (
@@ -651,7 +654,7 @@ export default function CorrespondenceBook() {
                       )}
                       <View style={{ flex: 1 }} />
                       <Text style={{ color: c.textSecondary, fontSize: 11 }}>
-                        {item.book_date_thai || item.book_date}
+                        {formatShortThaiDate(item.book_date)}
                       </Text>
                     </View>
                     <Text
@@ -792,14 +795,13 @@ export default function CorrespondenceBook() {
         <DateTimePicker
           value={filterDate ? new Date(filterDate) : new Date()}
           mode="date"
-          onChange={(e, d) => {
+          onValueChange={(e, d) => {
             setShowListDate(false);
-            if (e.type === "set" && d) {
-              const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-              setFilterDate(iso);
-              runFetch({ date: iso });
-            }
+            const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+            setFilterDate(iso);
+            runFetch({ date: iso });
           }}
+          onDismiss={() => setShowListDate(false)}
         />
       )}
 
@@ -902,7 +904,9 @@ export default function CorrespondenceBook() {
                         size={15}
                         color={c.primary}
                       />
-                      <Text style={{ color: c.text }}>{form.book_date}</Text>
+                      <Text style={{ color: c.text }}>
+                        {formatShortThaiDate(form.book_date)}
+                      </Text>
                     </TouchableOpacity>
                   </Field>
                 </View>
@@ -1074,7 +1078,7 @@ export default function CorrespondenceBook() {
                           color: form.doc_date ? c.text : c.textSecondary,
                         }}
                       >
-                        {form.doc_date || "-"}
+                        {formatShortThaiDate(form.doc_date)}
                       </Text>
                     </TouchableOpacity>
                   </Field>
@@ -1132,26 +1136,24 @@ export default function CorrespondenceBook() {
           <DateTimePicker
             value={form.book_date ? new Date(form.book_date) : new Date()}
             mode="date"
-            onChange={(e, d) => {
+            onValueChange={(e, d) => {
               setShowBookDate(false);
-              if (e.type === "set" && d) {
-                const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-                setForm((f) => ({ ...f, book_date: iso }));
-              }
+              const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+              setForm((f) => ({ ...f, book_date: iso }));
             }}
+            onDismiss={() => setShowBookDate(false)}
           />
         )}
         {showDocDate && (
           <DateTimePicker
             value={form.doc_date ? new Date(form.doc_date) : new Date()}
             mode="date"
-            onChange={(e, d) => {
+            onValueChange={(e, d) => {
               setShowDocDate(false);
-              if (e.type === "set" && d) {
-                const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-                setForm((f) => ({ ...f, doc_date: iso }));
-              }
+              const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+              setForm((f) => ({ ...f, doc_date: iso }));
             }}
+            onDismiss={() => setShowDocDate(false)}
           />
         )}
       </Modal>

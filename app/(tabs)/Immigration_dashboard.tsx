@@ -1,5 +1,6 @@
 import { useAuth } from "../_layout";
-import { DeviceEventEmitter, ActivityIndicator, Dimensions, Image, Modal, Platform, RefreshControl, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, useColorScheme, View } from 'react-native';
+import { DeviceEventEmitter, ActivityIndicator, Dimensions, Image, Modal, Platform, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, useColorScheme, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useFocusEffect } from "expo-router/react-navigation";
 import axios from 'axios';
@@ -221,7 +222,15 @@ export default function DashboardScreen() {
     const onRefresh = useCallback(() => { setRefreshing(true); fetchData(); }, []);
 
     const isSameDay = (d1: Date, d2: Date) => d1.getFullYear() === d2.getFullYear() && d1.getMonth() === d2.getMonth() && d1.getDate() === d2.getDate();
-    const formatDate = (dateStr: string) => { if (!dateStr) return '-'; const d = new Date(dateStr); const months = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.']; return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear() + 543}`; };
+    // แสดงผลย่อ "5/9/69" (d/m/yy พ.ศ. 2 หลัก) แทนชื่อเดือนย่อเดิม — ใช้ new Date() แบบเดิมเพื่อคง
+    // พฤติกรรม parsing/timezone เดิมไว้ (บาง call site ส่ง Date().toISOString() เข้ามา)
+    const formatDate = (dateStr: string) => {
+        if (!dateStr) return '-';
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return '-';
+        // DD/MM/YYYY ปี ค.ศ. — รูปแบบเดียวทั้งแอป
+        return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+    };
 
     const { filteredData, stats, companyCosts, backlogCount, unfinishedCount } = useMemo(() => {
         const safeReports = Array.isArray(reports) ? reports : [];
@@ -286,15 +295,15 @@ export default function DashboardScreen() {
         return { filteredData: filtered, stats: statObj, companyCosts: costsObj, backlogCount: backlogTotal, unfinishedCount: unfinishedTotal };
     }, [reports, filterCompany, filterStatus, filterDate, showBacklog, showUnfinished]);
 
-    const onChangeDate = (event: any, selectedDate?: Date) => {
+    const onChangeDate = (event: any, selectedDate: Date) => {
         if (Platform.OS === 'android') setShowDatePicker(false);
-        if (selectedDate) setFilterDate(selectedDate);
+        setFilterDate(selectedDate);
     };
 
     const closeModal = () => { setModalVisible(false); setSelectedReport(null); };
 
     const pickImages = async () => {
-        const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsMultipleSelection: true, quality: 0.7 });
+        const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsMultipleSelection: true, quality: 0.7 });
         if (!result.canceled) setCompletionFiles(prev => [...prev, ...result.assets]);
     };
 
@@ -579,7 +588,7 @@ export default function DashboardScreen() {
                                 </TouchableOpacity>
                                 {filterDate && <TouchableOpacity style={styles.clearDateBtn} onPress={() => setFilterDate(null)}><RotateCcw size={18} color="#EF4444" /></TouchableOpacity>}
                             </View>
-                            {showDatePicker && (<DateTimePicker value={filterDate || new Date()} mode="date" display={Platform.OS === 'ios' ? 'spinner' : 'default'} onChange={onChangeDate} />)}
+                            {showDatePicker && (<DateTimePicker value={filterDate || new Date()} mode="date" display={Platform.OS === 'ios' ? 'spinner' : 'default'} onValueChange={onChangeDate} onDismiss={() => setShowDatePicker(false)} />)}
 
                             {loading ? <View style={styles.loadingContainer}><ActivityIndicator size="large" color="#3B82F6" /><Text style={styles.loadingText}>กำลังโหลดข้อมูลแพลตฟอร์ม...</Text></View> : filteredData.length === 0 ? <View style={styles.emptyState}><View style={styles.emptyIconBox}><ImageOff size={40} color={theme.textSecondary} /></View><Text style={styles.emptyTitle}>ไม่พบรายการที่ตรงกัน</Text><Text style={styles.emptyText}>{filterDate ? `ลองเปลี่ยนตัวกรอง หรือเลือกวันที่อื่น` : 'วันนี้ยังไม่มีการมอบหมายงาน'}</Text></View> : filteredData.map((item, index) => {
                                 // Dynamic colors matching web
@@ -896,7 +905,7 @@ export default function DashboardScreen() {
                             <Text style={styles.grandDateInputText}>{formatDate(extensionDate.toISOString())}</Text>
                             <Calendar size={22} color="#F59E0B" />
                         </TouchableOpacity>
-                        {showExtDatePicker && (<DateTimePicker value={extensionDate} mode="date" display="default" onChange={(e, d) => { if (Platform.OS === 'android') setShowExtDatePicker(false); if (d) setExtensionDate(d); }} minimumDate={new Date()} />)}
+                        {showExtDatePicker && (<DateTimePicker value={extensionDate} mode="date" display="default" onValueChange={(e, d) => { if (Platform.OS === 'android') setShowExtDatePicker(false); setExtensionDate(d); }} onDismiss={() => setShowExtDatePicker(false)} minimumDate={new Date()} />)}
 
                         <Text style={styles.grandInputLabel}>สาเหตุ/หมายเหตุ</Text>
                         <TextInput style={styles.grandReasonInput} multiline numberOfLines={4} placeholder="ระบุสาเหตุที่งานไม่เสร็จ..." placeholderTextColor={theme.textSecondary} value={extensionReason} onChangeText={setExtensionReason} />

@@ -18,6 +18,8 @@ import {
 import Animated, { FadeInDown } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { API_BASE, IMG_BASE_URL } from "../../constants/config";
+// 🌟 รูปแบบวันที่สั้น "d/m/yy" มาตรฐานเดียวกันทั้งแอป แทน toLocaleDateString("th-TH")/ชื่อเดือนย่อ
+import { formatShortThaiDate } from "../../components/DateTimeField";
 
 const PRIMARY_COLOR = "#2563eb";
 const SUCCESS_COLOR = "#10b981";
@@ -609,7 +611,7 @@ export default function ManagerSales() {
               },
             ]}
           >
-            {i + 543}
+            {i}
           </Text>
         </TouchableOpacity>,
       );
@@ -848,10 +850,7 @@ export default function ManagerSales() {
               </Text>
               <View style={styles.cardMetaRow}>
                 <Text style={styles.cardMeta}>
-                  {new Date(item.report_date).toLocaleDateString("th-TH", {
-                    day: "numeric",
-                    month: "short",
-                  })}
+                  {formatShortThaiDate(item.report_date)}
                   {"  ·  "}
                   {new Date(item.created_at).toLocaleTimeString("th-TH", {
                     hour: "2-digit",
@@ -991,11 +990,9 @@ export default function ManagerSales() {
 
   const fmtShort = (d: Date | null) =>
     d
-      ? d.getDate() +
-        " " +
-        TH_MONTHS_SHORT[d.getMonth()] +
-        " " +
-        String(d.getFullYear() + 543).slice(-2)
+      ? formatShortThaiDate(
+          `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`,
+        )
       : "";
   const rangeLabel =
     startDate && endDate
@@ -1131,9 +1128,7 @@ export default function ManagerSales() {
                       marginLeft: 8,
                     }}
                   >
-                    {startDate
-                      ? startDate.toLocaleDateString("th-TH")
-                      : "ทั้งหมด"}
+                    {startDate ? fmtShort(startDate) : "ทั้งหมด"}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -1147,7 +1142,7 @@ export default function ManagerSales() {
                   <Text
                     style={{ color: endDate ? "#333" : "#999", marginLeft: 8 }}
                   >
-                    {endDate ? endDate.toLocaleDateString("th-TH") : "ทั้งหมด"}
+                    {endDate ? fmtShort(endDate) : "ทั้งหมด"}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -1389,7 +1384,7 @@ export default function ManagerSales() {
                 <TouchableOpacity onPress={() => setPickerView("year")}>
                   <Text style={styles.calTitle}>
                     {" "}
-                    {pickerDate.getFullYear() + 543}
+                    {pickerDate.getFullYear()}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -1507,9 +1502,7 @@ export default function ManagerSales() {
                             color="#64748b"
                           />
                           <Text style={styles.metaChipText}>
-                            {new Date(
-                              selectedItem.report_date,
-                            ).toLocaleDateString("th-TH")}
+                            {formatShortThaiDate(selectedItem.report_date)}
                           </Text>
                         </View>
                         <View style={styles.metaChip}>
@@ -1925,9 +1918,7 @@ export default function ManagerSales() {
                       >
                         <Text style={{ fontWeight: "bold", color: "#333" }}>
                           <Ionicons name="calendar-outline" />{" "}
-                          {new Date(item.report_date).toLocaleDateString(
-                            "th-TH",
-                          )}
+                          {formatShortThaiDate(item.report_date)}
                         </Text>
                         {parseFloat(item.total_expense) > 0 && (
                           <Text style={{ color: DANGER_COLOR, fontSize: 12 }}>

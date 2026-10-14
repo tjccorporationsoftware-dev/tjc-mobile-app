@@ -20,6 +20,7 @@ import {
 import { BarChart } from "react-native-chart-kit";
 
 import { API_BASE } from "../../constants/config";
+import { formatShortThaiDate } from "../../components/DateTimeField";
 
 // 🎨 Palette สี
 const COLORS = {
@@ -34,20 +35,6 @@ const COLORS = {
 };
 
 const screenWidth = Dimensions.get("window").width;
-const THAI_MONTHS = [
-  "ม.ค.",
-  "ก.พ.",
-  "มี.ค.",
-  "เม.ย.",
-  "พ.ค.",
-  "มิ.ย.",
-  "ก.ค.",
-  "ส.ค.",
-  "ก.ย.",
-  "ต.ค.",
-  "พ.ย.",
-  "ธ.ค.",
-];
 const TH_MONTHS_FULL = [
   "มกราคม",
   "กุมภาพันธ์",
@@ -161,7 +148,10 @@ export default function CashFlowScreen() {
     const date =
       typeof dateString === "string" ? new Date(dateString) : dateString;
     if (isNaN(date.getTime())) return "-";
-    return `${date.getDate()} ${THAI_MONTHS[date.getMonth()]} ${date.getFullYear() + 543}`;
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    const d = String(date.getDate()).padStart(2, "0");
+    return formatShortThaiDate(`${y}-${m}-${d}`);
   };
 
   const formatNumber = (num: any) =>
@@ -251,7 +241,7 @@ export default function CashFlowScreen() {
               },
             ]}
           >
-            {i + 543}
+            {i}
           </Text>
         </TouchableOpacity>,
       );
@@ -744,7 +734,7 @@ export default function CashFlowScreen() {
                 <TouchableOpacity onPress={() => setPickerView("year")}>
                   <Text style={styles.calTitle}>
                     {" "}
-                    {pickerDate.getFullYear() + 543}
+                    {pickerDate.getFullYear()}
                   </Text>
                 </TouchableOpacity>
               </View>

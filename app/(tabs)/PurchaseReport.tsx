@@ -149,7 +149,7 @@ export default function PurchaseReport() {
           }
 
           let result = await ImagePicker.launchCameraAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            mediaTypes: ['images'],
             quality: 0.7,
             allowsEditing: false,
           });
@@ -160,7 +160,7 @@ export default function PurchaseReport() {
         text: "เลือกจากอัลบั้ม",
         onPress: async () => {
           let result = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            mediaTypes: ['images'],
             quality: 0.7,
           });
           handleImageResult(result, index);

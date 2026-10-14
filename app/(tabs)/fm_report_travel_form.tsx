@@ -28,10 +28,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Modal, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+// 🌟 ปุ่มเลือกวันที่/เวลาแบบปฏิทินมาตรฐานเดียวกันทั้งแอป (แทนช่องพิมพ์ YYYY-MM-DD/HH:mm เอง)
+import { DateField, TimeField, formatShortThaiDate } from '../../components/DateTimeField';
 // ✅ Config + API helper กลาง
 import { API_MODULES } from '../../constants/config';
 import { useAuth } from '../_layout';
-import { apiMobileGet, apiMobilePost } from '../service/api_mobile';
+import { apiMobileGet, apiMobilePost } from '../../service/api_mobile';
 
 const FM_TRAVEL_API_URL = `${API_MODULES}/fm_travel_API_mobile.php`;
 
@@ -172,7 +174,7 @@ function mapSourceJob(raw: any): SourceJob {
   return {
     jobId: Number(raw.job_id ?? raw.id ?? 0),
     dateYmd: String(raw.date_ymd ?? raw.date ?? ''),
-    dateThai: raw.date_thai,
+    dateThai: (raw.date_ymd || raw.date) && /^\d{4}-/.test(String(raw.date_ymd || raw.date)) ? formatShortThaiDate(raw.date_ymd || raw.date) : raw.date_thai,
     time: String(raw.time ?? ''),
     route: String(raw.route ?? ''),
     customer: raw.customer ?? raw.customer_name,
@@ -186,7 +188,7 @@ function mapDetailJobRow(raw: any): JobRow {
     key: uid(),
     jobId: Number(raw.job_id ?? 0),
     dateYmd: String(raw.date_ymd ?? ''),
-    dateThai: raw.date_thai,
+    dateThai: (raw.date_ymd || raw.date) && /^\d{4}-/.test(String(raw.date_ymd || raw.date)) ? formatShortThaiDate(raw.date_ymd || raw.date) : raw.date_thai,
     time: String(raw.time ?? ''),
     route: String(raw.route ?? ''),
     rateType: String(raw.rate_type ?? ''),
@@ -223,23 +225,15 @@ function FieldLabel({ text, required }: { text: string; required?: boolean }) {
   );
 }
 
-function ChipPicker({ options, value, onChange, formatLabel }: { options: RateOption[]; value: string; onChange: (v: string) => void; formatLabel?: (o: RateOption) => string }) {
+// ปุ่มกด-เปิดป๊อปอัพเลือกตัวเลือก — แทนที่ ChipPicker แบบเลื่อนแนวนอนเดิม
+function PickerTrigger({ label, placeholder, onPress }: { label: string; placeholder: string; onPress: () => void }) {
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-      <TouchableOpacity onPress={() => onChange('')} style={[styles.chip, value === '' && styles.chipActive]}>
-        <Text style={[styles.chipText, value === '' && styles.chipTextActive]}>— ไม่เลือก —</Text>
-      </TouchableOpacity>
-      {options.map((o) => {
-        const active = value === o.key;
-        return (
-          <TouchableOpacity key={o.key} onPress={() => onChange(o.key)} style={[styles.chip, active && styles.chipActive]}>
-            <Text style={[styles.chipText, active && styles.chipTextActive]} numberOfLines={1}>
-              {formatLabel ? formatLabel(o) : `${o.label} (${moneyFmt(o.rate)})`}
-            </Text>
-          </TouchableOpacity>
-        );
-      })}
-    </ScrollView>
+    <TouchableOpacity style={styles.pickerTrigger} onPress={onPress}>
+      <Text style={[styles.pickerTriggerText, !label && styles.pickerTriggerPlaceholder]} numberOfLines={1}>
+        {label || placeholder}
+      </Text>
+      <Ionicons name="chevron-down" size={16} color="#64748b" />
+    </TouchableOpacity>
   );
 }
 
@@ -287,6 +281,24 @@ export default function TravelAllowanceFormScreen({
 
   const [gpsBusyKey, setGpsBusyKey] = useState<string | null>(null);
   const [photoBusyKey, setPhotoBusyKey] = useState<string | null>(null);
+
+  // ป๊อปอัพเลือกประเภทที่พัก/ระยะทาง และรายการหัก — แทนที่ ChipPicker แบบเลื่อนแนวนอนเดิม
+  const [ratePickerModal, setRatePickerModal] = useState<{
+    visible: boolean;
+    title: string;
+    options: { value: string; label: string }[];
+    current: string;
+    onSelect: (v: string) => void;
+  }>({ visible: false, title: '', options: [], current: '', onSelect: () => {} });
+  function openRatePicker(title: string, options: RateOption[], current: string, onSelect: (v: string) => void) {
+    setRatePickerModal({
+      visible: true,
+      title,
+      options: [{ value: '', label: '— ไม่เลือก —' }, ...options.map((o) => ({ value: o.key, label: `${o.label} (${moneyFmt(o.rate)})` }))],
+      current,
+      onSelect,
+    });
+  }
 
   const importedJobIds = useMemo(() => new Set(rows.map((r) => r.jobId).filter((id) => id !== 0)), [rows]);
   const savedRows = rows.filter((r) => r.isSaved);
@@ -424,7 +436,7 @@ export default function TravelAllowanceFormScreen({
       Alert.alert('ไม่ได้รับสิทธิ์เข้าถึงรูปภาพ', 'กรุณาอนุญาตการเข้าถึงคลังภาพเพื่อแนบรูปหลักฐาน');
       return;
     }
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.7 });
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.7 });
     if (result.canceled || !result.assets?.[0]) return;
     const asset = result.assets[0];
     const fileName = asset.fileName || asset.uri.split('/').pop() || `photo_${Date.now()}.jpg`;
@@ -623,12 +635,12 @@ export default function TravelAllowanceFormScreen({
 
                     <View style={styles.rowGap}>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.miniLabel}>วันที่ (YYYY-MM-DD)</Text>
-                        <TextInput style={styles.input} placeholder="2026-09-03" placeholderTextColor="#94a3b8" value={row.dateYmd} onChangeText={(v) => updateRow(row.key, 'dateYmd', v)} />
+                        <Text style={styles.miniLabel}>วันที่</Text>
+                        <DateField value={row.dateYmd} onChange={(v) => updateRow(row.key, 'dateYmd', v)} placeholder="เลือกวันที่" />
                       </View>
                       <View style={{ flex: 1 }}>
                         <Text style={styles.miniLabel}>เวลา</Text>
-                        <TextInput style={styles.input} placeholder="00:00" placeholderTextColor="#94a3b8" value={row.time} onChangeText={(v) => updateRow(row.key, 'time', v)} />
+                        <TimeField value={row.time} onChange={(v) => updateRow(row.key, 'time', v)} placeholder="เลือกเวลา" />
                       </View>
                     </View>
 
@@ -636,7 +648,11 @@ export default function TravelAllowanceFormScreen({
                     <TextInput style={styles.input} placeholder="ระบุเส้นทาง" placeholderTextColor="#94a3b8" value={row.route} onChangeText={(v) => updateRow(row.key, 'route', v)} />
 
                     <Text style={styles.miniLabel}>ประเภทที่พัก / ระยะทาง</Text>
-                    <ChipPicker options={rateOptionsPositive} value={row.rateType} onChange={(v) => applyRateType(row.key, v)} />
+                    <PickerTrigger
+                      label={rateByKey[row.rateType] ? `${rateByKey[row.rateType].label} (${moneyFmt(rateByKey[row.rateType].rate)})` : ''}
+                      placeholder="— ไม่เลือก —"
+                      onPress={() => openRatePicker('เลือกประเภทที่พัก / ระยะทาง', rateOptionsPositive, row.rateType, (v) => applyRateType(row.key, v))}
+                    />
 
                     <View style={styles.rowGap}>
                       <View style={{ flex: 1 }}>
@@ -650,7 +666,11 @@ export default function TravelAllowanceFormScreen({
                     </View>
 
                     <Text style={styles.miniLabel}>รายการหัก</Text>
-                    <ChipPicker options={rateOptionsNegative} value={row.deductType} onChange={(v) => updateRow(row.key, 'deductType', v)} />
+                    <PickerTrigger
+                      label={rateByKey[row.deductType] ? `${rateByKey[row.deductType].label} (${moneyFmt(rateByKey[row.deductType].rate)})` : ''}
+                      placeholder="— ไม่เลือก —"
+                      onPress={() => openRatePicker('เลือกรายการหัก', rateOptionsNegative, row.deductType, (v) => updateRow(row.key, 'deductType', v))}
+                    />
 
                     <View style={styles.amountBox}>
                       <Text style={styles.amountBoxLabel}>รวม (บาท) — ประมาณการ</Text>
@@ -796,6 +816,36 @@ export default function TravelAllowanceFormScreen({
           </View>
         </View>
       </Modal>
+
+      {/* ป๊อปอัพเลือกประเภทที่พัก/ระยะทาง และรายการหัก — แทนที่ ChipPicker แบบเลื่อนแนวนอนเดิม */}
+      <Modal visible={ratePickerModal.visible} transparent animationType="fade" onRequestClose={() => setRatePickerModal((s) => ({ ...s, visible: false }))}>
+        <TouchableOpacity style={styles.pickerModalOverlay} activeOpacity={1} onPress={() => setRatePickerModal((s) => ({ ...s, visible: false }))}>
+          <View style={styles.pickerModalSheet}>
+            <Text style={styles.pickerModalTitle}>{ratePickerModal.title}</Text>
+            <ScrollView style={{ maxHeight: 380 }}>
+              {ratePickerModal.options.map((opt) => {
+                const active = ratePickerModal.current === opt.value;
+                return (
+                  <TouchableOpacity
+                    key={opt.value || '__none__'}
+                    style={[styles.pickerModalOption, active && styles.pickerModalOptionActive]}
+                    onPress={() => {
+                      ratePickerModal.onSelect(opt.value);
+                      setRatePickerModal((s) => ({ ...s, visible: false }));
+                    }}
+                  >
+                    <Text style={styles.pickerModalOptionText}>{opt.label}</Text>
+                    {active && <Ionicons name="checkmark" size={16} color="#2563eb" />}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+            <TouchableOpacity style={styles.pickerModalCloseBtn} onPress={() => setRatePickerModal((s) => ({ ...s, visible: false }))}>
+              <Text style={styles.pickerModalCloseBtnText}>ปิด</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -819,7 +869,8 @@ function CardHead({ icon, title, sub, noMargin }: { icon: keyof typeof Ionicons.
 // ====================================================================
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#f4f7fb' },
+  // #f8fafc ให้ตรงกับพื้นหลังหน้าจอของอีก 3 โมดูล — เดิมใช้ #f4f7fb ต่างกันเล็กน้อย
+  safeArea: { flex: 1, backgroundColor: '#f8fafc' },
 
   headerCard: { backgroundColor: '#4338ca', paddingHorizontal: 18, paddingTop: 16, paddingBottom: 18 },
   backBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', marginBottom: 10 },
@@ -865,11 +916,17 @@ const styles = StyleSheet.create({
   emptyBox: { alignItems: 'center', justifyContent: 'center', paddingVertical: 30, gap: 8 },
   emptyText: { color: '#94a3b8', fontSize: 11.5, textAlign: 'center', paddingHorizontal: 20 },
 
-  chipsRow: { gap: 6, paddingVertical: 2 },
-  chip: { backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 50, paddingHorizontal: 11, paddingVertical: 7, maxWidth: 200 },
-  chipActive: { backgroundColor: '#4338ca', borderColor: '#4338ca' },
-  chipText: { fontSize: 11, color: '#475569', fontWeight: '600' },
-  chipTextActive: { color: '#fff' },
+  pickerTrigger: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#fff' },
+  pickerTriggerText: { fontSize: 13, color: '#0f172a', fontWeight: '600', flexShrink: 1 },
+  pickerTriggerPlaceholder: { color: '#94a3b8', fontWeight: '400' },
+  pickerModalOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', justifyContent: 'center', padding: 24 },
+  pickerModalSheet: { backgroundColor: '#fff', borderRadius: 16, padding: 16 },
+  pickerModalTitle: { fontSize: 13.5, fontWeight: '800', color: '#0f172a', marginBottom: 10 },
+  pickerModalOption: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, paddingHorizontal: 10, borderRadius: 8 },
+  pickerModalOptionActive: { backgroundColor: '#eef2ff' },
+  pickerModalOptionText: { fontSize: 12.5, fontWeight: '700', color: '#334155', flexShrink: 1 },
+  pickerModalCloseBtn: { marginTop: 8, alignSelf: 'center', paddingVertical: 8, paddingHorizontal: 20 },
+  pickerModalCloseBtnText: { fontSize: 12, fontWeight: '700', color: '#94a3b8' },
 
   jobRow: { backgroundColor: '#f8fafc', borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', padding: 12, marginBottom: 10 },
   jobRowSaved: { backgroundColor: '#f0fdf4', borderColor: '#a7f3d0' },

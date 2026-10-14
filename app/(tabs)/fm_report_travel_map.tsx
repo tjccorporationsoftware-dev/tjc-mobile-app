@@ -22,10 +22,12 @@ import { ActivityIndicator, Linking, Modal, ScrollView, StatusBar, StyleSheet, T
 import MapView, { Marker, Region } from 'react-native-maps';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+// 🌟 ปุ่มเลือกวันที่แบบปฏิทินมาตรฐานเดียวกันทั้งแอป
+import { DateField, formatShortThaiDate } from '../../components/DateTimeField';
 // ✅ Config + API helper กลาง
 import { API_MODULES } from '../../constants/config';
 import { useAuth } from '../_layout';
-import { apiMobileGet } from '../service/api_mobile';
+import { apiMobileGet } from '../../service/api_mobile';
 
 const FM_TRAVEL_API_URL = `${API_MODULES}/fm_travel_API_mobile.php`;
 
@@ -149,7 +151,7 @@ export default function TravelAllowanceMapScreen({ startDate = '', endDate = '',
               driver: driverName,
               driverId,
               dateYmd: String(j.date_ymd ?? ''),
-              dateThai: String(j.date_thai ?? ''),
+              dateThai: j.date_ymd ? formatShortThaiDate(j.date_ymd) : String(j.date_thai ?? ''),
               time: String(j.time ?? ''),
               route: String(j.route ?? ''),
               rateKey: String(j.rate_type ?? ''),
@@ -270,8 +272,8 @@ export default function TravelAllowanceMapScreen({ startDate = '', endDate = '',
         </ScrollView>
 
         <View style={styles.dateFilterRow}>
-          <TextInput style={styles.dateFilterInput} placeholder="ตั้งแต่ (YYYY-MM-DD)" placeholderTextColor="#94a3b8" value={fromDate} onChangeText={setFromDate} />
-          <TextInput style={styles.dateFilterInput} placeholder="ถึง (YYYY-MM-DD)" placeholderTextColor="#94a3b8" value={toDate} onChangeText={setToDate} />
+          <DateField value={fromDate} onChange={setFromDate} placeholder="ตั้งแต่" style={{ flex: 1 }} />
+          <DateField value={toDate} onChange={setToDate} placeholder="ถึง" style={{ flex: 1 }} />
           <TouchableOpacity style={styles.resetFilterBtn} onPress={resetFilters}>
             <Ionicons name="refresh" size={12} color="#475569" />
           </TouchableOpacity>

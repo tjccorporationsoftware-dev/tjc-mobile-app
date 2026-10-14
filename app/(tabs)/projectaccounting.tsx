@@ -37,17 +37,25 @@
  */
 
 import { Ionicons } from '@expo/vector-icons';
-import axios from 'axios';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Modal, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { useAuth } from '../_layout';
 // ✅ Config
-import { API_BASE } from '../../constants/config';
+import { API_MODULES } from '../../constants/config';
+import { DateField, formatShortThaiDateTime } from '../../components/DateTimeField';
+import { apiMobileGet, apiMobilePost } from '../../service/api_mobile';
 
-// endpoint นี้ไม่มี action param ตาม TODO เดิมของไฟล์นี้ (?id=projectId, ajax_save=1 ตอนบันทึก)
-// ส่วนฝั่งโหลดข้อมูล (project info + งวดที่มีอยู่แล้ว) เป็นการเดา — ยังไม่ได้ยืนยันกับ backend จริงทั้งคู่
-const API_URL = `${API_BASE}/project_accounting.php`;
+// ⚠️ project_accounting.php (เว็บ) ถูกบังคับผ่าน auth.php ที่ต้องมี PHP session cookie จาก login
+// หน้าเว็บ แต่แอปมือถือ login แบบ stateless (ไม่มี session) ทุก request ที่เคยยิงตรงมาที่ไฟล์นี้จึง
+// โดน redirect ไป login.php เงียบๆ (ข้อมูลโครงการ/งวดชำระไม่เคยโหลดขึ้นจริงเลย) — ฝั่งโหลดข้อมูล
+// (loadData) จึงเปลี่ยนมาใช้ accounting_API_mobile.php action=get_detail แทน ซึ่งมี detail ครบ
+// รวม payment_items (งวดชำระ) ในคำตอบเดียวอยู่แล้ว (README_accounting.md ข้อ 4.4) — ยืนยันแล้วว่า
+// เป็น action จริง ไม่ใช่การเดา ส่วนฝั่งบันทึก (handleSave) ยังไม่มี action เขียนที่ยืนยันแล้ว
+// (accounting_API_mobile.php ไม่มี action สำหรับบันทึกงวดชำระ) จึงยังเป็น stub อยู่ก่อน
+const ACCOUNTING_API_URL = `${API_MODULES}/accounting_API_mobile.php`;
 
 // ====================================================================
 // Types
@@ -119,39 +127,43 @@ const MOCK_JOB_TYPES = ['ซ่อมบำรุงทั่วไป', 'ระ
 
 const EMPTY_PROJECT: ProjectInfo = { jobNo: '', projectName: '', customer: '', budget: 0, paidGross: 0 };
 
-// แปลงข้อมูลดิบจาก backend ให้เข้ารูป ProjectInfo/PaymentRow — รองรับหลายชื่อ field เพราะยังไม่มี spec ยืนยัน
+// แปลงข้อมูลดิบจาก accounting_API_mobile.php action=get_detail ให้เข้ารูป ProjectInfo/PaymentRow
+// ชื่อคีย์ยึดตาม acc_row_to_json()/get_payment_items ใน accounting_API_mobile.php จริง (ยืนยันแล้ว)
 function mapProjectInfo(raw: any): ProjectInfo {
   return {
-    jobNo: String(raw.jobNo ?? raw.job_no ?? ''),
-    projectName: String(raw.projectName ?? raw.project_name ?? ''),
-    customer: String(raw.customer ?? raw.customer_name ?? ''),
-    budget: Number(raw.budget ?? raw.project_budget ?? 0),
-    paidGross: Number(raw.paidGross ?? raw.paid_gross ?? 0),
-    address: raw.address ?? undefined,
-    contact: raw.contact ?? undefined,
+    jobNo: String(raw.display_code ?? ''),
+    projectName: String(raw.project_name ?? ''),
+    customer: String(raw.customer_name ?? ''),
+    budget: Number(raw.project_budget ?? 0),
+    paidGross: Number(raw.total_gross_amount ?? 0),
+    address: raw.customer_address || undefined,
+    contact: raw.contact_person || undefined,
   };
 }
 
+// ⚠️ id ต้องเป็น row_uid (คงตัวข้ามการลบ/เขียนใหม่ฝั่ง save_payments) ไม่ใช่ id ตัวเลขจาก DB —
+// ถ้าส่ง id ตัวเลขกลับไปเป็น pp_uid, save_payments จะจับคู่กับแถวเดิมไม่ได้ (มองว่าเป็นงวดใหม่ทุกครั้ง)
+// ทำให้ created_by/ประวัติการแก้ไขหลุดทุกครั้งที่บันทึก — get_detail จึงต้องส่ง row_uid มาด้วยเสมอ
 function mapPaymentRow(raw: any): PaymentRow {
   return mkRow({
-    id: String(raw.id ?? uid()),
+    id: String(raw.row_uid || raw.id || uid()),
     isNew: false,
-    name: String(raw.name ?? raw.payment_name ?? ''),
-    amount: String(raw.amount ?? raw.payment_amount ?? ''),
-    calcMode: (raw.calcMode ?? raw.calc_mode ?? 'base') as CalcMode,
-    whtPercent: Number(raw.whtPercent ?? raw.wht_percent ?? 0),
-    status: String(raw.status ?? raw.call_status ?? STATUS_LIST[0]),
-    fee: String(raw.fee ?? raw.fee_amount ?? ''),
-    fine: String(raw.fine ?? raw.fine_amount ?? ''),
-    bankName: String(raw.bankName ?? raw.bank_name ?? ''),
-    receiptNo: String(raw.receiptNo ?? raw.receipt_no ?? ''),
-    receivedDate: String(raw.receivedDate ?? raw.payment_received_date ?? ''),
-    receiptDate: String(raw.receiptDate ?? raw.receipt_date ?? ''),
+    name: String(raw.payment_name ?? ''),
+    amount: String(raw.payment_amount ?? ''),
+    calcMode: (raw.calc_mode || 'base') as CalcMode,
+    whtPercent: Number(raw.wht_percent ?? 0),
+    status: String(raw.call_status ?? STATUS_LIST[0]),
+    fee: String(raw.fee_amount ?? ''),
+    fine: String(raw.fine_amount ?? ''),
+    bankName: String(raw.bank_name ?? ''),
+    receiptNo: String(raw.receipt_no ?? ''),
+    receivedDate: String(raw.payment_received_date ?? ''),
+    receiptDate: String(raw.receipt_date ?? ''),
     remark: String(raw.remark ?? ''),
-    owner: String(raw.owner ?? raw.owner_name ?? CURRENT_USER),
-    createdAtShow: raw.createdAtShow ?? raw.created_at_show ?? undefined,
-    chequeNo: String(raw.chequeNo ?? raw.cheque_no ?? ''),
-    chequeDate: String(raw.chequeDate ?? raw.cheque_date ?? ''),
+    owner: CURRENT_USER,
+    createdAtShow: raw.created_at ? formatShortThaiDateTime(raw.created_at) : raw.created_at_thai ?? undefined,
+    chequeNo: String(raw.cheque_no ?? ''),
+    chequeDate: String(raw.cheque_date ?? ''),
   });
 }
 
@@ -241,6 +253,8 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
   const router = useRouter();
   const params = useLocalSearchParams<{ id?: string }>();
   const projectId = id ?? params.id ?? '547';
+  const { user } = useAuth();
+  const userId = (user as any)?.id;
 
   const [project, setProject] = useState<ProjectInfo>(EMPTY_PROJECT);
   const [rows, setRows] = useState<PaymentRow[]>([mkRow({ name: 'งวดที่ 1' })]);
@@ -249,27 +263,39 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // ป๊อปอัพเลือกตัวเลือกแบบใช้ร่วมกันทุกช่อง (แทนที่ chip picker แบบเลื่อนแนวนอนเดิม)
+  const [pickerModal, setPickerModal] = useState<{
+    visible: boolean;
+    title: string;
+    options: { value: string; label: string }[];
+    current: string;
+    onSelect: (v: string) => void;
+  }>({ visible: false, title: '', options: [], current: '', onSelect: () => {} });
+  function openPicker(title: string, options: { value: string; label: string }[], current: string, onSelect: (v: string) => void) {
+    setPickerModal({ visible: true, title, options, current, onSelect });
+  }
+
   const outstanding = Math.max(project.budget - project.paidGross, 0);
 
   const loadData = useCallback(async () => {
+    if (!userId) return;
     setLoading(true);
     setLoadError(null);
     try {
-      const res = await axios.get(API_URL, { params: { id: projectId } });
-      const d = res.data?.data ?? res.data;
-      const proj = mapProjectInfo(d?.project ?? d ?? {});
-      const rawRows = Array.isArray(d?.rows) ? d.rows : [];
+      const res = await apiMobileGet(ACCOUNTING_API_URL, 'get_detail', { user_id: userId, project_id: projectId });
+      const proj = mapProjectInfo(res.detail ?? {});
+      const rawRows: any[] = Array.isArray(res.payment_items) ? res.payment_items : [];
       const mappedRows: PaymentRow[] = rawRows.length > 0 ? rawRows.map(mapPaymentRow) : [mkRow({ name: 'งวดที่ 1' })];
       setProject(proj);
       setRows(mappedRows);
       setExpandedIds(new Set(mappedRows.filter((r) => r.isNew).map((r) => r.id)));
-    } catch (e) {
-      console.error('load project_accounting failed', e);
-      setLoadError('โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
+    } catch (e: any) {
+      console.error('load accounting_API_mobile get_detail failed', e);
+      setLoadError(e?.message || 'โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
     } finally {
       setLoading(false);
     }
-  }, [projectId]);
+  }, [projectId, userId]);
 
   useEffect(() => {
     loadData();
@@ -340,7 +366,12 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
   }
 
+  // ฝั่งบันทึก — action=save_payments จริง (accounting_API_mobile.php) เพิ่มใหม่โดยพอร์ตตรรกะ
+  // "โหมดปกติ" ของ project_accounting.php ทั้งหมด (ลบทั้งโครงการแล้วเขียนใหม่ทุกงวด โดยใช้ row_uid
+  // คงตัวข้ามการลบ/สร้างใหม่ กันประวัติผู้บันทึก/ผู้แก้ไขหาย) ทดสอบ insert/resave/แก้ไขข้ามผู้ใช้/
+  // ลบแถวจริงแล้วก่อนส่งมอบ — ไม่รองรับฟอร์มย่อย "แจ้งซ่อม" (เกินขอบเขต mockup เดิม)
   async function handleSave() {
+    if (!userId) return;
     const invalidName = rows.some((r) => !r.name.trim());
     if (invalidName) {
       Alert.alert('กรอกข้อมูลไม่ครบ', 'กรุณาระบุ "ชื่องวด" ให้ครบทุกรายการก่อนบันทึก');
@@ -351,51 +382,42 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
       Alert.alert('กรอกข้อมูลไม่ครบ', 'มีงวดที่สถานะต้องระบุยอดเงิน แต่ยังไม่ได้กรอก');
       return;
     }
-    const invalidSr = rows.some((r) => r.status === 'แจ้งซ่อม' && (!r.srReceiver || !r.srProduct.trim() || !r.srIssue.trim()));
-    if (invalidSr) {
-      Alert.alert('กรอกข้อมูลไม่ครบ', 'มีงวดที่แจ้งซ่อม แต่ยังกรอกข้อมูลใบแจ้งซ่อมไม่ครบ');
-      return;
-    }
 
-    // payload ตรงกับ TODO เดิมของไฟล์นี้ — ชื่อ field แบบ array ต่องวด เรียงตามลำดับ rows
-    const fd = new FormData();
-    fd.append('ajax_save', '1');
-    rows.forEach((r) => {
+    const payload = rows.map((r) => {
       const c = rowCalcs[r.id];
-      fd.append('payment_name[]', r.name);
-      fd.append('payment_amount[]', r.amount);
-      fd.append('net_amount[]', String(c.net));
-      fd.append('calc_mode[]', r.calcMode);
-      fd.append('wht_percent[]', String(r.whtPercent));
-      fd.append('call_status[]', r.status);
-      fd.append('fee_amount[]', r.fee);
-      fd.append('fine_amount[]', r.fine);
-      fd.append('bank_name[]', r.bankName);
-      fd.append('receipt_no[]', r.receiptNo);
-      fd.append('payment_received_date[]', r.receivedDate);
-      fd.append('receipt_date[]', r.receiptDate);
-      fd.append('remark[]', r.remark);
-      fd.append('cheque_no[]', r.chequeNo);
-      fd.append('cheque_date[]', r.chequeDate);
-      fd.append('sr_receiver[]', r.status === 'แจ้งซ่อม' ? r.srReceiver : '');
-      fd.append('sr_product[]', r.status === 'แจ้งซ่อม' ? r.srProduct : '');
-      fd.append('sr_job_type[]', r.status === 'แจ้งซ่อม' ? r.srJobType : '');
-      fd.append('sr_issue[]', r.status === 'แจ้งซ่อม' ? r.srIssue : '');
+      return {
+        pp_uid: r.isNew ? '' : r.id,
+        payment_name: r.name,
+        payment_amount: r.amount,
+        net_amount: c.net,
+        call_status: r.status,
+        fee_amount: r.fee,
+        fine_amount: r.fine,
+        bank_name: r.bankName,
+        cheque_date: r.chequeDate,
+        calc_mode: r.calcMode,
+        wht_percent: r.whtPercent,
+        cheque_no: r.chequeNo,
+        payment_received_date: r.receivedDate,
+        remark: r.remark,
+        receipt_date: r.receiptDate,
+        receipt_no: r.receiptNo,
+      };
     });
 
     setSaving(true);
     try {
-      const res = await axios.post(`${API_URL}?id=${encodeURIComponent(projectId)}`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      if (res.data?.status === 'success' || res.data?.success) {
-        Alert.alert('บันทึกสำเร็จ', `บันทึกงวดชำระ ${rows.length} รายการเรียบร้อยแล้ว!`, [
-          { text: 'ตกลง', onPress: () => (onSaved ? onSaved() : handleBack()) },
-        ]);
-      } else {
-        Alert.alert('บันทึกไม่สำเร็จ', res.data?.message || 'กรุณาลองใหม่อีกครั้ง');
-      }
-    } catch (e) {
-      console.error('save project_accounting failed', e);
-      Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถบันทึกข้อมูลได้ กรุณาลองใหม่อีกครั้ง');
+      const res = await apiMobilePost(ACCOUNTING_API_URL, 'save_payments', {
+        user_id: userId,
+        project_id: projectId,
+        payments_json: JSON.stringify(payload),
+      });
+      Alert.alert('บันทึกสำเร็จ', `บันทึกงวดชำระ ${res.saved ?? rows.length} รายการเรียบร้อยแล้ว!`, [
+        { text: 'ตกลง', onPress: () => (onSaved ? onSaved() : handleBack()) },
+      ]);
+    } catch (e: any) {
+      console.error('save_payments failed', e);
+      Alert.alert('บันทึกไม่สำเร็จ', e?.message || 'กรุณาลองใหม่อีกครั้ง');
     } finally {
       setSaving(false);
     }
@@ -527,31 +549,34 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
                     <TextInput style={styles.input} placeholder="0.00" placeholderTextColor="#94a3b8" keyboardType="decimal-pad" value={r.amount} onChangeText={(v) => updateRow(r.id, 'amount', v)} />
 
                     <FieldLabel text="ยอดที่กรอกคือ..." />
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-                      {CALC_MODE_OPTIONS.map((m) => (
-                        <TouchableOpacity key={m.value} onPress={() => updateRow(r.id, 'calcMode', m.value)} style={[styles.chip, r.calcMode === m.value && styles.chipActive]}>
-                          <Text style={[styles.chipText, r.calcMode === m.value && styles.chipTextActive]}>{m.label}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
+                    <PickerTrigger
+                      label={CALC_MODE_OPTIONS.find((m) => m.value === r.calcMode)?.label ?? ''}
+                      placeholder="เลือก..."
+                      onPress={() =>
+                        openPicker('ยอดที่กรอกคือ...', CALC_MODE_OPTIONS.map((m) => ({ value: m.value, label: m.label })), r.calcMode, (v) => updateRow(r.id, 'calcMode', v as CalcMode))
+                      }
+                    />
 
                     <FieldLabel text="หัก ณ ที่จ่าย" />
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-                      {WHT_OPTIONS.map((w) => (
-                        <TouchableOpacity key={w} onPress={() => updateRow(r.id, 'whtPercent', w)} style={[styles.chip, r.whtPercent === w && styles.chipActive]}>
-                          <Text style={[styles.chipText, r.whtPercent === w && styles.chipTextActive]}>{w === 0 ? 'ไม่หัก' : `หัก ${w}%`}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
+                    <PickerTrigger
+                      label={r.whtPercent === 0 ? 'ไม่หัก' : `หัก ${r.whtPercent}%`}
+                      placeholder="เลือก..."
+                      onPress={() =>
+                        openPicker(
+                          'หัก ณ ที่จ่าย',
+                          WHT_OPTIONS.map((w) => ({ value: String(w), label: w === 0 ? 'ไม่หัก' : `หัก ${w}%` })),
+                          String(r.whtPercent),
+                          (v) => updateRow(r.id, 'whtPercent', Number(v))
+                        )
+                      }
+                    />
 
                     <FieldLabel text="สถานะจ่ายเงิน" />
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-                      {STATUS_LIST.map((s) => (
-                        <TouchableOpacity key={s} onPress={() => updateRow(r.id, 'status', s)} style={[styles.chip, r.status === s && styles.chipActive]}>
-                          <Text style={[styles.chipText, r.status === s && styles.chipTextActive]}>{s}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
+                    <PickerTrigger
+                      label={r.status}
+                      placeholder="เลือกสถานะ..."
+                      onPress={() => openPicker('สถานะจ่ายเงิน', STATUS_LIST.map((s) => ({ value: s, label: s })), r.status, (v) => updateRow(r.id, 'status', v))}
+                    />
 
                     <View style={styles.rowGap}>
                       <View style={{ flex: 1 }}>
@@ -565,16 +590,18 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
                     </View>
 
                     <FieldLabel text="ธนาคาร (เข้าเช็ค)" />
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-                      <TouchableOpacity onPress={() => updateRow(r.id, 'bankName', '')} style={[styles.chip, r.bankName === '' && styles.chipActive]}>
-                        <Text style={[styles.chipText, r.bankName === '' && styles.chipTextActive]}>ไม่ระบุ</Text>
-                      </TouchableOpacity>
-                      {BANK_LIST.map((b) => (
-                        <TouchableOpacity key={b} onPress={() => updateRow(r.id, 'bankName', b)} style={[styles.chip, r.bankName === b && styles.chipActive]}>
-                          <Text style={[styles.chipText, r.bankName === b && styles.chipTextActive]}>{b}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
+                    <PickerTrigger
+                      label={r.bankName}
+                      placeholder="ไม่ระบุ"
+                      onPress={() =>
+                        openPicker(
+                          'ธนาคาร (เข้าเช็ค)',
+                          [{ value: '', label: 'ไม่ระบุ' }, ...BANK_LIST.map((b) => ({ value: b, label: b }))],
+                          r.bankName,
+                          (v) => updateRow(r.id, 'bankName', v)
+                        )
+                      }
+                    />
 
                     {/* สรุปยอดงวดนี้ */}
                     <View style={styles.rowSummaryBox}>
@@ -610,11 +637,11 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
                       </View>
                       <View style={{ flex: 1 }}>
                         <FieldLabel text="วันที่ออกใบเสร็จ" />
-                        <TextInput style={styles.input} placeholder="วว/ดด/ปปปป" placeholderTextColor="#94a3b8" value={r.receiptDate} onChangeText={(v) => updateRow(r.id, 'receiptDate', v)} />
+                        <DateField value={r.receiptDate} onChange={(v) => updateRow(r.id, 'receiptDate', v)} />
                       </View>
                     </View>
                     <FieldLabel text="วันที่รับเงิน / เงินเข้า" />
-                    <TextInput style={styles.input} placeholder="วว/ดด/ปปปป" placeholderTextColor="#94a3b8" value={r.receivedDate} onChangeText={(v) => updateRow(r.id, 'receivedDate', v)} />
+                    <DateField value={r.receivedDate} onChange={(v) => updateRow(r.id, 'receivedDate', v)} />
 
                     <FieldLabel text="หมายเหตุ" />
                     <TextInput
@@ -642,7 +669,7 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
                           </View>
                           <View style={{ flex: 1 }}>
                             <FieldLabel text="วันที่ลงเช็ค" />
-                            <TextInput style={styles.input} placeholder="วว/ดด/ปปปป" placeholderTextColor="#94a3b8" value={r.chequeDate} onChangeText={(v) => updateRow(r.id, 'chequeDate', v)} />
+                            <DateField value={r.chequeDate} onChange={(v) => updateRow(r.id, 'chequeDate', v)} />
                           </View>
                         </View>
                       </View>
@@ -654,23 +681,19 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
                           <Ionicons name="build-outline" size={12} color="#e11d48" /> ข้อมูลสำหรับเปิดใบแจ้งซ่อม
                         </Text>
                         <FieldLabel text="ผู้รับเรื่อง" required />
-                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-                          {MOCK_USERS.map((u) => (
-                            <TouchableOpacity key={u} onPress={() => updateRow(r.id, 'srReceiver', u)} style={[styles.chip, r.srReceiver === u && styles.chipActiveRed]}>
-                              <Text style={[styles.chipText, r.srReceiver === u && styles.chipTextActive]}>{u}</Text>
-                            </TouchableOpacity>
-                          ))}
-                        </ScrollView>
+                        <PickerTrigger
+                          label={r.srReceiver}
+                          placeholder="เลือกผู้รับเรื่อง..."
+                          onPress={() => openPicker('ผู้รับเรื่อง', MOCK_USERS.map((u) => ({ value: u, label: u })), r.srReceiver, (v) => updateRow(r.id, 'srReceiver', v))}
+                        />
                         <FieldLabel text="สินค้า / อุปกรณ์" required />
                         <TextInput style={styles.input} placeholder="เช่น กล้องวงจรปิด, PC..." placeholderTextColor="#94a3b8" value={r.srProduct} onChangeText={(v) => updateRow(r.id, 'srProduct', v)} />
                         <FieldLabel text="ประเภทงาน" required />
-                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-                          {MOCK_JOB_TYPES.map((jt) => (
-                            <TouchableOpacity key={jt} onPress={() => updateRow(r.id, 'srJobType', jt)} style={[styles.chip, r.srJobType === jt && styles.chipActiveRed]}>
-                              <Text style={[styles.chipText, r.srJobType === jt && styles.chipTextActive]}>{jt}</Text>
-                            </TouchableOpacity>
-                          ))}
-                        </ScrollView>
+                        <PickerTrigger
+                          label={r.srJobType}
+                          placeholder="เลือกประเภทงาน..."
+                          onPress={() => openPicker('ประเภทงาน', MOCK_JOB_TYPES.map((jt) => ({ value: jt, label: jt })), r.srJobType, (v) => updateRow(r.id, 'srJobType', v))}
+                        />
                         <FieldLabel text="อาการ / ปัญหาที่พบ" required />
                         <TextInput
                           style={[styles.input, styles.textarea]}
@@ -727,6 +750,36 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
           </View>
         </View>
       </ScrollView>
+
+      {/* ป๊อปอัพเลือกตัวเลือกแบบใช้ร่วมกันทุกช่อง (แทนที่ chip picker แบบเลื่อนแนวนอนเดิม) */}
+      <Modal visible={pickerModal.visible} transparent animationType="fade" onRequestClose={() => setPickerModal((s) => ({ ...s, visible: false }))}>
+        <TouchableOpacity style={styles.pickerModalOverlay} activeOpacity={1} onPress={() => setPickerModal((s) => ({ ...s, visible: false }))}>
+          <View style={styles.pickerModalSheet}>
+            <Text style={styles.pickerModalTitle}>{pickerModal.title}</Text>
+            <ScrollView style={{ maxHeight: 380 }}>
+              {pickerModal.options.map((opt) => {
+                const active = pickerModal.current === opt.value;
+                return (
+                  <TouchableOpacity
+                    key={opt.value || '__none__'}
+                    style={[styles.pickerModalOption, active && styles.pickerModalOptionActive]}
+                    onPress={() => {
+                      pickerModal.onSelect(opt.value);
+                      setPickerModal((s) => ({ ...s, visible: false }));
+                    }}
+                  >
+                    <Text style={styles.pickerModalOptionText}>{opt.label}</Text>
+                    {active && <Ionicons name="checkmark" size={16} color="#059669" />}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+            <TouchableOpacity style={styles.pickerModalCloseBtn} onPress={() => setPickerModal((s) => ({ ...s, visible: false }))}>
+              <Text style={styles.pickerModalCloseBtnText}>ปิด</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -765,6 +818,18 @@ function FieldLabel({ text, required }: { text: string; required?: boolean }) {
     <Text style={styles.fieldLabel}>
       {text} {required ? <Text style={styles.required}>*</Text> : null}
     </Text>
+  );
+}
+
+// ปุ่มกด-เปิดป๊อปอัพเลือกตัวเลือก — แทนที่ chip picker แบบเลื่อนแนวนอนเดิม
+function PickerTrigger({ label, placeholder, onPress }: { label: string; placeholder: string; onPress: () => void }) {
+  return (
+    <TouchableOpacity style={styles.pickerTrigger} onPress={onPress}>
+      <Text style={[styles.pickerTriggerText, !label && styles.pickerTriggerPlaceholder]} numberOfLines={1}>
+        {label || placeholder}
+      </Text>
+      <Ionicons name="chevron-down" size={16} color="#64748b" />
+    </TouchableOpacity>
   );
 }
 
@@ -837,12 +902,17 @@ const styles = StyleSheet.create({
   textarea: { minHeight: 56, textAlignVertical: 'top' },
   rowGap: { flexDirection: 'row', gap: 8 },
 
-  chipsRow: { gap: 6, paddingVertical: 2 },
-  chip: { backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 50, paddingHorizontal: 11, paddingVertical: 7 },
-  chipActive: { backgroundColor: '#059669', borderColor: '#059669' },
-  chipActiveRed: { backgroundColor: '#e11d48', borderColor: '#e11d48' },
-  chipText: { fontSize: 11, color: '#475569', fontWeight: '600' },
-  chipTextActive: { color: '#fff' },
+  pickerTrigger: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#fff' },
+  pickerTriggerText: { fontSize: 13, color: '#0f172a', fontWeight: '600', flexShrink: 1 },
+  pickerTriggerPlaceholder: { color: '#94a3b8', fontWeight: '400' },
+  pickerModalOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', justifyContent: 'center', padding: 24 },
+  pickerModalSheet: { backgroundColor: '#fff', borderRadius: 16, padding: 16 },
+  pickerModalTitle: { fontSize: 13.5, fontWeight: '800', color: '#0f172a', marginBottom: 10 },
+  pickerModalOption: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, paddingHorizontal: 10, borderRadius: 8 },
+  pickerModalOptionActive: { backgroundColor: '#ecfdf5' },
+  pickerModalOptionText: { fontSize: 12.5, fontWeight: '700', color: '#334155', flexShrink: 1 },
+  pickerModalCloseBtn: { marginTop: 8, alignSelf: 'center', paddingVertical: 8, paddingHorizontal: 20 },
+  pickerModalCloseBtnText: { fontSize: 12, fontWeight: '700', color: '#94a3b8' },
 
   rowSummaryBox: { backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#cbd5e1', borderStyle: 'dashed', borderRadius: 10, padding: 11, marginTop: 12 },
   rowSummaryLine: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 },

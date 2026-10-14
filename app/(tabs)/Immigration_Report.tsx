@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import DateTimePicker, {
-    DateTimePickerEvent,
+    DateTimePickerChangeEvent,
 } from "@react-native-community/datetimepicker";
 import { BlurView } from "expo-blur";
 import * as ImagePicker from "expo-image-picker";
@@ -491,12 +491,11 @@ export default function ImmigrationFormScreen() {
   };
 
   const handleDateChange = (
-    event: DateTimePickerEvent,
-    selectedDate?: Date,
+    event: DateTimePickerChangeEvent,
+    selectedDate: Date,
   ) => {
-    const currentDate = selectedDate || date;
     setShowDatePicker(Platform.OS === "ios");
-    setDate(currentDate);
+    setDate(selectedDate);
   };
 
   const pickImage = async () => {
@@ -512,7 +511,7 @@ export default function ImmigrationFormScreen() {
       return;
     }
     let result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsMultipleSelection: true,
       quality: 0.8,
     });
@@ -528,11 +527,10 @@ export default function ImmigrationFormScreen() {
   };
 
   const formatDateForApi = (d: Date): string => d.toISOString().split("T")[0];
+  // แสดงผลย่อ "5/9/69" (d/m/yy พ.ศ. 2 หลัก) แทน ค.ศ. เต็ม ให้ตรงกับรูปแบบเดียวกันทั้งแอป
   const formatDateDisplay = (d: Date): string => {
-    const day = d.getDate().toString().padStart(2, "0");
-    const month = (d.getMonth() + 1).toString().padStart(2, "0");
-    const year = d.getFullYear();
-    return `${day}/${month}/${year}`;
+    // DD/MM/YYYY ปี ค.ศ. — รูปแบบเดียวทั้งแอป
+    return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
   };
 
   const getCompanyStyle = (comp: Company, isSelected: boolean) => {
@@ -793,7 +791,8 @@ export default function ImmigrationFormScreen() {
                   value={date}
                   mode="date"
                   display="default"
-                  onChange={handleDateChange}
+                  onValueChange={handleDateChange}
+                  onDismiss={() => setShowDatePicker(false)}
                   themeVariant={isDark ? "dark" : "light"}
                 />
               )}

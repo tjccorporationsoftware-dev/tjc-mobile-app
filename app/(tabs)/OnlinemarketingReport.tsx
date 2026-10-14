@@ -237,7 +237,7 @@ const OnlinemarketingReport = () => {
             if (!permRes.granted) return;
           }
           const result = await ImagePicker.launchCameraAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            mediaTypes: ['images'],
             quality: 0.7,
             allowsEditing: false,
           });
@@ -248,7 +248,7 @@ const OnlinemarketingReport = () => {
         text: "เลือกจากอัลบั้ม",
         onPress: async () => {
           const result = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            mediaTypes: ['images'],
             quality: 0.7,
           });
           callback(result);

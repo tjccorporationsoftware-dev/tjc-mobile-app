@@ -19,13 +19,14 @@
 
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Modal, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 // ✅ Config + API helper กลาง
 import { API_MODULES } from '../../constants/config';
+import { formatShortThaiDate, formatShortThaiDateTime } from '../../components/DateTimeField';
 import { useAuth } from '../_layout';
-import { apiMobileGet, apiMobilePost } from '../service/api_mobile';
+import { apiMobileGet, apiMobilePost } from '../../service/api_mobile';
 
 const FM_TRAVEL_API_URL = `${API_MODULES}/fm_travel_API_mobile.php`;
 
@@ -125,7 +126,7 @@ function mapViewRow(raw: any): ViewRow {
   return {
     no: Number(raw.no ?? 0),
     jobId: Number(raw.job_id ?? 0),
-    dateThai: String(raw.date_thai ?? ''),
+    dateThai: raw.date_ymd ? formatShortThaiDate(raw.date_ymd) : String(raw.date_thai ?? ''),
     time: String(raw.time ?? ''),
     route: String(raw.route ?? ''),
     rate: Number(raw.rate ?? 0),
@@ -206,12 +207,12 @@ export default function TravelAllowanceViewScreen({ driverId, requesterName: ini
       setCompanyNameTh(company.name_th || company.name || '');
       setCompanyNameEn(company.name_en || '');
       setLastSavedBy(detail.last_saved_by || '');
-      setUpdatedAtThai(detail.updated_at_thai || '');
-      setDateSubmitThai(detail.date_submit_thai || detail.date_submit || '');
+      setUpdatedAtThai(detail.updated_at ? formatShortThaiDateTime(detail.updated_at) : detail.updated_at_thai || '');
+      setDateSubmitThai(detail.date_submit ? formatShortThaiDate(detail.date_submit) : detail.date_submit_thai || '');
       setRequesterName(detail.driver_name || initialRequesterName || '');
       setDept(detail.dept || '');
-      setStartDateThai(detail.start_date_thai || startDate);
-      setEndDateThai(detail.end_date_thai || endDate);
+      setStartDateThai(formatShortThaiDate(detail.start_date || startDate));
+      setEndDateThai(formatShortThaiDate(detail.end_date || endDate));
       setPayMethod(detail.pay_method || '');
       setFooterCode(detail.footer_code || '');
       setStatusEffectiveText(detail.status_effective_text || '');
@@ -246,6 +247,9 @@ export default function TravelAllowanceViewScreen({ driverId, requesterName: ini
   function setDeduct(no: number, key: string) {
     setPendingDeduct((prev) => ({ ...prev, [no]: key }));
   }
+
+  // ป๊อปอัพเลือก "อื่นๆ (หัก)" แทนแถวชิปเลื่อนแนวนอน — เลือกง่ายกว่าตอนมีตัวเลือกเยอะ
+  const [deductPicker, setDeductPicker] = useState<{ visible: boolean; rowNo?: number; current?: string }>({ visible: false });
 
   function handleBack() {
     if (onBack) return onBack();
@@ -312,6 +316,7 @@ export default function TravelAllowanceViewScreen({ driverId, requesterName: ini
   }
 
   return (
+    <>
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="light-content" />
 
@@ -442,21 +447,12 @@ export default function TravelAllowanceViewScreen({ driverId, requesterName: ini
                       อื่นๆ (หัก) {canFullAccess ? <Text style={styles.editableTag}>แก้ได้</Text> : null}
                     </Text>
                     {canFullAccess ? (
-                      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.deductChipsRow}>
-                        <TouchableOpacity onPress={() => setDeduct(r.no, '')} style={[styles.deductChip, currentDeduct === '' && styles.deductChipActive]}>
-                          <Text style={[styles.deductChipText, currentDeduct === '' && styles.deductChipTextActive]}>— ไม่มี —</Text>
-                        </TouchableOpacity>
-                        {deductOptions.map((o) => {
-                          const active = currentDeduct === o.key;
-                          return (
-                            <TouchableOpacity key={o.key} onPress={() => setDeduct(r.no, o.key)} style={[styles.deductChip, active && styles.deductChipActive]}>
-                              <Text style={[styles.deductChipText, active && styles.deductChipTextActive]}>
-                                {o.label} ({moneyFmt(o.rate)})
-                              </Text>
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </ScrollView>
+                      <TouchableOpacity style={styles.deductPickerTrigger} onPress={() => setDeductPicker({ visible: true, rowNo: r.no, current: currentDeduct })}>
+                        <Text style={styles.deductPickerTriggerText} numberOfLines={1}>
+                          {currentDeduct === '' ? '— ไม่มี —' : deductOptions.find((o) => o.key === currentDeduct)?.label ?? currentDeduct}
+                        </Text>
+                        <Ionicons name="chevron-down" size={14} color="#475569" />
+                      </TouchableOpacity>
                     ) : (
                       <View style={styles.readonlyChip}>
                         <Text style={styles.readonlyChipText}>{r.deductTypeLabel || '— ไม่มี —'}</Text>
@@ -553,6 +549,48 @@ export default function TravelAllowanceViewScreen({ driverId, requesterName: ini
         </View>
       </ScrollView>
     </SafeAreaView>
+
+    <Modal visible={deductPicker.visible} transparent animationType="fade" onRequestClose={() => setDeductPicker({ visible: false })}>
+      <TouchableOpacity style={styles.deductModalOverlay} activeOpacity={1} onPress={() => setDeductPicker({ visible: false })}>
+        <View style={styles.deductModalSheet}>
+          <Text style={styles.deductModalTitle}>เลือกรายการ "อื่นๆ (หัก)"</Text>
+          <ScrollView style={{ maxHeight: 360 }}>
+            <TouchableOpacity
+              style={[styles.deductModalOption, (deductPicker.current ?? '') === '' && styles.deductModalOptionActive]}
+              onPress={() => {
+                if (deductPicker.rowNo != null) setDeduct(deductPicker.rowNo, '');
+                setDeductPicker({ visible: false });
+              }}
+            >
+              <Text style={styles.deductModalOptionText}>— ไม่มี —</Text>
+              {(deductPicker.current ?? '') === '' && <Ionicons name="checkmark" size={16} color="#2563eb" />}
+            </TouchableOpacity>
+            {deductOptions.map((o) => {
+              const active = (deductPicker.current ?? '') === o.key;
+              return (
+                <TouchableOpacity
+                  key={o.key}
+                  style={[styles.deductModalOption, active && styles.deductModalOptionActive]}
+                  onPress={() => {
+                    if (deductPicker.rowNo != null) setDeduct(deductPicker.rowNo, o.key);
+                    setDeductPicker({ visible: false });
+                  }}
+                >
+                  <Text style={styles.deductModalOptionText}>
+                    {o.label} ({moneyFmt(o.rate)})
+                  </Text>
+                  {active && <Ionicons name="checkmark" size={16} color="#2563eb" />}
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+          <TouchableOpacity style={styles.deductModalCloseBtn} onPress={() => setDeductPicker({ visible: false })}>
+            <Text style={styles.deductModalCloseBtnText}>ปิด</Text>
+          </TouchableOpacity>
+        </View>
+      </TouchableOpacity>
+    </Modal>
+    </>
   );
 }
 
@@ -561,7 +599,8 @@ export default function TravelAllowanceViewScreen({ driverId, requesterName: ini
 // ====================================================================
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#f4f7fb' },
+  // #f8fafc ให้ตรงกับพื้นหลังหน้าจอของอีก 3 โมดูล — เดิมใช้ #f4f7fb ต่างกันเล็กน้อย
+  safeArea: { flex: 1, backgroundColor: '#f8fafc' },
 
   topBar: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#1e293b', paddingHorizontal: 14, paddingTop: 12, paddingBottom: 8, flexWrap: 'wrap' },
   backBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 },
@@ -629,6 +668,23 @@ const styles = StyleSheet.create({
   deductChipActive: { backgroundColor: '#2563eb', borderColor: '#2563eb' },
   deductChipText: { fontSize: 10.5, fontWeight: '700', color: '#64748b' },
   deductChipTextActive: { color: '#fff' },
+  deductPickerTrigger: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+    backgroundColor: '#fff', borderWidth: 1.5, borderColor: '#e2e8f0', borderRadius: 8,
+    paddingHorizontal: 12, paddingVertical: 9, minWidth: 160,
+  },
+  deductPickerTriggerText: { fontSize: 11.5, fontWeight: '700', color: '#0f172a', flexShrink: 1 },
+  deductModalOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', justifyContent: 'center', padding: 24 },
+  deductModalSheet: { backgroundColor: '#fff', borderRadius: 16, padding: 16 },
+  deductModalTitle: { fontSize: 13.5, fontWeight: '800', color: '#0f172a', marginBottom: 10 },
+  deductModalOption: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingVertical: 12, paddingHorizontal: 10, borderRadius: 8,
+  },
+  deductModalOptionActive: { backgroundColor: '#eff6ff' },
+  deductModalOptionText: { fontSize: 12.5, fontWeight: '700', color: '#334155' },
+  deductModalCloseBtn: { marginTop: 8, alignSelf: 'center', paddingVertical: 8, paddingHorizontal: 20 },
+  deductModalCloseBtnText: { fontSize: 12, fontWeight: '700', color: '#94a3b8' },
 
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 8 },
   metaText: { fontSize: 10.5, color: '#64748b', fontWeight: '600' },

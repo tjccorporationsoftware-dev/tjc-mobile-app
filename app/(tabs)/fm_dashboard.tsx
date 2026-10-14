@@ -17,6 +17,7 @@ import {
 } from "react-native";
 
 // Config
+import { formatShortThaiDate, formatShortThaiDateTime } from "../../components/DateTimeField";
 import { API_BASE, IMG_BASE_URL } from "../../constants/config";
 import { useAuth } from "../_layout";
 
@@ -144,25 +145,10 @@ export default function FmDashboard() {
     return assistant ? assistant.name : "ไม่ระบุ";
   };
 
-  // 2. ฟังก์ชันจัดรูปแบบวันที่และเวลา (เช่น 12 ส.ค. 08:30 น.)
+  // 2. ฟังก์ชันจัดรูปแบบวันที่และเวลา (เช่น 12/8/69 08:30 น.) — ใช้ formatShortThaiDateTime กลางแอปแทนชื่อเดือนเต็ม
   const formatDateTime = (dateString: any) => {
     if (!dateString) return "-";
-    const d = new Date(dateString);
-    const months = [
-      "ม.ค.",
-      "ก.พ.",
-      "มี.ค.",
-      "เม.ย.",
-      "พ.ค.",
-      "มิ.ย.",
-      "ก.ค.",
-      "ส.ค.",
-      "ก.ย.",
-      "ต.ค.",
-      "พ.ย.",
-      "ธ.ค.",
-    ];
-    return `${d.getDate()} ${months[d.getMonth()]} ${d.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" })} น.`;
+    return formatShortThaiDateTime(dateString);
   };
 
   const generateChartData = async (year: number) => {
@@ -315,10 +301,10 @@ export default function FmDashboard() {
             ]}
           >
             {viewMode === "daily"
-              ? `วันที่ ${date.toLocaleDateString("th-TH", { day: "numeric", month: "long", year: "numeric" })}`
+              ? `วันที่ ${formatShortThaiDate(apiParam)}`
               : viewMode === "monthly"
-                ? `เดือน ${date.toLocaleDateString("th-TH", { month: "long", year: "numeric" })}`
-                : `ปี ${date.getFullYear() + 543}`}
+                ? `เดือน ${date.toLocaleDateString("th-TH", { month: "long" })} ${date.getFullYear()}`
+                : `ปี ${date.getFullYear()}`}
           </Text>
         </View>
 
@@ -717,12 +703,8 @@ export default function FmDashboard() {
               const groupedJobs: { [key: string]: any[] } = {};
               driverJobs.forEach((job: any) => {
                 if (!job.start_time) return;
-                const dateObj = new Date(job.start_time);
-                const dateKey = dateObj.toLocaleDateString("th-TH", {
-                  day: "numeric",
-                  month: "long",
-                  year: "numeric",
-                });
+                // ใช้ YYYY-MM-DD เป็น key จัดกลุ่ม แล้วแสดงผลแบบย่อ "5/9/69" ตอน render แทนชื่อเดือนเต็ม
+                const dateKey = String(job.start_time).slice(0, 10);
                 if (!groupedJobs[dateKey]) {
                   groupedJobs[dateKey] = [];
                 }
@@ -808,7 +790,7 @@ export default function FmDashboard() {
                                 color="#fff"
                               />
                               <Text style={dynamicStyles.dateBadgeText}>
-                                {dateKey}
+                                {formatShortThaiDate(dateKey)}
                               </Text>
                             </View>
                             <View
@@ -1188,10 +1170,11 @@ export default function FmDashboard() {
         <DateTimePicker
           value={date}
           mode="date"
-          onChange={(e, d) => {
+          onValueChange={(e, d) => {
             setShowDatePicker(false);
-            if (d) setDate(d);
+            setDate(d);
           }}
+          onDismiss={() => setShowDatePicker(false)}
         />
       )}
     </View>

@@ -23,6 +23,8 @@ import {
 import Animated, { FadeInDown, FadeInUp } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { API_BASE, IMG_BASE_URL } from "../../constants/config";
+// 🌟 รูปแบบวันที่สั้น "d/m/yy" มาตรฐานเดียวกันทั้งแอป แทน toLocaleDateString("th-TH")
+import { formatShortThaiDate } from "../../components/DateTimeField";
 
 const TAB_ID = "purchase";
 const ACTIVE_COLOR = "#059669"; // สีเขียว
@@ -40,6 +42,12 @@ const TH_MONTHS_FULL = [
   "พฤศจิกายน",
   "ธันวาคม",
 ];
+
+// 🌟 Date -> "d/m/yy" พ.ศ. 2 หลัก มาตรฐานเดียวกันทั้งแอป (ผ่าน formatShortThaiDate)
+const fmtShortDate = (d: Date) =>
+  formatShortThaiDate(
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`,
+  );
 
 export default function ManagerPurchase() {
   const router = useRouter();
@@ -313,7 +321,7 @@ export default function ManagerPurchase() {
               },
             ]}
           >
-            {i + 543}
+            {i}
           </Text>
         </TouchableOpacity>,
       );
@@ -517,7 +525,7 @@ export default function ManagerPurchase() {
                   {title}
                 </Text>
                 <Text style={styles.dateText}>
-                  {new Date(item.report_date).toLocaleDateString("th-TH")}
+                  {formatShortThaiDate(item.report_date)}
                 </Text>
                 <View
                   style={{
@@ -740,9 +748,7 @@ export default function ManagerPurchase() {
                       marginLeft: 8,
                     }}
                   >
-                    {startDate
-                      ? startDate.toLocaleDateString("th-TH")
-                      : "ทั้งหมด"}
+                    {startDate ? fmtShortDate(startDate) : "ทั้งหมด"}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -760,7 +766,7 @@ export default function ManagerPurchase() {
                   <Text
                     style={{ color: endDate ? "#333" : "#aaa", marginLeft: 8 }}
                   >
-                    {endDate ? endDate.toLocaleDateString("th-TH") : "ทั้งหมด"}
+                    {endDate ? fmtShortDate(endDate) : "ทั้งหมด"}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -1088,7 +1094,7 @@ export default function ManagerPurchase() {
                 <TouchableOpacity onPress={() => setPickerView("year")}>
                   <Text style={styles.calTitle}>
                     {" "}
-                    {pickerDate.getFullYear() + 543}
+                    {pickerDate.getFullYear()}
                   </Text>
                 </TouchableOpacity>
               </View>
