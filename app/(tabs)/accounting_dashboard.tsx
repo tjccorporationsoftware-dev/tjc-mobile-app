@@ -16,7 +16,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
@@ -841,6 +841,8 @@ export default function AccountingDashboard({
   const [projectList, setProjectList] = useState<Project[]>([]);
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
   const [yearPickerVisible, setYearPickerVisible] = useState(false);
+  // ตัวเลือกปีในป็อปอัพ — เริ่มด้วยปีปัจจุบัน แล้วแทนด้วยปีที่มีข้อมูลจริงจาก get_master_data
+  const [yearOptions, setYearOptions] = useState<number[]>([new Date().getFullYear()]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [offline, setOffline] = useState(false);
@@ -944,6 +946,15 @@ export default function AccountingDashboard({
     if (!userId) return;
     apiMobileGet(ACCOUNTING_API_URL, 'get_master_data', { user_id: userId })
       .then((res) => {
+        // ปีที่เลือกได้ = ปีที่มีโครงการจริง (get_master_data.years: DISTINCT YEAR(created_at) จาก projects)
+        // ปีไหนไม่มีข้อมูลก็ไม่ขึ้นให้กด — ถ้าปีที่เลือกอยู่ไม่มีข้อมูล เลื่อนไปปีล่าสุดที่มีข้อมูลให้เอง
+        if (Array.isArray(res.years) && res.years.length > 0) {
+          const ys: number[] = res.years.map((y: any) => Number(y)).filter((y: number) => y > 0);
+          if (ys.length > 0) {
+            setYearOptions(ys);
+            setSelectedYear((cur) => (ys.includes(cur) ? cur : ys[0]));
+          }
+        }
         setDebtOwnerOptions(Array.isArray(res.users) ? res.users.map(String) : []);
         if (Array.isArray(res.state_filters) && res.state_filters.length > 0) {
           setStateOptions(
@@ -1525,6 +1536,9 @@ export default function AccountingDashboard({
         animationType="slide"
         onRequestClose={() => setDetailModal({ visible: false, loading: false })}
       >
+        {/* iOS: Modal เป็นหน้าต่างแยก SafeAreaProvider ของแอปครอบไม่ถึง -> SafeAreaView ได้ระยะขอบ 0
+            หัวหน้า/ปุ่มกลับไปอยู่ใต้ notch กดไม่ได้ จึงต้องมี provider ของตัวเองใน Modal */}
+        <SafeAreaProvider>
         <SafeAreaView style={styles.safe}>
           <View style={styles.detailHeaderBar}>
             <Pressable onPress={() => setDetailModal({ visible: false, loading: false })} hitSlop={8} style={styles.detailHeaderBack}>
@@ -1555,6 +1569,7 @@ export default function AccountingDashboard({
             </ScrollView>
           )}
         </SafeAreaView>
+        </SafeAreaProvider>
       </Modal>
 
       <PaymentHistoryModal
@@ -1573,7 +1588,7 @@ export default function AccountingDashboard({
           <View style={styles.pickerModalSheet}>
             <Text style={styles.pickerModalTitle}>เลือกปี</Text>
             <ScrollView style={{ maxHeight: 380 }}>
-              {Array.from({ length: 7 }, (_, i) => new Date().getFullYear() - i).map((y) => {
+              {yearOptions.map((y) => {
                 const active = selectedYear === y;
                 return (
                   <Pressable
@@ -1780,8 +1795,8 @@ const styles = StyleSheet.create({
   filterInputs: { flexDirection: 'row', gap: 8 },
 
   // หน้ารายละเอียดเต็มจอ
-  detailHeaderBar: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#ffffff', paddingHorizontal: 10, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
-  detailHeaderBack: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  detailHeaderBar: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#ffffff', paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
+  detailHeaderBack: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   detailHeaderTitle: { flex: 1, color: '#0f172a', fontSize: 16, fontWeight: '900' },
   detailScroll: { padding: 14, paddingBottom: 36 },
   detailCard: { backgroundColor: '#ffffff', borderRadius: 18, padding: 14, elevation: 1 },

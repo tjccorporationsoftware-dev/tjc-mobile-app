@@ -31,7 +31,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Modal, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
 import { useAuth } from '../_layout';
 // ✅ Config
@@ -629,6 +629,8 @@ export default function ProjectDashboardScreen({ onNavigate }: ProjectDashboardS
   const [companyFilter, setCompanyFilter] = useState<string>('all');
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
   const [yearPickerVisible, setYearPickerVisible] = useState(false);
+  // ตัวเลือกปีในป็อปอัพ — เริ่มด้วยปีปัจจุบัน แล้วแทนด้วยปีที่มีข้อมูลจริงจาก get_master_data
+  const [yearOptions, setYearOptions] = useState<number[]>([new Date().getFullYear()]);
   const [kpi, setKpi] = useState<DashboardKpi>(EMPTY_KPI);
   const [kpiTotals, setKpiTotals] = useState({ inclCancel: 0, cancelled: 0 });
   const [kpiByCompany, setKpiByCompany] = useState<CompanyKpi[]>([]);
@@ -705,6 +707,15 @@ export default function ProjectDashboardScreen({ onNavigate }: ProjectDashboardS
     if (!userId) return;
     try {
       const res = await apiMobileGet(PROJECT_API_URL, 'get_master_data', { user_id: userId, year: selectedYear });
+      // ปีที่เลือกได้ = ปีที่มีโครงการจริง (get_master_data.years: DISTINCT YEAR(created_at) จาก projects)
+      // ปีไหนไม่มีข้อมูลก็ไม่ขึ้นให้กด — ถ้าปีที่เลือกอยู่ไม่มีข้อมูล เลื่อนไปปีล่าสุดที่มีข้อมูลให้เอง
+      if (Array.isArray(res.years) && res.years.length > 0) {
+        const ys: number[] = res.years.map((y: any) => Number(y)).filter((y: number) => y > 0);
+        if (ys.length > 0) {
+          setYearOptions(ys);
+          setSelectedYear((cur) => (ys.includes(cur) ? cur : ys[0]));
+        }
+      }
       // รายชื่อบริษัททั้งหมด (เรียงตาม list_order แบบเว็บ) — kpi_by_company มีเฉพาะบริษัทที่มีงานในปีนั้น
       if (Array.isArray(res.companies)) {
         setMasterCompanies(
@@ -1813,9 +1824,12 @@ export default function ProjectDashboardScreen({ onNavigate }: ProjectDashboardS
     const close = () => setCanceledModal((s) => ({ ...s, visible: false }));
     return (
       <Modal visible={canceledModal.visible} animationType="slide" onRequestClose={close}>
+        {/* iOS: Modal เป็นหน้าต่างแยก SafeAreaProvider ของแอปครอบไม่ถึง -> SafeAreaView ได้ระยะขอบ 0
+            หัวหน้า/ปุ่มกลับไปอยู่ใต้ notch กดไม่ได้ จึงต้องมี provider ของตัวเองใน Modal */}
+        <SafeAreaProvider>
         <SafeAreaView style={styles.safeArea}>
           <View style={styles.canceledHeaderBar}>
-            <TouchableOpacity onPress={close} hitSlop={8} style={{ padding: 4 }}>
+            <TouchableOpacity onPress={close} hitSlop={8} style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}>
               <Ionicons name="chevron-back" size={22} color="#0f172a" />
             </TouchableOpacity>
             <Text style={styles.canceledHeaderTitle}>ประวัติงานยกเลิก (ปี ค.ศ. {selectedYear})</Text>
@@ -1855,6 +1869,7 @@ export default function ProjectDashboardScreen({ onNavigate }: ProjectDashboardS
             </ScrollView>
           )}
         </SafeAreaView>
+        </SafeAreaProvider>
       </Modal>
     );
   }
@@ -2332,6 +2347,9 @@ export default function ProjectDashboardScreen({ onNavigate }: ProjectDashboardS
 
     return (
       <Modal visible={detailModal.visible} animationType="slide" onRequestClose={closeDetail}>
+        {/* iOS: Modal เป็นหน้าต่างแยก SafeAreaProvider ของแอปครอบไม่ถึง -> SafeAreaView ได้ระยะขอบ 0
+            หัวหน้า/ปุ่มกลับไปอยู่ใต้ notch กดไม่ได้ จึงต้องมี provider ของตัวเองใน Modal */}
+        <SafeAreaProvider>
         <SafeAreaView style={styles.safeArea}>
           <View style={styles.detailHeaderBar}>
             <TouchableOpacity onPress={closeDetail} style={styles.detailHeaderBtn}>
@@ -2502,6 +2520,7 @@ export default function ProjectDashboardScreen({ onNavigate }: ProjectDashboardS
             </View>
           </Modal>
         </SafeAreaView>
+        </SafeAreaProvider>
       </Modal>
     );
   }
@@ -2930,7 +2949,7 @@ export default function ProjectDashboardScreen({ onNavigate }: ProjectDashboardS
           <View style={styles.pickerModalSheet}>
             <Text style={styles.pickerModalTitle}>เลือกปี</Text>
             <ScrollView style={{ maxHeight: 380 }}>
-              {Array.from({ length: 7 }, (_, i) => new Date().getFullYear() - i).map((y) => {
+              {yearOptions.map((y) => {
                 const active = selectedYear === y;
                 return (
                   <TouchableOpacity
@@ -4123,8 +4142,8 @@ const styles = StyleSheet.create({
   quickActionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, paddingHorizontal: 10, minHeight: 44 },
   quickActionBtnText: { fontSize: 12, fontWeight: '700', color: '#334155' },
 
-  detailHeaderBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 8, paddingVertical: 10, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
-  detailHeaderBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  detailHeaderBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
+  detailHeaderBtn: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
   detailHeaderTitle: { flex: 1, textAlign: 'center', fontSize: 15, fontWeight: '800', color: '#0f172a' },
   detailScrollContent: { padding: 16, paddingBottom: 40, gap: 8 },
   detailTopCard: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 14, padding: 14 },
