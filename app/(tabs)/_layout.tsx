@@ -2,16 +2,16 @@
 
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import axios from "axios";
+import { LinearGradient } from "expo-linear-gradient";
 import {
+  Drawer,
   DrawerContentScrollView,
   DrawerItem,
   DrawerToggleButton,
   useDrawerStatus,
-} from "@react-navigation/drawer";
-import axios from "axios";
-import { LinearGradient } from "expo-linear-gradient";
-import { Drawer } from "expo-router/drawer";
-import React, { useEffect, useState } from "react";
+} from "expo-router/drawer";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -23,6 +23,7 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+;
 
 import { API_BASE, API_TASKS_URL } from "../../constants/config";
 import { useAuth } from "../_layout";
@@ -80,7 +81,7 @@ const MENU_GROUPS = [
   {
     id: "vehicle_groups",
     title: "ขนส่ง",
-    items: ["fm_dashboard", "fm_jobs", "alert_screen"],
+    items: ["fm_dashboard", "fm_jobs", "alert_screen", "fm_report_travel"],
   },
   {
     id: "driver_group",
@@ -91,6 +92,21 @@ const MENU_GROUPS = [
     id: "immigration_groups",
     title: "งานเข้าเมือง",
     items: ["Immigration_dashboard", "Immigration_Report"],
+  },
+  {
+    id: "project_group",
+    title: "แดชบอร์ดโครงการ",
+    items: ["project_dashboard"],
+  },
+  {
+    id: "accounting_group",
+    title: "หมวดบัญชี-การเงิน (โครงการ)",
+    items: ["accounting_dashboard"],
+  },
+  {
+    id: "document_group",
+    title: "หมวดเอกสารโครงการ",
+    items: ["document_dashboard"],
   },
 ];
 
@@ -710,6 +726,24 @@ export default function DrawerLayout() {
           "vehicle_alerts.php",
         )}
       />
+      {/* 🌟 เบี้ยเลี้ยงขนส่ง — เมนูหลัก มองเห็นได้ */}
+      <Drawer.Screen
+        name="fm_report_travel"
+        options={getDrawerOptions(
+          "เบี้ยเลี้ยงขนส่ง",
+          "wallet-outline",
+          "fm_report_travel.php",
+        )}
+      />
+      {/* sub-screen ของเบี้ยเลี้ยงขนส่ง — เปิดจากปุ่มในหน้า fm_report_travel เอง ไม่โชว์ในเมนู */}
+      <Drawer.Screen
+        name="fm_report_travel_form"
+        options={{ drawerItemStyle: { display: "none" }, headerTitle: "กรอกข้อมูลค่าเบี้ยเลี้ยง" }}
+      />
+      <Drawer.Screen
+        name="fm_report_travel_view"
+        options={{ drawerItemStyle: { display: "none" }, headerTitle: "ใบขออนุมัติเบิกจ่ายค่าเบี้ยเลี้ยง" }}
+      />
       <Drawer.Screen
         name="DriverTasks"
         options={getDrawerOptions(
@@ -757,11 +791,46 @@ export default function DrawerLayout() {
           "correspondence_book.php",
         )}
       />
-      {/* หน้าที่ซ่อน */}
+      {/* 8. แดชบอร์ดโครงการ (โมดูลใหม่ - หน้าตาเท่านั้น) */}
       <Drawer.Screen
-        name="index"
-        options={{ drawerItemStyle: { display: "none" }, headerShown: false }}
+        name="project_dashboard"
+        options={getDrawerOptions(
+          "แดชบอร์ดโครงการ",
+          "briefcase",
+          "project_dashboard.php", // TODO: ปรับชื่อไฟล์สิทธิ์ให้ตรงกับ backend จริง
+        )}
       />
+      {/* sub-screen ของแดชบอร์ดโครงการ — เปิดจากปุ่มลัดในหน้านั้นเอง ไม่โชว์ในเมนู */}
+      <Drawer.Screen name="Estimatedashboard" options={{ drawerItemStyle: { display: "none" } }} />
+      <Drawer.Screen name="checkcost" options={{ drawerItemStyle: { display: "none" } }} />
+      <Drawer.Screen name="Guaranteetracking" options={{ drawerItemStyle: { display: "none" } }} />
+      <Drawer.Screen name="Guaranteeupdate" options={{ drawerItemStyle: { display: "none" } }} />
+      <Drawer.Screen name="Checkincompleteproject" options={{ drawerItemStyle: { display: "none" } }} />
+      <Drawer.Screen name="createproject" options={{ drawerItemStyle: { display: "none" } }} />
+      {/* 9. หมวดบัญชี-การเงิน (โครงการ) */}
+      <Drawer.Screen
+        name="accounting_dashboard"
+        options={getDrawerOptions(
+          "แดชบอร์ดบัญชีลูกหนี้",
+          "cash",
+          "accounting_dashboard.php", // TODO: ปรับชื่อไฟล์สิทธิ์ให้ตรงกับ backend จริง
+        )}
+      />
+      <Drawer.Screen name="projectfollowup" options={{ drawerItemStyle: { display: "none" } }} />
+      <Drawer.Screen name="projectaccounting" options={{ drawerItemStyle: { display: "none" } }} />
+      <Drawer.Screen name="CostCheckScreen" options={{ drawerItemStyle: { display: "none" } }} />
+      {/* 10. หมวดเอกสารโครงการ */}
+      <Drawer.Screen
+        name="document_dashboard"
+        options={getDrawerOptions(
+          "เอกสาร PO/AX",
+          "folder-open",
+          "document_dashboard.php", // TODO: ปรับชื่อไฟล์สิทธิ์ให้ตรงกับ backend จริง
+        )}
+      />
+      <Drawer.Screen name="submitdocument" options={{ drawerItemStyle: { display: "none" } }} />
+
+      {/* หน้าที่ซ่อน */}
       <Drawer.Screen
         name="AdminDashboard"
         options={{ drawerItemStyle: { display: "none" } }}

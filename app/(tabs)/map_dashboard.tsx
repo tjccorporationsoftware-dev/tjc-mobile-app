@@ -17,6 +17,7 @@ import {
 import MapView, { Callout, Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { API_BASE, IMG_BASE_URL } from "../../constants/config";
+import { formatShortThaiDate } from "../../components/DateTimeField";
 
 const COLOR_PRIMARY = "#4e54c8";
 
@@ -56,11 +57,8 @@ export default function MapDashboardScreen() {
 
   const formatDateDisplay = (date: Date | null) => {
     if (!date) return "ทั้งหมด"; // ✅ แสดงคำว่าทั้งหมด
-    return date.toLocaleDateString("th-TH", {
-      day: "2-digit",
-      month: "2-digit",
-      year: "numeric",
-    });
+    // แสดงผลย่อ "5/9/69" (d/m/yy พ.ศ. 2 หลัก) ให้ตรงกับรูปแบบเดียวกันทั้งแอป
+    return formatShortThaiDate(formatDateForAPI(date));
   };
 
   const getPinColor = (status: string) => {
@@ -180,15 +178,13 @@ export default function MapDashboardScreen() {
     setShowPicker(true);
   };
 
-  const onDateChange = (event: any, selectedDate?: Date) => {
+  const onDateChange = (event: any, selectedDate: Date) => {
     if (Platform.OS === "android") {
       setShowPicker(false);
-      if (selectedDate) {
-        if (pickerMode === "start") setStartDate(selectedDate);
-        else setEndDate(selectedDate);
-      }
+      if (pickerMode === "start") setStartDate(selectedDate);
+      else setEndDate(selectedDate);
     } else {
-      if (selectedDate) setTempDate(selectedDate);
+      setTempDate(selectedDate);
     }
   };
 
@@ -271,7 +267,7 @@ export default function MapDashboardScreen() {
                     <Text style={[styles.statusText, { color: color }]}>
                       ● {marker.status}
                     </Text>
-                    <Text style={styles.dateText}>📅 {marker.date}</Text>
+                    <Text style={styles.dateText}>📅 {formatShortThaiDate(marker.date)}</Text>
                   </View>
                 </View>
                 <View style={styles.arrowBorder} />
@@ -499,7 +495,7 @@ export default function MapDashboardScreen() {
                         </Text>
                         <View style={styles.jobMeta}>
                           <Text style={{ fontSize: 11, color: "#888" }}>
-                            {item.date}
+                            {formatShortThaiDate(item.date)}
                           </Text>
                           <View
                             style={[
@@ -549,8 +545,8 @@ export default function MapDashboardScreen() {
                   value={tempDate}
                   mode="date"
                   display="inline"
-                  locale="th-TH"
-                  onChange={onDateChange}
+                  locale="th-TH@calendar=gregorian"
+                  onValueChange={onDateChange}
                   themeVariant="light"
                 />
                 <TouchableOpacity
@@ -569,7 +565,8 @@ export default function MapDashboardScreen() {
             value={(pickerMode === "start" ? startDate : endDate) || new Date()}
             mode="date"
             display="default"
-            onChange={onDateChange}
+            onValueChange={onDateChange}
+            onDismiss={() => setShowPicker(false)}
           />
         ))}
     </View>

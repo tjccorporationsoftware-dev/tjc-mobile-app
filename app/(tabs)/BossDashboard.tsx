@@ -454,7 +454,7 @@ const handleReadTask = async (taskId: string) => {
         }
     }
 };
-    const pickImage = async () => { let result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsMultipleSelection: true, quality: 0.7, }); if (!result.canceled) setWorkImages([...workImages, ...result.assets]); };
+    const pickImage = async () => { let result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsMultipleSelection: true, quality: 0.7, }); if (!result.canceled) setWorkImages([...workImages, ...result.assets]); };
     const removeImage = (index: number) => { const newImgs = [...workImages]; newImgs.splice(index, 1); setWorkImages(newImgs); };
     const handleDeleteTask = () => { showConfirm('ยืนยันลบงาน', 'คุณต้องการลบรายการงานนี้ถาวรหรือไม่?', 'danger', 'ลบงาน', () => submitAction('delete_task')); };
   const submitAction = async (actionType: string) => {

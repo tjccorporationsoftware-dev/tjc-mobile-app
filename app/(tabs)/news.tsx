@@ -24,56 +24,22 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { API_BASE } from "../../constants/config";
+import { formatShortThaiDate, formatShortThaiDateTime } from "../../components/DateTimeField";
 
 const NEWS_IMG_BASE =
   API_BASE.replace("/api_mobile.php", "") + "/uploads/news/";
 
-// Helper to format Thai Date short version (e.g. 19 ม.ค. 2569 10:30 น.)
+// Helper to format Thai Date short version (e.g. 19/1/69 10:30 น.)
 const formatThaiDateShort = (dateString: string) => {
-  if (!dateString) return "-";
-  const date = new Date(dateString);
-  const months = [
-    "ม.ค.",
-    "ก.พ.",
-    "มี.ค.",
-    "เม.ย.",
-    "พ.ค.",
-    "มิ.ย.",
-    "ก.ค.",
-    "ส.ค.",
-    "ก.ย.",
-    "ต.ค.",
-    "พ.ย.",
-    "ธ.ค.",
-  ];
-  const day = date.getDate();
-  const month = months[date.getMonth()];
-  const year = date.getFullYear() + 543;
-  const hours = date.getHours().toString().padStart(2, "0");
-  const minutes = date.getMinutes().toString().padStart(2, "0");
-  return `${day} ${month} ${year} ${hours}:${minutes} น.`;
+  return formatShortThaiDateTime(dateString);
 };
 
 // Helper for date filter label
 const formatThaiDateObj = (date: Date) => {
-  const months = [
-    "ม.ค.",
-    "ก.พ.",
-    "มี.ค.",
-    "เม.ย.",
-    "พ.ค.",
-    "มิ.ย.",
-    "ก.ค.",
-    "ส.ค.",
-    "ก.ย.",
-    "ต.ค.",
-    "พ.ย.",
-    "ธ.ค.",
-  ];
-  const day = date.getDate();
-  const month = months[date.getMonth()];
-  const year = date.getFullYear() + 543;
-  return `${day} ${month} ${year}`;
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return formatShortThaiDate(`${y}-${m}-${d}`);
 };
 
 export default function NewsScreen() {
@@ -181,9 +147,9 @@ export default function NewsScreen() {
 
   const handleSearch = () => fetchNews();
 
-  const onDateChange = (event: any, date?: Date) => {
+  const onDateChange = (event: any, date: Date) => {
     if (Platform.OS === "android") setShowDatePicker(false);
-    if (date) setSelectedDate(date);
+    setSelectedDate(date);
   };
 
   const clearDateFilter = () => setSelectedDate(null);
@@ -412,8 +378,8 @@ export default function NewsScreen() {
                   value={selectedDate || new Date()}
                   mode="date"
                   display="inline"
-                  locale="th-TH"
-                  onChange={onDateChange}
+                  locale="th-TH@calendar=gregorian"
+                  onValueChange={onDateChange}
                   maximumDate={new Date()}
                   style={{ height: 300 }}
                 />
@@ -425,7 +391,8 @@ export default function NewsScreen() {
             value={selectedDate || new Date()}
             mode="date"
             display="default"
-            onChange={onDateChange}
+            onValueChange={onDateChange}
+            onDismiss={() => setShowDatePicker(false)}
             maximumDate={new Date()}
           />
         ))}

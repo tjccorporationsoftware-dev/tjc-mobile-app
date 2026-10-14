@@ -308,7 +308,7 @@ export default function AdminReport() {
     try {
       let result;
       const options: ImagePicker.ImagePickerOptions = {
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         quality: 0.7,
         allowsEditing: false,
       };

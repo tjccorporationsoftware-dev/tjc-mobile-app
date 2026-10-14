@@ -1,553 +1,415 @@
-import { useFocusEffect, useRouter } from "expo-router";
-import { Calendar, ChevronRight, FileText, Truck } from "lucide-react-native";
-import React, { useCallback, useRef, useState } from "react";
-import {
-  FlatList,
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from "react-native";
-// 🌟 1. เพิ่มการ Import AsyncStorage เพื่อดึงข้อมูล User ที่ล็อกอินไว้
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { API_BASE } from "../../constants/config";
+/**
+ * DriverTasksScreen.tsx
+ * ------------------------------------------------------------------
+ * Mobile mockup ของหน้า driver_tasks.php ("ระบบคนรถ - ยืนยันการส่งของ" / งานจัดส่งของฉัน)
+ * สำหรับแอป tjc-mobile-app (Expo / React Native)
+ *
+ * สถานะไฟล์นี้: เชื่อม API จริงแล้ว (GET action=get_driver_tasks ผ่าน api_mobile.php) — action/param
+ * name เป็นการเดาตาม pattern ในเอกสารโปรเจกต์ ยังไม่ได้ยืนยันกับ backend จริง
+ *
+ * ตรงกับพฤติกรรมจริงจาก driver_tasks.php:
+ *  - ผู้ใช้ปัจจุบันถ้าอยู่ใน driver_list หรือ helper_list และมีงานสถานะ "กำลังจัดส่ง" ค้างอยู่
+ *    ระบบจะพรีเซ็ตตัวกรองเป็นชื่อตัวเองอัตโนมัติ (default_driver/default_helper +
+ *    has_pending_task) — จำลองไว้ด้วย CURRENT_USER ด้านล่าง
+ *  - ตัวกรอง: สถานะ (กำลังจัดส่ง/เสร็จสิ้นแล้ว/ทั้งหมด — ค่าเริ่มต้น 'pending'), คนขับ, คนรถ,
+ *    ช่วงวันที่ — กรองแบบ AND ทั้งหมดเหมือนต้นฉบับ
+ *  - เลขหน้างานที่โชว์ตัดมาจาก delivery_no รูปแบบ "69-70-1" -> เอาส่วนกลาง (index 1) เหมือน PHP
+ *    explode('-', ...) ถ้าไม่ใช่ 3 ส่วนจะ fallback ไปจับเลขท้ายสุดด้วย regex
+ *  - งานที่ pending_items = 0 ถือว่า "เสร็จสิ้น" (ปุ่มเปลี่ยนเป็น "ดูประวัติการจัดส่ง")
+ *    งานที่ยังมี pending_items > 0 ปุ่มเป็น "ตรวจสอบหน้างาน" ไปหน้า driver_confirm_items.php?do_no=
+ *
+ * ที่ยังไม่ได้ทำ (นอกขอบเขต "หน้ารายการหลัก" รอบนี้):
+ *  - (อัปเดต) ปุ่ม "ตรวจสอบหน้างาน" เชื่อมกับหน้า DriverConfirmItems.tsx จริงแล้ว ผ่าน
+ *    expo-router: router.push({ pathname: '/DriverConfirmItems', params: { do_no } }) —
+ *    สมมติว่าไฟล์นั้นอยู่ที่ app/DriverConfirmItems.tsx (ตาม pattern เดียวกับ router.push("/DriverTasks")
+ *    ที่ใช้ย้อนกลับมาไฟล์นี้) ถ้า path จริงไม่ตรงนี้ ให้แก้ pathname ในฟังก์ชัน handleAction
+ *  - ปฏิทินเลือกช่วงวันที่แบบ native (ใช้ TextInput ธรรมดาไปก่อน เพื่อไม่ต้องเพิ่ม native module)
+ *
+ * ต้องติดตั้ง (ถ้ายังไม่มี): npx expo install @expo/vector-icons
+ * ------------------------------------------------------------------
+ */
 
-export default function DriverTasks() {
-  const [tasks, setTasks] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<
-    "pending" | "completed" | "all"
-  >("pending");
-  const [dropdownVisible, setDropdownVisible] = useState(false);
-  // 🌟 1. เพิ่ม State สำหรับตัวกรอง คนขับ และ คนรถ
-  const [driverFilter, setDriverFilter] = useState("");
-  const [helperFilter, setHelperFilter] = useState("");
-  const [driverList, setDriverList] = useState<string[]>([]);
-  const [helperList, setHelperList] = useState<string[]>([]);
-  // 🌟 เพิ่ม State จำชื่อ User ปัจจุบัน เพื่อใช้ตอนกดล้างค่า
-  const [loggedInUser, setLoggedInUser] = useState("");
-  const isFirstLoad = useRef(true);
-  const [driverDropdownVisible, setDriverDropdownVisible] = useState(false);
-  const [helperDropdownVisible, setHelperDropdownVisible] = useState(false);
+import { FontAwesome5, Ionicons } from '@expo/vector-icons';
+import axios from 'axios';
+import { useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, FlatList, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+
+import { useAuth } from '../_layout';
+// ✅ Config
+import { API_BASE } from '../../constants/config';
+
+// action ด้านล่างเป็นการเดาจาก pattern api_mobile.php (driver tasks) ตาม CLAUDE.md — ยังไม่ได้ยืนยันกับ backend จริง
+const API_URL = `${API_BASE}/api_mobile.php`;
+
+// ====================================================================
+// Types
+// ====================================================================
+
+type StatusFilter = 'pending' | 'completed' | 'all';
+
+interface DeliveryTask {
+  id: string;
+  deliveryNo: string; // เช่น "69-70-1"
+  deliveryDateShow: string; // แสดงผลแบบ dd/mm/yyyy + เวลา
+  driverName: string;
+  helperName?: string;
+  receiverName: string;
+  totalItems: number;
+  totalQty: number;
+  isCompleted: boolean;
+}
+
+export interface DriverTasksScreenProps {
+  onBack?: () => void;
+  onOpenConfirmItems?: (deliveryNo: string) => void;
+}
+
+// ====================================================================
+// Mock data
+// ====================================================================
+
+const DEFAULT_DRIVER_LIST: string[] = [];
+const DEFAULT_HELPER_LIST: string[] = [];
+
+// แปลงข้อมูลดิบจาก backend ให้เข้ารูป DeliveryTask — รองรับหลายชื่อ field เพราะยังไม่มี spec ยืนยัน
+function mapTask(raw: any): DeliveryTask {
+  return {
+    id: String(raw.id ?? raw.delivery_id ?? raw.deliveryNo ?? raw.delivery_no),
+    deliveryNo: String(raw.deliveryNo ?? raw.delivery_no ?? ''),
+    deliveryDateShow: String(raw.deliveryDateShow ?? raw.delivery_date_show ?? raw.delivery_date ?? ''),
+    driverName: String(raw.driverName ?? raw.driver_name ?? ''),
+    helperName: raw.helperName ?? raw.helper_name ?? undefined,
+    receiverName: String(raw.receiverName ?? raw.receiver_name ?? ''),
+    totalItems: Number(raw.totalItems ?? raw.total_items ?? 0),
+    totalQty: Number(raw.totalQty ?? raw.total_qty ?? 0),
+    isCompleted: Boolean(raw.isCompleted ?? raw.is_completed ?? (Number(raw.pending_items ?? 0) === 0)),
+  };
+}
+
+// ====================================================================
+// Helpers
+// ====================================================================
+
+// เทียบเท่า explode('-', $delivery_no) แล้วเอา index 1 ถ้ามี >=3 ส่วน ไม่งั้น fallback regex เลขท้าย
+function displayDeliveryNo(deliveryNo: string): string {
+  const parts = deliveryNo.split('-');
+  if (parts.length >= 3) return parts[1];
+  const m = deliveryNo.match(/-(\d+)$/);
+  return m ? m[1] : deliveryNo;
+}
+
+function senderLabel(task: DeliveryTask): string {
+  return task.helperName ? `คนขับ: ${task.driverName} | คนรถ: ${task.helperName}` : `คนขับ: ${task.driverName}`;
+}
+
+// ====================================================================
+// Main screen
+// ====================================================================
+
+export default function DriverTasksScreen({ onBack, onOpenConfirmItems }: DriverTasksScreenProps) {
   const router = useRouter();
+  const { user } = useAuth();
+  const currentUserLabel = user?.fullname || user?.username || '';
 
-  const filterOptions = [
-    { label: "งานที่กำลังจัดส่ง", value: "pending" },
-    { label: "งานที่เสร็จสิ้นแล้ว", value: "completed" },
-    { label: "ดูงานทั้งหมด", value: "all" },
-  ];
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('pending');
+  const [driverFilter, setDriverFilter] = useState('');
+  const [helperFilter, setHelperFilter] = useState('');
+  const [dateFilter, setDateFilter] = useState('');
 
-  const fetchTasks = async () => {
-    setLoading(true);
+  const [tasks, setTasks] = useState<DeliveryTask[]>([]);
+  const [driverList, setDriverList] = useState<string[]>(DEFAULT_DRIVER_LIST);
+  const [helperList, setHelperList] = useState<string[]>(DEFAULT_HELPER_LIST);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const presetAppliedRef = useRef(false);
+
+  const loadData = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
+    setError(null);
     try {
-      const userJson = await AsyncStorage.getItem("user");
-      let fullname = "";
-      let role = "";
+      const res = await axios.get(API_URL, { params: { action: 'get_driver_tasks', username: user?.username } });
+      const data = res.data;
+      const rawTasks = Array.isArray(data) ? data : data?.tasks ?? data?.data ?? [];
+      const mapped: DeliveryTask[] = rawTasks.map(mapTask);
+      setTasks(mapped);
+      if (Array.isArray(data?.drivers) && data.drivers.length) setDriverList(data.drivers);
+      if (Array.isArray(data?.helpers) && data.helpers.length) setHelperList(data.helpers);
 
-      if (userJson) {
-        const user = JSON.parse(userJson);
-        fullname = (user.fullname || user.name || "").trim();
-        role = user.role || "staff";
-        setLoggedInUser(fullname); // 🌟 จำชื่อไว้
+      // ค่าเริ่มต้นของตัวกรอง: ถ้าผู้ใช้ปัจจุบันมีงานค้างอยู่ ให้พรีเซ็ตเป็นชื่อตัวเอง เหมือนต้นฉบับ (has_pending_task)
+      if (!presetAppliedRef.current) {
+        presetAppliedRef.current = true;
+        const hasPending = mapped.some((t) => !t.isCompleted && (t.driverName === currentUserLabel || t.helperName === currentUserLabel));
+        if (hasPending) setDriverFilter(currentUserLabel);
       }
-
-      const url = `${API_BASE}/api_mobile.php?action=get_driver_tasks&status=${statusFilter}&fullname=${encodeURIComponent(fullname)}&role=${encodeURIComponent(role)}`;
-
-      const response = await fetch(url);
-      const json = await response.json();
-      const fetchedTasks = json.data || [];
-
-      // 🌟 2. แยกรายชื่อคนขับและคนรถจากข้อมูลที่โหลดมา (เลียนแบบเว็บ)
-      let dList: string[] = [];
-      let hList: string[] = [];
-      fetchedTasks.forEach((t: any) => {
-        const str = t.sender_name || "";
-        const dMatch = str.match(/คนขับ:\s*([^|]+)/);
-        if (dMatch && dMatch[1]) {
-          const name = dMatch[1].trim();
-          if (!dList.includes(name)) dList.push(name);
-        }
-        const hMatch = str.match(/คนรถ:\s*([^|]+)/);
-        if (hMatch && hMatch[1]) {
-          const name = hMatch[1].trim();
-          if (!hList.includes(name)) hList.push(name);
-        }
-      });
-
-      setDriverList(dList.sort());
-      setHelperList(hList.sort());
-
-      // 🌟 3. เลือกชื่อคนขับ/คนรถอัตโนมัติ (ทำครั้งแรกที่โหลดเจอรายชื่อ)
-      if (isFirstLoad.current && fullname) {
-        if (dList.length > 0 || hList.length > 0) {
-          const cleanFullname = fullname.replace(/\s+/g, '').toLowerCase();
-
-          const matchedDriver = dList.find((name) => {
-            const cleanName = name.replace(/\s+/g, '').toLowerCase();
-            return cleanFullname.includes(cleanName) || cleanName.includes(cleanFullname);
-          });
-
-          const matchedHelper = hList.find((name) => {
-            const cleanName = name.replace(/\s+/g, '').toLowerCase();
-            return cleanFullname.includes(cleanName) || cleanName.includes(cleanFullname);
-          });
-
-          if (matchedDriver) {
-            setDriverFilter(matchedDriver);
-            isFirstLoad.current = false;
-          } else if (matchedHelper) {
-            setHelperFilter(matchedHelper);
-            isFirstLoad.current = false;
-          } else {
-            // ถ้าดึงข้อมูลมาแล้วแต่ไม่เจอชื่อเลย ให้ถือว่าเช็คเสร็จแล้ว
-            if (fetchedTasks.length > 0) {
-              isFirstLoad.current = false;
-            }
-          }
-        }
-      }
-
-      
-      setTasks(fetchedTasks);
-    } catch (error) {
-      console.error("Fetch Tasks Error:", error);
+    } catch (e) {
+      console.error('load get_driver_tasks failed', e);
+      setError('โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่อีกครั้ง');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
-  };
+  }, [user?.username, currentUserLabel]);
 
-  // 🌟 4. ฟังก์ชันกรองข้อมูลแบบ Local (ปรับปรุงให้กรองแม่นยำขึ้น)
-  const filteredTasks = tasks.filter((task) => {
-    const str: string = task.sender_name || "";
-    const segments = str.split("|"); // แยกส่วน "คนขับ" กับ "คนรถ" ออกจากกัน
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
-    if (driverFilter) {
-      // หาเฉพาะส่วนที่มีคำว่า "คนขับ" แล้วเช็คว่ามีชื่อที่เลือกอยู่ไหม
-      const driverPart = segments.find((s: string) => s.includes("คนขับ:")) || "";
-      if (!driverPart.includes(driverFilter)) return false;
-    }
+  function onRefresh() {
+    setRefreshing(true);
+    loadData({ silent: true });
+  }
 
-    if (helperFilter) {
-      // หาเฉพาะส่วนที่มีคำว่า "คนรถ" แล้วเช็คว่ามีชื่อที่เลือกอยู่ไหม
-      const helperPart = segments.find((s: string) => s.includes("คนรถ:")) || "";
-      if (!helperPart.includes(helperFilter)) return false;
-    }
+  const filtered = useMemo(() => {
+    return tasks.filter((t) => {
+      if (statusFilter === 'pending' && t.isCompleted) return false;
+      if (statusFilter === 'completed' && !t.isCompleted) return false;
+      if (driverFilter && t.driverName !== driverFilter) return false;
+      if (helperFilter && t.helperName !== helperFilter) return false;
+      if (dateFilter.trim()) {
+        // mock: จับคู่แบบ substring ง่ายๆ กับวันที่ที่แสดง (ของจริงเทียบช่วงวันที่จาก DB)
+        if (!t.deliveryDateShow.includes(dateFilter.trim())) return false;
+      }
+      return true;
+    });
+  }, [tasks, statusFilter, driverFilter, helperFilter, dateFilter]);
 
-    return true;
-  });
+  function resetFilters() {
+    setStatusFilter('pending');
+    setDriverFilter('');
+    setHelperFilter('');
+    setDateFilter('');
+  }
 
-  useFocusEffect(
-    useCallback(() => {
-      fetchTasks();
-    }, [statusFilter]),
-  );
+  function handleAction(task: DeliveryTask) {
+    if (onOpenConfirmItems) return onOpenConfirmItems(task.deliveryNo);
+    // เชื่อมจริงกับหน้า DriverConfirmItems.tsx ที่มีอยู่แล้ว — อ่านค่าผ่าน useLocalSearchParams().do_no
+    // ปรับ pathname ตรงนี้ถ้าไฟล์จริงไม่ได้อยู่ที่ app/DriverConfirmItems.tsx (root ของ app/)
+    router.push({ pathname: '/DriverConfirmItems', params: { do_no: task.deliveryNo } });
+  }
 
-  const renderItem = ({ item }: { item: any }) => {
-    const isCompleted = parseInt(item.pending_items) === 0;
-
+  function renderHeader() {
     return (
-      <TouchableOpacity
-        style={[
-          styles.card,
-          { borderLeftColor: isCompleted ? "#10b981" : "#f59e0b" },
-        ]}
-        onPress={() =>
-          router.push({
-            pathname: "/DriverConfirmItems" as any,
-            params: { do_no: item.delivery_no },
-          })
-        }
-      >
-        <View style={styles.cardHeader}>
-          <View style={styles.doBadge}>
-            <FileText size={14} color="#1e3a8a" />
-            <Text style={styles.doText}>
-              {item.delivery_no.split("-")[1] || item.delivery_no}
-            </Text>
+      <View>
+        <View style={styles.titleBar}>
+          {onBack ? (
+            <TouchableOpacity onPress={onBack} style={styles.backBtn}>
+              <Ionicons name="chevron-back" size={20} color="#fff" />
+            </TouchableOpacity>
+          ) : (
+            <View style={{ width: 32 }} />
+          )}
+          <View style={{ flex: 1 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <FontAwesome5 name="truck-moving" size={15} color="#fff" />
+              <Text style={styles.title}>งานจัดส่งของฉัน</Text>
+            </View>
+            <Text style={styles.subtitle}>รายการสินค้าที่กำลังนำส่งโดย: {currentUserLabel}</Text>
           </View>
-          <Text
-            style={[
-              styles.statusText,
-              { color: isCompleted ? "#10b981" : "#d97706" },
-            ]}
-          >
-            {isCompleted ? "ส่งสำเร็จแล้ว" : "กำลังจัดส่ง"}
-          </Text>
         </View>
 
-        <View style={styles.cardBody}>
-          <View style={styles.infoRow}>
-            <Truck size={16} color="#64748b" />
-            <Text style={styles.infoText} numberOfLines={1}>
-              {item.sender_name}
-            </Text>
-          </View>
-          <View style={styles.infoRow}>
-            <Calendar size={16} color="#64748b" />
-            <Text style={styles.infoText}>{item.delivery_date}</Text>
-          </View>
-          <Text style={styles.qtyText}>
-            รวม {item.total_items} รายการ ({item.total_qty} ชิ้น)
-          </Text>
-        </View>
-        <ChevronRight size={20} color="#cbd5e1" style={styles.chevron} />
-      </TouchableOpacity>
-    );
-  };
+        <View style={styles.filterCard}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.statusChipsRow}>
+            {(
+              [
+                { key: 'pending' as const, label: '⏳ กำลังจัดส่ง' },
+                { key: 'completed' as const, label: '✅ เสร็จสิ้นแล้ว' },
+                { key: 'all' as const, label: '📦 ทั้งหมด' },
+              ]
+            ).map((s) => {
+              const active = statusFilter === s.key;
+              return (
+                <TouchableOpacity key={s.key} onPress={() => setStatusFilter(s.key)} style={[styles.statusChip, active && styles.statusChipActive]}>
+                  <Text style={[styles.statusChipText, active && styles.statusChipTextActive]}>{s.label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
 
-  return (
-    <View style={styles.container}>
-      <View style={styles.dropdownWrapper}>
-        <TouchableOpacity
-          style={styles.dropdownButton}
-          activeOpacity={0.8}
-          onPress={() => {
-            setDropdownVisible(!dropdownVisible);
-            setDriverDropdownVisible(false);
-            setHelperDropdownVisible(false);
-          }}
-        >
-          <Text style={styles.dropdownButtonText}>
-            {filterOptions.find((opt) => opt.value === statusFilter)?.label}
-          </Text>
-          <ChevronRight
-            size={20}
-            color="#64748b"
-            style={{
-              transform: [{ rotate: dropdownVisible ? "270deg" : "90deg" }],
-            }}
-          />
-        </TouchableOpacity>
-
-        {dropdownVisible && (
-          <View style={styles.dropdownList}>
-            {filterOptions.map((option) => (
-              <TouchableOpacity
-                key={option.value}
-                style={styles.dropdownOption}
-                onPress={() => {
-                  setStatusFilter(option.value as any);
-                  setDropdownVisible(false);
-                }}
-              >
-                <Text
-                  style={[
-                    styles.dropdownOptionText,
-                    statusFilter === option.value &&
-                    styles.dropdownOptionTextActive,
-                  ]}
-                >
-                  {option.label}
-                </Text>
+          <Text style={styles.filterLabel}>🚚 คนขับ</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
+            <TouchableOpacity onPress={() => setDriverFilter('')} style={[styles.chip, driverFilter === '' && styles.chipActive]}>
+              <Text style={[styles.chipText, driverFilter === '' && styles.chipTextActive]}>ทั้งหมด</Text>
+            </TouchableOpacity>
+            {driverList.map((d) => (
+              <TouchableOpacity key={d} onPress={() => setDriverFilter(d)} style={[styles.chip, driverFilter === d && styles.chipActive]}>
+                <Text style={[styles.chipText, driverFilter === d && styles.chipTextActive]}>{d}</Text>
               </TouchableOpacity>
             ))}
+          </ScrollView>
+
+          <Text style={styles.filterLabel}>👷 คนรถ (เด็กติดรถ)</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
+            <TouchableOpacity onPress={() => setHelperFilter('')} style={[styles.chip, helperFilter === '' && styles.chipActive]}>
+              <Text style={[styles.chipText, helperFilter === '' && styles.chipTextActive]}>ทั้งหมด</Text>
+            </TouchableOpacity>
+            {helperList.map((h) => (
+              <TouchableOpacity key={h} onPress={() => setHelperFilter(h)} style={[styles.chip, helperFilter === h && styles.chipActive]}>
+                <Text style={[styles.chipText, helperFilter === h && styles.chipTextActive]}>{h}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+
+          <View style={styles.dateRow}>
+            <Ionicons name="calendar-outline" size={15} color="#94a3b8" />
+            <TextInput style={styles.dateInput} placeholder="เลือกช่วงวันที่... เช่น 12/09" placeholderTextColor="#94a3b8" value={dateFilter} onChangeText={setDateFilter} />
+            <TouchableOpacity onPress={resetFilters} style={styles.resetBtn}>
+              <Ionicons name="sync-outline" size={13} color="#475569" />
+              <Text style={styles.resetBtnText}>ล้างค่า</Text>
+            </TouchableOpacity>
           </View>
-        )}
-      </View>
-
-      {/* 🌟 5. เพิ่ม UI ตัวกรอง คนขับ และ คนรถ (เรียงต่อกันแนวนอน) */}
-      <View style={styles.secondaryFilterContainer}>
-        {/* 🚚 Dropdown คนขับ */}
-        <View
-          style={[
-            styles.dropdownWrapper,
-            { flex: 1, marginHorizontal: 0, marginTop: 0, zIndex: 9 },
-          ]}
-        >
-          <TouchableOpacity
-            style={styles.dropdownButton}
-            activeOpacity={0.8}
-            onPress={() => {
-              setDriverDropdownVisible(!driverDropdownVisible);
-              setHelperDropdownVisible(false);
-              setDropdownVisible(false);
-            }}
-          >
-            <Text style={styles.dropdownButtonText} numberOfLines={1}>
-              {driverFilter ? driverFilter : "-- 🚚 คนขับ (ทั้งหมด) --"}
-            </Text>
-            <ChevronRight
-              size={16}
-              color="#64748b"
-              style={{
-                transform: [
-                  { rotate: driverDropdownVisible ? "270deg" : "90deg" },
-                ],
-              }}
-            />
-          </TouchableOpacity>
-
-          {driverDropdownVisible && (
-            <ScrollView style={[styles.dropdownList, { maxHeight: 300 }]} nestedScrollEnabled={true}>
-              <TouchableOpacity
-                style={styles.dropdownOption}
-                onPress={() => {
-                  setDriverFilter("");
-                  setDriverDropdownVisible(false);
-                }}
-              >
-                <Text style={styles.dropdownOptionText}>-- 🚚 ทั้งหมด --</Text>
-              </TouchableOpacity>
-              {driverList.map((d) => (
-                <TouchableOpacity
-                  key={d}
-                  style={styles.dropdownOption}
-                  onPress={() => {
-                    setDriverFilter(d);
-                    setDriverDropdownVisible(false);
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.dropdownOptionText,
-                      driverFilter === d && styles.dropdownOptionTextActive,
-                    ]}
-                    numberOfLines={1}
-                  >
-                    {d}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          )}
         </View>
 
-        {/* 👷 Dropdown คนรถ */}
-        <View
-          style={[
-            styles.dropdownWrapper,
-            { flex: 1, marginHorizontal: 0, marginTop: 0, zIndex: 8 },
-          ]}
-        >
-          <TouchableOpacity
-            style={styles.dropdownButton}
-            activeOpacity={0.8}
-            onPress={() => {
-              setHelperDropdownVisible(!helperDropdownVisible);
-              setDriverDropdownVisible(false);
-              setDropdownVisible(false);
-            }}
-          >
-            <Text style={styles.dropdownButtonText} numberOfLines={1}>
-              {helperFilter ? helperFilter : "-- 👷 คนรถ (ทั้งหมด) --"}
-            </Text>
-            <ChevronRight
-              size={16}
-              color="#64748b"
-              style={{
-                transform: [
-                  { rotate: helperDropdownVisible ? "270deg" : "90deg" },
-                ],
-              }}
-            />
-          </TouchableOpacity>
-
-          {helperDropdownVisible && (
-            <ScrollView style={[styles.dropdownList, { maxHeight: 300 }]} nestedScrollEnabled={true}>
-              <TouchableOpacity
-                style={styles.dropdownOption}
-                onPress={() => {
-                  setHelperFilter("");
-                  setHelperDropdownVisible(false);
-                }}
-              >
-                <Text style={styles.dropdownOptionText}>-- 👷 ทั้งหมด --</Text>
-              </TouchableOpacity>
-              {helperList.map((h) => (
-                <TouchableOpacity
-                  key={h}
-                  style={styles.dropdownOption}
-                  onPress={() => {
-                    setHelperFilter(h);
-                    setHelperDropdownVisible(false);
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.dropdownOptionText,
-                      helperFilter === h && styles.dropdownOptionTextActive,
-                    ]}
-                    numberOfLines={1}
-                  >
-                    {h}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          )}
-        </View>
+        <Text style={styles.resultCount}>พบ {filtered.length} งาน</Text>
       </View>
+    );
+  }
 
-      {/* 🌟 ปุ่มล้างค่าแบบหน้าเว็บ */}
-      <TouchableOpacity
-        style={styles.clearFilterButton}
-        onPress={() => {
-          // ล้างทุกอย่างก่อน
-          setDriverFilter("");
-          setHelperFilter("");
-          setStatusFilter("pending");
+  function renderCard({ item: t }: { item: DeliveryTask }) {
+    return (
+      <View style={[styles.card, t.isCompleted && styles.cardCompleted]}>
+        <View style={styles.cardTopRow}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+            <Ionicons name="document-text-outline" size={14} color="#475569" />
+            <Text style={styles.doNoLabel}>เลขหน้างาน {displayDeliveryNo(t.deliveryNo)}</Text>
+          </View>
+          <View style={[styles.statusBadge, t.isCompleted ? styles.statusBadgeDone : styles.statusBadgePending]}>
+            <Ionicons name={t.isCompleted ? 'checkmark-circle' : 'flash'} size={12} color={t.isCompleted ? '#059669' : '#d97706'} />
+            <Text style={[styles.statusBadgeText, { color: t.isCompleted ? '#059669' : '#d97706' }]}>{t.isCompleted ? 'เสร็จสิ้น' : 'กำลังจัดส่ง'}</Text>
+          </View>
+        </View>
 
-          // แล้วสั่งให้หาชื่อตัวเองใหม่ใน List ที่มีอยู่
-          let myDriverName;
-          let myHelperName;
+        <View style={styles.dateLine}>
+          <Ionicons name="calendar" size={13} color="#ea580c" />
+          <Text style={styles.dateLineText}>วันที่จัดส่ง: {t.deliveryDateShow}</Text>
+        </View>
 
-          if (loggedInUser && loggedInUser.trim() !== "") {
-            const cleanUser = loggedInUser.replace(/\s+/g, '').toLowerCase();
-            myDriverName = driverList.find((n) => {
-              const cleanN = n.replace(/\s+/g, '').toLowerCase();
-              return cleanUser.includes(cleanN) || cleanN.includes(cleanUser);
-            });
-            myHelperName = helperList.find((n) => {
-              const cleanN = n.replace(/\s+/g, '').toLowerCase();
-              return cleanUser.includes(cleanN) || cleanN.includes(cleanUser);
-            });
-          }
-
-          if (myDriverName) setDriverFilter(myDriverName);
-          else if (myHelperName) setHelperFilter(myHelperName);
-        }}
-      >
-        <Text style={styles.clearFilterText}>
-          🔄 ล้างค่าตัวกรอง (กลับไปงานของฉัน)
+        <Text style={styles.detailLine}>
+          <Text style={styles.detailLineLabel}>ผู้ส่ง/รถ: </Text>
+          {senderLabel(t)}
         </Text>
-      </TouchableOpacity>
+        <Text style={styles.detailLine}>
+          <Text style={styles.detailLineLabel}>ผู้รับหน้างาน: </Text>
+          {t.receiverName}
+        </Text>
 
+        <View style={styles.qtyPill}>
+          <Text style={styles.qtyPillText}>
+            รวม {t.totalItems} รายการ ({t.totalQty} ชิ้น)
+          </Text>
+        </View>
+
+        <TouchableOpacity style={[styles.actionBtn, t.isCompleted && styles.actionBtnDone]} onPress={() => handleAction(t)}>
+          <Ionicons name={t.isCompleted ? 'search-outline' : 'clipboard-outline'} size={15} color={t.isCompleted ? '#475569' : '#fff'} />
+          <Text style={[styles.actionBtnText, t.isCompleted && { color: '#475569' }]}>{t.isCompleted ? 'ดูประวัติการจัดส่ง' : 'ตรวจสอบหน้างาน'}</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  if (loading && tasks.length === 0) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="light-content" />
+        <View style={styles.emptyBox}>
+          <ActivityIndicator size="large" color="#334155" />
+          <Text style={styles.emptyText}>กำลังโหลดข้อมูล...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <StatusBar barStyle="light-content" />
       <FlatList
-        data={filteredTasks} // 🌟 เปลี่ยนมาใช้ข้อมูลที่ถูกกรองแล้ว
-        renderItem={renderItem}
-        keyExtractor={(item) => item.delivery_no}
-        contentContainerStyle={{ padding: 15, paddingBottom: 30 }}
-        refreshControl={
-          <RefreshControl refreshing={loading} onRefresh={fetchTasks} />
-        }
+        data={filtered}
+        keyExtractor={(t) => t.id}
+        renderItem={renderCard}
+        ListHeaderComponent={renderHeader}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#334155']} tintColor="#334155" />}
         ListEmptyComponent={
-          !loading ? (
-            <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>
-                ไม่มี
-                {filterOptions.find((opt) => opt.value === statusFilter)?.label}
-              </Text>
+          error ? (
+            <View style={styles.emptyBox}>
+              <Ionicons name="alert-circle-outline" size={30} color="#ef4444" />
+              <Text style={styles.emptyText}>{error}</Text>
+              <TouchableOpacity style={styles.actionBtn} onPress={() => loadData()}>
+                <Text style={styles.actionBtnText}>ลองใหม่</Text>
+              </TouchableOpacity>
             </View>
-          ) : null
+          ) : (
+            <View style={styles.emptyBox}>
+              <Ionicons name="cube-outline" size={30} color="#cbd5e1" />
+              <Text style={styles.emptyTitle}>ไม่มีงานจัดส่งในหมวดหมู่นี้</Text>
+              <Text style={styles.emptyText}>ลองเปลี่ยนตัวกรองดูนะครับ</Text>
+            </View>
+          )
         }
+        contentContainerStyle={{ paddingBottom: 24 }}
+        showsVerticalScrollIndicator={false}
       />
-    </View>
+    </SafeAreaView>
   );
 }
 
+// ====================================================================
+// Styles
+// ====================================================================
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#f1f5f9" },
-  dropdownWrapper: {
-    position: "relative",
-    zIndex: 10,
-    marginHorizontal: 15,
-    marginTop: 15,
-    marginBottom: 5,
-  },
-  dropdownButton: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    backgroundColor: "white",
-    paddingHorizontal: 15,
-    paddingVertical: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#cbd5e1",
-  },
-  dropdownButtonText: {
-    fontSize: 15,
-    color: "#1e293b",
-    fontWeight: "600",
-  },
-  dropdownList: {
-    position: "absolute",
-    top: 50,
-    left: 0,
-    right: 0,
-    backgroundColor: "white",
-    borderRadius: 8,
-    elevation: 5,
-    shadowColor: "#000",
-    shadowOpacity: 0.1,
-    shadowOffset: { width: 0, height: 4 },
-    shadowRadius: 6,
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-    zIndex: 20,
-  },
-  dropdownOption: {
-    paddingVertical: 14,
-    paddingHorizontal: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: "#f1f5f9",
-  },
-  dropdownOptionText: { fontSize: 14, color: "#475569" },
-  dropdownOptionTextActive: { color: "#2563eb", fontWeight: "700" },
-  card: {
-    backgroundColor: "white",
-    borderRadius: 12,
-    padding: 15,
-    marginBottom: 12,
-    borderLeftWidth: 5,
-    elevation: 2,
-    position: "relative",
-  },
-  cardHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 10,
-  },
-  doBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#dbeafe",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  doText: { marginLeft: 5, fontWeight: "700", color: "#1e3a8a" },
-  statusText: { fontSize: 13, fontWeight: "700" },
-  cardBody: { gap: 5 },
-  infoRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  infoText: { color: "#475569", fontSize: 13 },
-  qtyText: { marginTop: 5, fontSize: 12, fontWeight: "600", color: "#3b82f6" },
-  chevron: {
-    position: "absolute",
-    right: 10,
-    top: "50%",
-    transform: [{ translateY: -10 }],
-  },
-  emptyContainer: {
-    marginTop: 50,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  emptyText: { color: "#94a3b8", fontSize: 15 },
-  // 🌟 6. เพิ่ม Style สำหรับตัวกรองใหม่
-  secondaryFilterContainer: {
-    flexDirection: "row",
-    gap: 10,
-    marginHorizontal: 15,
-    marginTop: 10,
-    marginBottom: 10,
-    zIndex: 9,
-  },
-  clearFilterButton: {
-    backgroundColor: "#fef2f2",
-    borderColor: "#fca5a5",
-    borderWidth: 1,
-    paddingVertical: 10,
-    marginHorizontal: 15,
-    borderRadius: 8,
-    alignItems: "center",
-    marginBottom: 10,
-  },
-  clearFilterText: {
-    color: "#ef4444",
-    fontWeight: "600",
-    fontSize: 14,
-  },
+  safeArea: { flex: 1, backgroundColor: '#f4f7f9' },
+
+  titleBar: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#334155', paddingHorizontal: 14, paddingVertical: 16 },
+  backBtn: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  title: { fontSize: 16, fontWeight: '800', color: '#fff' },
+  subtitle: { fontSize: 11.5, color: 'rgba(255,255,255,0.8)', marginTop: 3 },
+
+  filterCard: { backgroundColor: '#fff', margin: 14, borderRadius: 14, padding: 12, borderWidth: 1, borderColor: '#e2e8f0' },
+  statusChipsRow: { gap: 6, paddingBottom: 8 },
+  statusChip: { backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 50, paddingHorizontal: 12, paddingVertical: 7 },
+  statusChipActive: { backgroundColor: '#334155', borderColor: '#334155' },
+  statusChipText: { fontSize: 12, fontWeight: '700', color: '#475569' },
+  statusChipTextActive: { color: '#fff' },
+
+  filterLabel: { fontSize: 10.5, color: '#94a3b8', fontWeight: '700', marginTop: 8, marginBottom: 5 },
+  chipsRow: { gap: 6 },
+  chip: { backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 50, paddingHorizontal: 11, paddingVertical: 6 },
+  chipActive: { backgroundColor: '#ea580c', borderColor: '#ea580c' },
+  chipText: { fontSize: 11.5, color: '#475569', fontWeight: '600' },
+  chipTextActive: { color: '#fff' },
+
+  dateRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10, borderTopWidth: 1, borderTopColor: '#f1f5f9', paddingTop: 10 },
+  dateInput: { flex: 1, borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8, fontSize: 12, color: '#0f172a' },
+  resetBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#f1f5f9', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8 },
+  resetBtnText: { fontSize: 11.5, fontWeight: '700', color: '#475569' },
+
+  resultCount: { marginHorizontal: 14, marginBottom: 4, fontSize: 12, color: '#64748b', fontWeight: '600' },
+
+  card: { backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#e2e8f0', marginHorizontal: 14, marginTop: 12, padding: 14 },
+  cardCompleted: { opacity: 0.85 },
+  cardTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  doNoLabel: { fontSize: 13, fontWeight: '800', color: '#334155' },
+  statusBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 50, paddingHorizontal: 9, paddingVertical: 4, borderWidth: 1 },
+  statusBadgePending: { backgroundColor: '#fef3c7', borderColor: '#fde68a' },
+  statusBadgeDone: { backgroundColor: '#dcfce7', borderColor: '#a7f3d0' },
+  statusBadgeText: { fontSize: 10.5, fontWeight: '700' },
+
+  dateLine: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 8 },
+  dateLineText: { fontSize: 12.5, fontWeight: '700', color: '#ea580c' },
+
+  detailLine: { fontSize: 12.5, color: '#334155', marginTop: 4 },
+  detailLineLabel: { fontWeight: '700', color: '#0f172a' },
+
+  qtyPill: { alignSelf: 'flex-start', backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4, marginTop: 10 },
+  qtyPillText: { fontSize: 11.5, fontWeight: '700', color: '#475569' },
+
+  actionBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: '#334155', borderRadius: 10, paddingVertical: 11, marginTop: 12 },
+  actionBtnDone: { backgroundColor: '#f1f5f9' },
+  actionBtnText: { color: '#fff', fontWeight: '700', fontSize: 13 },
+
+  emptyBox: { alignItems: 'center', justifyContent: 'center', paddingVertical: 60, gap: 8 },
+  emptyTitle: { color: '#64748b', fontSize: 14, fontWeight: '700', marginTop: 4 },
+  emptyText: { color: '#94a3b8', fontSize: 12.5 },
 });

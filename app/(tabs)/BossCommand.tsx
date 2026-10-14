@@ -14,7 +14,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BlurView } from 'expo-blur';
 
 // ✅ Import Config
-import { API_BASE, IMG_BASE_URL } from '../../constants/config'; 
+import { API_BASE, IMG_BASE_URL } from '../../constants/config';
+import { formatShortThaiDate } from '../../components/DateTimeField';
 
 const { width } = Dimensions.get('window');
 
@@ -203,19 +204,15 @@ export default function BossCommand() {
     emp.label.toLowerCase().includes(searchText.toLowerCase())
   );
 
-  const onChangeDate = (event: any, selectedDate?: Date) => {
-    if (event.type === 'dismissed') { setShowDatePicker(false); return; }
-    const currentDate = selectedDate || date;
+  const onChangeDate = (event: any, selectedDate: Date) => {
     setShowDatePicker(Platform.OS === 'ios');
-    setDate(currentDate);
+    setDate(selectedDate);
   };
 
-  const onChangeTime = (event: any, selectedDate?: Date) => {
-    if (event.type === 'dismissed') { setShowTimePicker(false); return; }
-    const currentDate = selectedDate || date;
+  const onChangeTime = (event: any, selectedDate: Date) => {
     setShowTimePicker(Platform.OS === 'ios');
-    setDate(currentDate);
-    setTimeText(`${pad(currentDate.getHours())}:${pad(currentDate.getMinutes())}`);
+    setDate(selectedDate);
+    setTimeText(`${pad(selectedDate.getHours())}:${pad(selectedDate.getMinutes())}`);
   };
 
   const isValidTime = (time: string) => /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(time);
@@ -224,7 +221,7 @@ export default function BossCommand() {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') return;
     let result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsMultipleSelection: true,
       quality: 0.8,
     });
@@ -459,7 +456,7 @@ export default function BossCommand() {
                 <TouchableOpacity style={styles.datePickerBtn} onPress={() => setShowDatePicker(true)}>
                     <View>
                         <Text style={styles.pickerLabel}>วันที่กำหนด</Text>
-                        <Text style={styles.pickerValue}>{date.toLocaleDateString('th-TH', {day: 'numeric', month: 'long', year: 'numeric'})}</Text>
+                        <Text style={styles.pickerValue}>{formatShortThaiDate(`${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}`)}</Text>
                     </View>
                     <ChevronRight size={20} color={theme.textSecondary} />
                 </TouchableOpacity>
@@ -475,8 +472,8 @@ export default function BossCommand() {
                 </TouchableOpacity>
             </View>
 
-            {showDatePicker && (<DateTimePicker value={date} mode="date" display="spinner" onChange={onChangeDate} themeVariant={isDark ? "dark" : "light"} />)}
-            {showTimePicker && (<DateTimePicker value={date} mode="time" is24Hour={true} display="spinner" onChange={onChangeTime} themeVariant={isDark ? "dark" : "light"} />)}
+            {showDatePicker && (<DateTimePicker value={date} mode="date" display="spinner" onValueChange={onChangeDate} onDismiss={() => setShowDatePicker(false)} themeVariant={isDark ? "dark" : "light"} />)}
+            {showTimePicker && (<DateTimePicker value={date} mode="time" is24Hour={true} display="spinner" onValueChange={onChangeTime} onDismiss={() => setShowTimePicker(false)} themeVariant={isDark ? "dark" : "light"} />)}
           </View>
 
         </ScrollView>

@@ -5,6 +5,9 @@
 import { Ionicons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import axios from "axios";
+// 🌟 รูปแบบวันที่สั้น "d/m/yy" มาตรฐานเดียวกันทั้งแอป (แทน book_date_thai/doc_date_thai แบบเต็ม
+// "5 กันยายน 2569" ของเซิร์ฟเวอร์ และแทนการแสดง book_date ดิบ YYYY-MM-DD ตรงๆ)
+import { formatShortThaiDate } from "../../components/DateTimeField";
 import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect } from "expo-router";
 import React, {
@@ -34,8 +37,11 @@ import {
 
 import { API_BASE } from "../../constants/config";
 
+// เป็น no-op อยู่แล้วบน New Architecture (Fabric) — เรียกแล้วมีแต่ warning เฉยๆ ไม่มีผลจริง
+// เช็ค global.nativeFabricUIManager กันไว้ไม่ให้เรียกซ้ำตอนโหลดโมดูลนี้
 if (
   Platform.OS === "android" &&
+  !(globalThis as any).nativeFabricUIManager &&
   UIManager.setLayoutAnimationEnabledExperimental
 ) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -449,7 +455,7 @@ export default function CorrespondenceDashboard() {
               >
                 <Ionicons name="calendar-outline" size={16} color={c.primary} />
                 <Text style={{ color: c.text, fontSize: 12 }}>
-                  {filterDate || "ทุกวัน"}
+                  {filterDate ? formatShortThaiDate(filterDate) : "ทุกวัน"}
                 </Text>
               </TouchableOpacity>
               {filterDate ? (
@@ -759,14 +765,13 @@ export default function CorrespondenceDashboard() {
         <DateTimePicker
           value={filterDate ? new Date(filterDate) : new Date()}
           mode="date"
-          onChange={(e, d) => {
+          onValueChange={(e, d) => {
             setShowDatePicker(false);
-            if (e.type === "set" && d) {
-              const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-              setFilterDate(iso);
-              setTimeout(applyFilter, 0);
-            }
+            const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+            setFilterDate(iso);
+            setTimeout(applyFilter, 0);
           }}
+          onDismiss={() => setShowDatePicker(false)}
         />
       )}
 
@@ -896,7 +901,7 @@ export default function CorrespondenceDashboard() {
                             วันที่
                           </Text>
                           <Text style={[s.fieldCellValue, { color: c.text }]}>
-                            {detail.book_date_thai || detail.book_date || "-"}
+                            {formatShortThaiDate(detail.book_date)}
                           </Text>
                         </View>
                       </View>
@@ -1701,7 +1706,7 @@ function CorrRow({
           )}
           <View style={{ flex: 1 }} />
           <Text style={{ color: c.textSecondary, fontSize: 11 }}>
-            {item.book_date_thai || item.book_date}
+            {formatShortThaiDate(item.book_date)}
           </Text>
         </View>
         <Text

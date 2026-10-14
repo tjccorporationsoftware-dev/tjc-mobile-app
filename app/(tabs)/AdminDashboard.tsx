@@ -16,6 +16,7 @@ import {
   View,
 } from "react-native";
 import { API_BASE } from "../../constants/config";
+import { formatShortThaiDate as formatDate } from "../../components/DateTimeField";
 
 // --- Helper Functions ---
 const formatMoney = (amount: any) => {
@@ -24,15 +25,6 @@ const formatMoney = (amount: any) => {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(num);
-};
-
-// แปลง YYYY-MM-DD -> DD/MM/YYYY (พ.ศ.)
-const formatDate = (dateStr: string) => {
-  if (!dateStr) return "-";
-  const date = new Date(dateStr);
-  return `${date.getDate().toString().padStart(2, "0")}/${(date.getMonth() + 1)
-    .toString()
-    .padStart(2, "0")}/${date.getFullYear() + 543}`;
 };
 
 const formatTime = (dateStr: string) => {
@@ -136,7 +128,7 @@ const CustomCalendarModal = ({ visible, onClose, onSelect }: any) => {
               <Ionicons name="chevron-back" size={24} color="#333" />
             </TouchableOpacity>
             <Text style={styles.calTitle}>
-              {THAI_MONTHS[month]} {year + 543}
+              {THAI_MONTHS[month]} {year}
             </Text>
             <TouchableOpacity
               onPress={() => changeMonth(1)}
