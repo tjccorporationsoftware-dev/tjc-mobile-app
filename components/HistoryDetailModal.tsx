@@ -27,7 +27,12 @@ export default function HistoryDetailModal({
 }: Props) {
   if (!item) return null;
 
-  const formatDate = (date: any) => new Date(date).toLocaleDateString("th-TH");
+  // DD/MM/YYYY ปี ค.ศ. — รูปแบบเดียวทั้งแอป (toLocaleDateString("th-TH") ให้ปี พ.ศ.)
+  const formatDate = (date: any) => {
+    const d = new Date(date);
+    if (isNaN(d.getTime())) return '-';
+    return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+  };
 
   const openImage = (filename: string, folder = "uploads/") => {
     if (!filename) return;

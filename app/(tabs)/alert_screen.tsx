@@ -19,6 +19,7 @@ import {
 
 // --- Config & Auth ---
 import { API_BASE, IMG_BASE_URL } from "../../constants/config";
+import { formatShortThaiDate } from "../../components/DateTimeField";
 import { useAuth } from "../_layout";
 
 // expo-notifications (Android) ใช้งานไม่ได้ใน Expo Go ตั้งแต่ SDK 53 เป็นต้นไป — แค่ "import" แบบ
@@ -267,14 +268,7 @@ export default function AlertScreen() {
             />
             <View style={{ alignItems: "flex-end" }}>
               <Text style={styles.dateText}>
-                หมด:{" "}
-                {item.tax_exp_date
-                  ? new Date(item.tax_exp_date).toLocaleDateString("th-TH", {
-                      day: "numeric",
-                      month: "short",
-                      year: "2-digit",
-                    })
-                  : "-"}
+                หมด: {formatShortThaiDate(item.tax_exp_date)}
               </Text>
             </View>
             <StatusBadge
@@ -285,14 +279,7 @@ export default function AlertScreen() {
             />
             <View style={{ alignItems: "flex-end" }}>
               <Text style={styles.dateText}>
-                หมด:{" "}
-                {item.insure_exp_date
-                  ? new Date(item.insure_exp_date).toLocaleDateString("th-TH", {
-                      day: "numeric",
-                      month: "short",
-                      year: "2-digit",
-                    })
-                  : "-"}
+                หมด: {formatShortThaiDate(item.insure_exp_date)}
               </Text>
             </View>
           </View>

@@ -3,7 +3,6 @@
 // อ้างอิง fm_jobs.php + api_fm.php (ดู docs/FleetSchedule_Spec.md)
 
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import DateTimePicker from "@react-native-community/datetimepicker";
 import axios from "axios";
 import * as ImagePicker from "expo-image-picker";
 import React, { useEffect, useMemo, useState } from "react";
@@ -25,6 +24,12 @@ import {
   View,
 } from "react-native";
 
+import {
+  DateField,
+  formatShortThaiDate,
+  formatShortThaiDateTime,
+  TimeField,
+} from "../../components/DateTimeField";
 import { API_BASE, IMG_BASE_URL } from "../../constants/config";
 
 // ------------------------------------------------------------------
@@ -85,37 +90,10 @@ const parseDateTime = (s?: string | null): Date | null => {
   return isNaN(d.getTime()) ? null : d;
 };
 
-const THAI_MONTHS = [
-  "ม.ค.",
-  "ก.พ.",
-  "มี.ค.",
-  "เม.ย.",
-  "พ.ค.",
-  "มิ.ย.",
-  "ก.ค.",
-  "ส.ค.",
-  "ก.ย.",
-  "ต.ค.",
-  "พ.ย.",
-  "ธ.ค.",
-];
-
 const dateKeyOf = (s?: string | null) => (s ? String(s).substring(0, 10) : "");
-
-const formatDateHead = (dateKey: string) => {
-  const d = parseDateTime(`${dateKey} 00:00:00`);
-  if (!d) return dateKey;
-  return `${d.getDate()} ${THAI_MONTHS[d.getMonth()]} ${d.getFullYear() + 543}`;
-};
 
 const formatTime = (s?: string | null) =>
   s ? String(s).substring(11, 16) : "--:--";
-
-const formatDateTimeFull = (s?: string | null) => {
-  const d = parseDateTime(s);
-  if (!d) return "-";
-  return `${d.getDate()} ${THAI_MONTHS[d.getMonth()]} ${d.getFullYear() + 543} เวลา ${pad(d.getHours())}:${pad(d.getMinutes())} น.`;
-};
 
 // ------------------------------------------------------------------
 // รูปหลักฐาน
@@ -220,7 +198,6 @@ export default function FmJobs() {
   // Filters
   const [search, setSearch] = useState("");
   const [filterDate, setFilterDate] = useState<string>(""); // YYYY-MM-DD ("" = ทุกวัน)
-  const [showFilterDate, setShowFilterDate] = useState(false);
   const [filterDriverId, setFilterDriverId] = useState<number | null>(null);
   const [filterStatus, setFilterStatus] = useState<JobStatus | "all">("all");
   const [showFilters, setShowFilters] = useState(false);
@@ -236,10 +213,8 @@ export default function FmJobs() {
   const [jobModal, setJobModal] = useState(false);
   const [form, setForm] = useState<JobForm>(emptyForm(null, null));
   const [saving, setSaving] = useState(false);
-  const [showFormDate, setShowFormDate] = useState(false);
-  const [showFormTime, setShowFormTime] = useState(false);
   const [wipYear, setWipYear] = useState(
-    String(new Date().getFullYear() + 543),
+    String(new Date().getFullYear()),
   );
   const [wipNo, setWipNo] = useState("");
   const [wipLoading, setWipLoading] = useState(false);
@@ -253,8 +228,6 @@ export default function FmJobs() {
     toMysqlDateTime(new Date()),
   );
   const [completeProof, setCompleteProof] = useState<string | null>(null);
-  const [showCompleteDate, setShowCompleteDate] = useState(false);
-  const [showCompleteTime, setShowCompleteTime] = useState(false);
   const [completing, setCompleting] = useState(false);
 
   // สถานะ dropdown ต่อ 1 การ์ด
@@ -441,7 +414,11 @@ export default function FmJobs() {
     setWipLoading(true);
     try {
       const data = await postForm("fetch_project_wip_info", {
-        year: wipYear.trim(),
+        // กรอกเป็น ค.ศ. -> ส่ง พ.ศ. (wip_jobs.sheet_year เป็น พ.ศ.) ถ้าผู้ใช้พิมพ์ พ.ศ. มาเองก็ส่งตามนั้น
+        year: (() => {
+          const y = parseInt(wipYear.trim(), 10);
+          return Number.isFinite(y) && y < 2500 ? String(y + 543) : wipYear.trim();
+        })(),
         job_number: wipNo.trim(),
       });
       if (data?.success) {
@@ -569,7 +546,7 @@ export default function FmJobs() {
           if (!perm.granted)
             return Alert.alert("แจ้งเตือน", "กรุณาอนุญาตคลังรูป");
           const r = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            mediaTypes: ['images'],
             quality: 0.5,
           });
           if (!r.canceled) setCompleteProof(r.assets[0].uri);
@@ -722,25 +699,11 @@ export default function FmJobs() {
           <View style={{ marginTop: 10, gap: 10 }}>
             {/* วันที่ */}
             <View style={s.filterRow}>
-              <TouchableOpacity
-                style={[
-                  s.pill,
-                  {
-                    backgroundColor: colors.bgSecondary,
-                    borderColor: colors.border,
-                  },
-                ]}
-                onPress={() => setShowFilterDate(true)}
-              >
-                <Ionicons
-                  name="calendar-outline"
-                  size={15}
-                  color={colors.primary}
-                />
-                <Text style={[s.pillText, { color: colors.text }]}>
-                  {filterDate ? formatDateHead(filterDate) : "ทุกวัน"}
-                </Text>
-              </TouchableOpacity>
+              <DateField
+                value={filterDate}
+                onChange={(ymd) => setFilterDate(ymd)}
+                placeholder="ทุกวัน"
+              />
               {filterDate ? (
                 <TouchableOpacity
                   style={s.clearPill}
@@ -992,7 +955,7 @@ export default function FmJobs() {
                           >
                             <Ionicons name="calendar" size={10} color="#fff" />
                             <Text style={s.dateBadgeTxt}>
-                              {formatDateHead(g.key)}
+                              {formatShortThaiDate(g.key)}
                             </Text>
                           </View>
                           <View
@@ -1121,7 +1084,7 @@ export default function FmJobs() {
                       value={wipYear}
                       onChangeText={setWipYear}
                       keyboardType="number-pad"
-                      placeholder="ปี พ.ศ."
+                      placeholder="ปี ค.ศ."
                       placeholderTextColor={colors.textSecondary}
                       style={[
                         s.input,
@@ -1308,31 +1271,32 @@ export default function FmJobs() {
                       alignItems: "center",
                     }}
                   >
-                    <TouchableOpacity
-                      style={[
-                        s.input,
-                        s.dateTimeBtn,
-                        {
-                          borderColor: colors.border,
-                          backgroundColor: colors.bgSecondary,
-                        },
-                      ]}
-                      onPress={() => setShowFormDate(true)}
-                    >
-                      <Ionicons
-                        name="calendar-outline"
-                        size={16}
-                        color={colors.primary}
-                      />
-                      <Text style={{ color: colors.text }}>
-                        {(() => {
-                          const d = parseDateTime(form.start_time);
-                          return d
-                            ? `${d.getDate()} ${THAI_MONTHS[d.getMonth()]} ${d.getFullYear() + 543}  ${pad(d.getHours())}:${pad(d.getMinutes())}`
-                            : "-";
-                        })()}
-                      </Text>
-                    </TouchableOpacity>
+                    <DateField
+                      value={dateKeyOf(form.start_time)}
+                      onChange={(ymd) =>
+                        setForm((f) => {
+                          const timePart =
+                            f.start_time.substring(11, 19) || "00:00:00";
+                          return { ...f, start_time: `${ymd} ${timePart}` };
+                        })
+                      }
+                      style={{ flex: 1 }}
+                    />
+                    <TimeField
+                      value={form.start_time.substring(11, 16)}
+                      onChange={(hm) =>
+                        setForm((f) => {
+                          const datePart =
+                            dateKeyOf(f.start_time) ||
+                            toMysqlDateTime(new Date()).substring(0, 10);
+                          return {
+                            ...f,
+                            start_time: `${datePart} ${hm}:00`,
+                          };
+                        })
+                      }
+                      style={{ flex: 1 }}
+                    />
                     <TouchableOpacity
                       style={[s.nowBtn, { backgroundColor: colors.primary }]}
                       onPress={() =>
@@ -1499,38 +1463,6 @@ export default function FmJobs() {
             </KeyboardAvoidingView>
           </View>
         </View>
-
-        {/* date/time picker ของฟอร์ม */}
-        {showFormDate && (
-          <DateTimePicker
-            value={parseDateTime(form.start_time) || new Date()}
-            mode="date"
-            onChange={(e, d) => {
-              setShowFormDate(false);
-              if (e.type === "set" && d) {
-                const cur = parseDateTime(form.start_time) || new Date();
-                d.setHours(cur.getHours(), cur.getMinutes(), 0, 0);
-                setForm((f) => ({ ...f, start_time: toMysqlDateTime(d) }));
-                setShowFormTime(true);
-              }
-            }}
-          />
-        )}
-        {showFormTime && (
-          <DateTimePicker
-            value={parseDateTime(form.start_time) || new Date()}
-            mode="time"
-            is24Hour
-            onChange={(e, d) => {
-              setShowFormTime(false);
-              if (e.type === "set" && d) {
-                const cur = parseDateTime(form.start_time) || new Date();
-                cur.setHours(d.getHours(), d.getMinutes(), 0, 0);
-                setForm((f) => ({ ...f, start_time: toMysqlDateTime(cur) }));
-              }
-            }}
-          />
-        )}
       </Modal>
 
       {/* ---------- Complete Modal ---------- */}
@@ -1570,32 +1502,25 @@ export default function FmJobs() {
               เวลาที่เสร็จ
             </Text>
             <View style={{ flexDirection: "row", gap: 8, marginBottom: 14 }}>
-              <TouchableOpacity
-                style={[
-                  s.input,
-                  s.dateTimeBtn,
-                  {
-                    flex: 1,
-                    borderColor: colors.border,
-                    backgroundColor: colors.bgSecondary,
-                  },
-                ]}
-                onPress={() => setShowCompleteDate(true)}
-              >
-                <Ionicons
-                  name="time-outline"
-                  size={16}
-                  color={colors.primary}
-                />
-                <Text style={{ color: colors.text }}>
-                  {(() => {
-                    const d = parseDateTime(completeEndTime);
-                    return d
-                      ? `${d.getDate()} ${THAI_MONTHS[d.getMonth()]}  ${pad(d.getHours())}:${pad(d.getMinutes())}`
-                      : "-";
-                  })()}
-                </Text>
-              </TouchableOpacity>
+              <DateField
+                value={dateKeyOf(completeEndTime)}
+                onChange={(ymd) => {
+                  const timePart =
+                    completeEndTime.substring(11, 19) || "00:00:00";
+                  setCompleteEndTime(`${ymd} ${timePart}`);
+                }}
+                style={{ flex: 1 }}
+              />
+              <TimeField
+                value={completeEndTime.substring(11, 16)}
+                onChange={(hm) => {
+                  const datePart =
+                    dateKeyOf(completeEndTime) ||
+                    toMysqlDateTime(new Date()).substring(0, 10);
+                  setCompleteEndTime(`${datePart} ${hm}:00`);
+                }}
+                style={{ flex: 1 }}
+              />
               <TouchableOpacity
                 style={[s.nowBtn, { backgroundColor: colors.primary }]}
                 onPress={() => setCompleteEndTime(toMysqlDateTime(new Date()))}
@@ -1676,36 +1601,6 @@ export default function FmJobs() {
             </View>
           </View>
         </View>
-        {showCompleteDate && (
-          <DateTimePicker
-            value={parseDateTime(completeEndTime) || new Date()}
-            mode="date"
-            onChange={(e, d) => {
-              setShowCompleteDate(false);
-              if (e.type === "set" && d) {
-                const cur = parseDateTime(completeEndTime) || new Date();
-                d.setHours(cur.getHours(), cur.getMinutes(), 0, 0);
-                setCompleteEndTime(toMysqlDateTime(d));
-                setShowCompleteTime(true);
-              }
-            }}
-          />
-        )}
-        {showCompleteTime && (
-          <DateTimePicker
-            value={parseDateTime(completeEndTime) || new Date()}
-            mode="time"
-            is24Hour
-            onChange={(e, d) => {
-              setShowCompleteTime(false);
-              if (e.type === "set" && d) {
-                const cur = parseDateTime(completeEndTime) || new Date();
-                cur.setHours(d.getHours(), d.getMinutes(), 0, 0);
-                setCompleteEndTime(toMysqlDateTime(cur));
-              }
-            }}
-          />
-        )}
       </Modal>
 
       {/* ---------- Group Modal ---------- */}
@@ -1951,7 +1846,7 @@ export default function FmJobs() {
                     <DetailLine
                       icon="time-outline"
                       label="เริ่มงาน"
-                      value={formatDateTimeFull(detailJob.start_time)}
+                      value={formatShortThaiDateTime(detailJob.start_time)}
                       colors={colors}
                     />
                     <DetailLine
@@ -1959,7 +1854,7 @@ export default function FmJobs() {
                       label="จบงาน"
                       value={
                         detailJob.end_time
-                          ? formatDateTimeFull(detailJob.end_time)
+                          ? formatShortThaiDateTime(detailJob.end_time)
                           : "-"
                       }
                       colors={colors}
@@ -2205,23 +2100,6 @@ export default function FmJobs() {
           )}
         </View>
       </Modal>
-
-      {/* filter date picker */}
-      {showFilterDate && (
-        <DateTimePicker
-          value={
-            filterDate
-              ? parseDateTime(`${filterDate} 00:00:00`) || new Date()
-              : new Date()
-          }
-          mode="date"
-          onChange={(e, d) => {
-            setShowFilterDate(false);
-            if (e.type === "set" && d)
-              setFilterDate(toMysqlDateTime(d).substring(0, 10));
-          }}
-        />
-      )}
     </View>
   );
 }

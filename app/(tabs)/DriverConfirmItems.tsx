@@ -204,7 +204,7 @@ export default function DriverConfirmItems() {
           }
 
           let result = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            mediaTypes: ['images'],
             quality: 0.5,
             allowsMultipleSelection: true,
           });
@@ -423,7 +423,7 @@ export default function DriverConfirmItems() {
       const parts = datePart.split("-");
       if (parts.length === 3) {
         let year = parseInt(parts[0], 10);
-        if (year < 2500) year += 543;
+        if (year > 2500) year -= 543; // แสดงปี ค.ศ. ทั้งแอป (ถ้าข้อมูลมาเป็น พ.ศ. ให้แปลงกลับ)
         return `${parts[2]}/${parts[1]}/${year} เวลา ${timePart} น.`;
       }
     } catch (e) { }

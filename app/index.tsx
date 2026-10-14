@@ -164,42 +164,47 @@ export default function LoginScreen() {
         end={{ x: 0.9, y: 0.9 }}
         style={StyleSheet.absoluteFill}
       />
-      <Animated.View
-        entering={FadeInDown.delay(100).duration(1500)}
-        style={[
-          styles.bgShapeWrapper,
-          { top: -120, right: -80, width: 450, height: 450, borderRadius: 225 },
-          animatedShape1Style,
-        ]}
-      >
-        <LinearGradient
-          colors={[COLORS.vividBlue, COLORS.midnightBlue]}
-          style={styles.bgShape}
-          start={{ x: 0, y: 1 }}
-          end={{ x: 1, y: 0 }}
-        />
+      {/* 🌟 [แก้ไข] เดิม entering (layout animation) กับ useAnimatedStyle (opacity/transform) อยู่บน
+          Animated.View ตัวเดียวกัน ทำให้ Reanimated warn ว่าค่าจะถูก layout animation เขียนทับ —
+          แยกเป็น wrapper ชั้นนอกถือ entering อย่างเดียว ชั้นในถือ useAnimatedStyle อย่างเดียว */}
+      <Animated.View entering={FadeInDown.delay(100).duration(1500)}>
+        <Animated.View
+          style={[
+            styles.bgShapeWrapper,
+            { top: -120, right: -80, width: 450, height: 450, borderRadius: 225 },
+            animatedShape1Style,
+          ]}
+        >
+          <LinearGradient
+            colors={[COLORS.vividBlue, COLORS.midnightBlue]}
+            style={styles.bgShape}
+            start={{ x: 0, y: 1 }}
+            end={{ x: 1, y: 0 }}
+          />
+        </Animated.View>
       </Animated.View>
-      <Animated.View
-        entering={FadeInDown.delay(300).duration(1500)}
-        style={[
-          styles.bgShapeWrapper,
-          {
-            bottom: -80,
-            left: -120,
-            width: 400,
-            height: 400,
-            borderRadius: 200,
-            opacity: 0.12,
-          },
-          animatedShape2Style,
-        ]}
-      >
-        <LinearGradient
-          colors={[COLORS.cyanGlow, COLORS.primaryBlue]}
-          style={styles.bgShape}
-          start={{ x: 1, y: 0 }}
-          end={{ x: 0, y: 1 }}
-        />
+      <Animated.View entering={FadeInDown.delay(300).duration(1500)}>
+        <Animated.View
+          style={[
+            styles.bgShapeWrapper,
+            {
+              bottom: -80,
+              left: -120,
+              width: 400,
+              height: 400,
+              borderRadius: 200,
+              opacity: 0.12,
+            },
+            animatedShape2Style,
+          ]}
+        >
+          <LinearGradient
+            colors={[COLORS.cyanGlow, COLORS.primaryBlue]}
+            style={styles.bgShape}
+            start={{ x: 1, y: 0 }}
+            end={{ x: 0, y: 1 }}
+          />
+        </Animated.View>
       </Animated.View>
 
       <KeyboardAvoidingView

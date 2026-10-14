@@ -1,12 +1,13 @@
 /**
  * CreateProjectScreen.tsx
  * ------------------------------------------------------------------
- * Mobile mockup ของหน้า create_project.php (สร้าง/แก้ไขโครงการ) — ฟอร์มสุดท้ายของชุด
- * tjc-mobile-app ที่เชื่อมจากปุ่ม "สร้างโครงการ" ในหน้า Dashboard หลัก
+ * หน้า สร้าง/แก้ไขโครงการ — พอร์ตจาก create_project.php เชื่อมจากปุ่ม "สร้างโครงการ" ในหน้า
+ * Dashboard หลัก
  *
- * สถานะไฟล์นี้: ปุ่มบันทึกเชื่อม API จริงแล้ว (POST create_project.php action=save_project) —
- * param names อ้างอิงจาก TODO เดิม ยังไม่ได้ยืนยันกับ backend จริง ส่วนตัวเลือกดรอปดาวน์
- * (บริษัท/ลูกค้า/ผู้ใช้/ทีม ฯลฯ) ยังเป็นข้อมูลตัวอย่างในเครื่อง — ยังไม่มี action สำหรับโหลดลิสต์จริง
+ * เชื่อม API จริงครบแล้ว: project_API_mobile.php action=save_project (พอร์ตจาก
+ * create_project.php action=save_project ทั้งดุ้น — $_SESSION['fullname'] เปลี่ยนเป็น
+ * user_id param) + get_next_number (เลขหน้างานถัดไปแบบ real-time) + get_master_data
+ * (บริษัท/ลูกค้า/ประเภทงาน/ธนาคาร/ทีมช่าง — ของจริงทั้งหมด ไม่มี mock แล้ว)
  *
  * ตรงกับโครงสร้าง/พฤติกรรมจริงจาก create_project.php:
  *  - หัวฟอร์ม: วันที่ลงข้อมูล (อ่านอย่างเดียว), เลขหน้างานอัตโนมัติ (ตัวอย่าง), toggle
@@ -23,12 +24,17 @@
  *  - การยื่นซอง & ใบเสนอราคา: ยื่น/ไม่ยื่น + วันที่ยื่น (บังคับถ้ายื่น), เลขที่ใบเสนอราคา,
  *    ผู้เปิดใบเสนอราคา
  *
+ * ที่อยู่ลูกค้าใหม่ (จังหวัด/อำเภอ/ตำบล/รหัสไปรษณีย์) เป็น cascading dropdown จริงแล้ว — โหลด
+ * ฐานข้อมูลที่อยู่ไทยทั้งประเทศจาก jquery.Thailand.js (raw_database.json บน GitHub) แบบเดียวกับที่
+ * create_project_script.js ฝั่งเว็บใช้ (เว็บเองก็ fetch จากลิงก์เดียวกันนี้ ไม่ได้มาจาก DB) เลือก
+ * จังหวัดแล้วตัวเลือกอำเภอ/ตำบล/รหัสไปรษณีย์กรองตามลำดับ เปลี่ยนตัวบนจะล้างตัวล่างเหมือนต้นฉบับ
+ *
+ * แนบไฟล์สัญญา (contract_file) ใช้ expo-document-picker จริงแล้ว (PDF/JPG/JPEG/PNG ตรงกับที่
+ * project_API_mobile.php action=save_project อนุญาต) ส่งเป็น multipart ไปกับฟอร์มตอนบันทึก
+ *
  * ที่ปรับให้เหมาะกับมือถือ/ตัดออก (เกินขอบเขต mockup):
- *  - ที่อยู่ลูกค้าใหม่ (จังหวัด/อำเภอ/ตำบล/รหัสไปรษณีย์) ในต้นฉบับเป็น cascading dropdown
- *    จากฐานข้อมูลที่อยู่ไทยทั้งประเทศ — mockup นี้ใช้ช่องกรอกข้อความธรรมดาแทน
  *  - "TECH PICKER MODAL" ค้นหาช่างจากร้านภายนอก (มีรายละเอียดร้าน/ความชำนาญ/จังหวัด/เบอร์ติดต่อ
  *    แบบซับซ้อน) — ย่อเหลือกรอกชื่อช่างตรงๆ ต่อทีม
- *  - แนบไฟล์สัญญา (ต้อง expo-document-picker) — เป็น stub
  *
  * ต้องติดตั้ง (ถ้ายังไม่มี): npx expo install @expo/vector-icons expo-router
  * ------------------------------------------------------------------
@@ -36,15 +42,23 @@
 
 import { Ionicons } from '@expo/vector-icons';
 import axios from 'axios';
+import * as DocumentPicker from 'expo-document-picker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Alert, Modal, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { useAuth } from '../_layout';
 // ✅ Config
-import { API_BASE } from '../../constants/config';
+import { API_MODULES } from '../../constants/config';
+import { DateField, formatShortThaiDate } from '../../components/DateTimeField';
+import { apiMobileGet } from '../../service/api_mobile';
 
-// action/param names อ้างอิงจากคอมเมนต์ TODO เดิมของไฟล์นี้ — ยังไม่ได้ยืนยันกับ backend จริง
-const API_URL = `${API_BASE}/create_project.php`;
+// project_API_mobile.php — get_detail / get_next_number / get_master_data / save_project (ของจริงทั้งหมด)
+const PROJECT_API_URL = `${API_MODULES}/project_API_mobile.php`;
+// ฐานข้อมูลที่อยู่ไทยทั้งประเทศ — ลิงก์เดียวกับที่ create_project_script.js ฝั่งเว็บ fetch ตรงๆ
+// (ไม่ได้มาจาก DB ของ TJC เอง เป็น dataset สาธารณะของ jquery.Thailand.js)
+const THAI_ADDRESS_URL = 'https://raw.githubusercontent.com/earthchie/jquery.Thailand.js/master/jquery.Thailand.js/database/raw_database/raw_database.json';
 
 // ====================================================================
 // Types
@@ -109,25 +123,49 @@ interface FormState {
   biddingDate: string;
   quotationNo: string;
   quoteCreator: string;
+  contractFile: PickedFile | null;
+}
+
+interface PickedFile {
+  uri: string;
+  name: string;
+  mimeType?: string;
+}
+
+// แถวข้อมูลที่อยู่ไทย 1 ตำบล จาก raw_database.json (p=จังหวัด, a=อำเภอ, d=ตำบล, z=รหัสไปรษณีย์)
+interface AddressRow {
+  p: string;
+  a: string;
+  d: string;
+  z: string;
 }
 
 export interface CreateProjectScreenProps {
   onBack?: () => void;
   onSaved?: () => void;
+  editId?: string;
 }
 
 // ====================================================================
-// Mock option lists
+// Master data types — โหลดจริงจาก get_master_data (ไม่มี mock แล้ว)
 // ====================================================================
 
-const COMPANIES = ['บริษัท ทีเจซี กรุ๊ป จำกัด', 'บริษัท เอบีซี เอ็นจิเนียริ่ง จำกัด', 'บริษัท เอ็กซ์วายแซด จำกัด'];
-const CUSTOMERS = ['เทศบาลนครสมมติ', 'โรงพยาบาลสมมติ', 'บริษัท สมมติ จำกัด'];
-const JOB_TYPES = ['ติดตั้งระบบกล้อง', 'ระบบไฟฟ้า', 'ระบบปรับอากาศ', 'งานลิฟต์', 'งานเครือข่าย', 'พลังงานทดแทน'];
-const USERS = ['คุณอรทัย', 'คุณพิชญ์', 'คุณวรรณา', 'คุณสมชาย', 'คุณกานดา', 'คุณปิยะ'];
-const SALES_TEAMS = ['ทีมขาย A', 'ทีมขาย B'];
-const TECH_TEAMS = ['ทีมช่าง A', 'ทีมช่าง B', 'ทีมช่าง C'];
-const BANKS = ['ธนาคารกรุงไทย', 'ธนาคารกสิกรไทย', 'ธนาคารไทยพาณิชย์', 'ธนาคารกรุงเทพ'];
-const MOCK_NEXT_NUMBER = 545; // จำลอง get_next_number (ปกติดึงจาก DB จริง)
+interface IdOption {
+  id: string;
+  label: string;
+}
+
+interface MasterData {
+  companies: IdOption[];
+  customers: IdOption[];
+  jobTypes: IdOption[];
+  users: string[];
+  salesTeams: string[];
+  techTeamOptions: string[];
+  banks: string[];
+}
+
+const EMPTY_MASTER: MasterData = { companies: [], customers: [], jobTypes: [], users: [], salesTeams: [], techTeamOptions: [], banks: [] };
 
 let uidCounter = 1;
 function uid(prefix: string): string {
@@ -178,6 +216,7 @@ function initialForm(): FormState {
     biddingDate: '',
     quotationNo: '',
     quoteCreator: '',
+    contractFile: null,
   };
 }
 
@@ -188,17 +227,18 @@ function initialForm(): FormState {
 const UNIT_LABEL: Record<DurationUnit, string> = { days: 'วัน', months: 'เดือน', years: 'ปี' };
 
 // เทียบเท่า calcContractEndDate() ของจริง — คำนวณวันสิ้นสุดจากวันเริ่ม + ระยะเวลา
+// รับ/คืนค่าเป็น YYYY-MM-DD ให้ตรงกับ DateField (ส่งเข้า API ได้ตรงๆ)
 function calcEndDate(startDateStr: string, duration: string, unit: DurationUnit): string {
-  const m = startDateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  const m = startDateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   const dur = parseInt(duration, 10);
   if (!m || isNaN(dur) || dur <= 0) return '';
-  const [, dd, mm, yyyy] = m;
+  const [, yyyy, mm, dd] = m;
   const d = new Date(parseInt(yyyy, 10), parseInt(mm, 10) - 1, parseInt(dd, 10));
   if (unit === 'days') d.setDate(d.getDate() + dur);
   else if (unit === 'months') d.setMonth(d.getMonth() + dur);
   else d.setFullYear(d.getFullYear() + dur);
   const pad = (n: number) => String(n).padStart(2, '0');
-  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 // ====================================================================
@@ -222,20 +262,15 @@ function FieldLabel({ text, required }: { text: string; required?: boolean }) {
   );
 }
 
-function ChipPicker({ options, value, onChange }: { options: string[]; value: string; onChange: (v: string) => void }) {
+// ปุ่มกด-เปิดป๊อปอัพเลือกตัวเลือก — แทนที่ ChipPicker/IdChipPicker แบบเลื่อนแนวนอนเดิม
+function PickerTrigger({ label, placeholder, onPress }: { label: string; placeholder: string; onPress: () => void }) {
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-      {options.map((opt) => {
-        const active = value === opt;
-        return (
-          <TouchableOpacity key={opt} onPress={() => onChange(opt)} style={[styles.chip, active && styles.chipActive]}>
-            <Text style={[styles.chipText, active && styles.chipTextActive]} numberOfLines={1}>
-              {opt}
-            </Text>
-          </TouchableOpacity>
-        );
-      })}
-    </ScrollView>
+    <TouchableOpacity style={styles.pickerTrigger} onPress={onPress}>
+      <Text style={[styles.pickerTriggerText, !label && styles.pickerTriggerPlaceholder]} numberOfLines={1}>
+        {label || placeholder}
+      </Text>
+      <Ionicons name="chevron-down" size={16} color="#64748b" />
+    </TouchableOpacity>
   );
 }
 
@@ -268,13 +303,220 @@ function TwoOptionToggle({
 // Main screen
 // ====================================================================
 
-export default function CreateProjectScreen({ onBack, onSaved }: CreateProjectScreenProps) {
+export default function CreateProjectScreen({ onBack, onSaved, editId: editIdProp }: CreateProjectScreenProps) {
   const router = useRouter();
   const params = useLocalSearchParams<{ edit_id?: string }>();
-  const editId = params.edit_id;
+  const editId = editIdProp ?? params.edit_id;
+  const { user } = useAuth();
+  const userId = (user as any)?.id ?? (user as any)?.user_id;
 
   const [form, setForm] = useState<FormState>(initialForm());
   const [saving, setSaving] = useState(false);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [master, setMaster] = useState<MasterData>(EMPTY_MASTER);
+  const [loadingMaster, setLoadingMaster] = useState(false);
+  const [nextNumber, setNextNumber] = useState<number | null>(null);
+
+  // ที่อยู่ไทยทั้งประเทศ (จังหวัด/อำเภอ/ตำบล/รหัสไปรษณีย์) — โหลดครั้งแรกที่ติ๊ก "เพิ่มลูกค้าใหม่"
+  const [thaiAddress, setThaiAddress] = useState<AddressRow[]>([]);
+  const [loadingThaiAddress, setLoadingThaiAddress] = useState(false);
+  const [addressPickerModal, setAddressPickerModal] = useState<{
+    visible: boolean; field: 'province' | 'district' | 'subDistrict' | 'zipCode' | null; title: string; options: string[]; search: string;
+  }>({ visible: false, field: null, title: '', options: [], search: '' });
+
+  // ป๊อปอัพเลือกตัวเลือกแบบใช้ร่วมกันทุกช่อง (บริษัท/ลูกค้า/ประเภทงาน/ผู้ใช้/ทีม/ธนาคาร ฯลฯ)
+  // แทนที่ ChipPicker/IdChipPicker แบบเลื่อนแนวนอนเดิม
+  const [pickerModal, setPickerModal] = useState<{
+    visible: boolean;
+    title: string;
+    options: { value: string; label: string }[];
+    current: string;
+    onSelect: (v: string) => void;
+  }>({ visible: false, title: '', options: [], current: '', onSelect: () => {} });
+  function openPicker(title: string, options: { value: string; label: string }[], current: string, onSelect: (v: string) => void) {
+    setPickerModal({ visible: true, title, options, current, onSelect });
+  }
+
+  useEffect(() => {
+    if (!form.isNewCustomer || thaiAddress.length > 0 || loadingThaiAddress) return;
+    let cancelled = false;
+    setLoadingThaiAddress(true);
+    (async () => {
+      try {
+        const res = await fetch(THAI_ADDRESS_URL);
+        const json = await res.json();
+        if (cancelled) return;
+        const rows: AddressRow[] = (json as any[]).map((item) => ({
+          p: String(item.province ?? ''),
+          a: String(item.amphoe ?? ''),
+          d: String(item.district ?? ''),
+          z: String(item.zipcode ?? ''),
+        }));
+        setThaiAddress(rows);
+      } catch (e) {
+        console.error('load thai address dataset failed', e);
+      } finally {
+        if (!cancelled) setLoadingThaiAddress(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [form.isNewCustomer, thaiAddress.length, loadingThaiAddress]);
+
+  function openAddressPicker(field: 'province' | 'district' | 'subDistrict' | 'zipCode') {
+    if (loadingThaiAddress || thaiAddress.length === 0) {
+      Alert.alert('กำลังโหลดข้อมูลที่อยู่', 'กรุณารอสักครู่แล้วลองใหม่อีกครั้ง');
+      return;
+    }
+    const nc = form.newCustomer;
+    let options: string[] = [];
+    let title = '';
+    if (field === 'province') {
+      title = 'เลือกจังหวัด';
+      options = [...new Set(thaiAddress.map((r) => r.p))].filter(Boolean).sort();
+    } else if (field === 'district') {
+      if (!nc.province) { Alert.alert('กรุณาเลือกจังหวัดก่อน', ''); return; }
+      title = 'เลือกอำเภอ/เขต';
+      options = [...new Set(thaiAddress.filter((r) => r.p === nc.province).map((r) => r.a))].filter(Boolean).sort();
+    } else if (field === 'subDistrict') {
+      if (!nc.district) { Alert.alert('กรุณาเลือกอำเภอ/เขตก่อน', ''); return; }
+      title = 'เลือกตำบล/แขวง';
+      options = [...new Set(thaiAddress.filter((r) => r.p === nc.province && r.a === nc.district).map((r) => r.d))].filter(Boolean).sort();
+    } else {
+      if (!nc.subDistrict) { Alert.alert('กรุณาเลือกตำบล/แขวงก่อน', ''); return; }
+      title = 'เลือกรหัสไปรษณีย์';
+      options = [...new Set(thaiAddress.filter((r) => r.p === nc.province && r.a === nc.district && r.d === nc.subDistrict).map((r) => r.z))].filter(Boolean).sort();
+    }
+    setAddressPickerModal({ visible: true, field, title, options, search: '' });
+  }
+
+  function selectAddressOption(value: string) {
+    const field = addressPickerModal.field;
+    if (!field) return;
+    setForm((f) => {
+      const nc = { ...f.newCustomer, [field]: value };
+      // เปลี่ยนตัวบน ล้างตัวล่างเสมอ — ตรงกับ clearAddress()/onChange ของ select2-addr ฝั่งเว็บ
+      if (field === 'province') { nc.district = ''; nc.subDistrict = ''; nc.zipCode = ''; }
+      else if (field === 'district') { nc.subDistrict = ''; nc.zipCode = ''; }
+      else if (field === 'subDistrict') { nc.zipCode = ''; }
+      return { ...f, newCustomer: nc };
+    });
+    setAddressPickerModal({ visible: false, field: null, title: '', options: [], search: '' });
+  }
+
+  // โหลดตัวเลือกดรอปดาวน์จริงทั้งหมด (บริษัท/ลูกค้า/ประเภทงาน/ผู้ใช้/ทีม/ธนาคาร/ทีมช่าง)
+  // จาก get_master_data — เรียกครั้งเดียวตอนเปิดหน้า ใช้ร่วมกันทั้งโหมดสร้างใหม่และแก้ไข
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    setLoadingMaster(true);
+    (async () => {
+      try {
+        const res = await apiMobileGet(PROJECT_API_URL, 'get_master_data', { user_id: userId });
+        if (cancelled) return;
+        setMaster({
+          companies: (res.companies ?? []).map((c: any) => ({ id: String(c.id), label: c.display_name || c.company_name })),
+          customers: (res.customers ?? []).map((c: any) => ({ id: String(c.customer_id), label: c.customer_name })),
+          jobTypes: (res.job_types ?? []).map((j: any) => ({ id: String(j.id), label: j.type_name })),
+          users: res.users ?? [],
+          salesTeams: res.teams ?? [],
+          techTeamOptions: res.tech_team_options ?? [],
+          banks: (res.banks ?? []).map((b: any) => b.name),
+        });
+      } catch (e) {
+        console.error('project_API_mobile action=get_master_data failed', e);
+      } finally {
+        if (!cancelled) setLoadingMaster(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
+
+  // เลขหน้างานถัดไปแบบ real-time — เฉพาะตอนสร้างใหม่ (แก้ไขใช้เลขเดิม/editId)
+  useEffect(() => {
+    if (editId || !userId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiMobileGet(PROJECT_API_URL, 'get_next_number', { user_id: userId, year: new Date().getFullYear() });
+        if (!cancelled) setNextNumber(Number(res.next_number));
+      } catch (e) {
+        console.error('project_API_mobile action=get_next_number failed', e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [editId, userId]);
+
+  // โหลดข้อมูลเดิมมาเติมฟอร์มตอนเปิดแก้ไข — เชื่อม get_detail จริงของ project_API_mobile.php
+  // (README_project.md ข้อ 4.4) ผู้ใช้ยังตรวจสอบ/แก้ไขค่าที่เติมมาได้ก่อนกดบันทึกอีกที
+  useEffect(() => {
+    if (!editId || !userId) return;
+    let cancelled = false;
+    setLoadingDetail(true);
+    (async () => {
+      try {
+        const res = await apiMobileGet(PROJECT_API_URL, 'get_detail', { user_id: userId, project_id: editId });
+        const d = res.detail as any;
+        if (cancelled || !d) return;
+        setForm((f) => ({
+          ...f,
+          isStockSite: false,
+          companyId: d.company_id ? String(d.company_id) : '',
+          isNewCustomer: false,
+          customerId: String(d.customer_id ?? ''),
+          projectName: d.project_name || '',
+          jobTypeId: d.job_type_id ? String(d.job_type_id) : '',
+          projectBudget: d.project_budget ? String(d.project_budget) : '',
+          salesType: d.sales_type === 'ทีม' ? 'ทีม' : 'บุคคล',
+          salesUser: d.sales_user || '',
+          salesTeam: d.sales_team || '',
+          debtUser: d.debt_user || '',
+          guaranteeType: (['ไม่มี', 'หนังสือค้ำ', 'ค้ำแบบจนกว่าจะหมดภาระผูกพันธ์', 'เงินสด'] as const).includes(d.guarantee_type)
+            ? d.guarantee_type
+            : 'ไม่มี',
+          guaranteeAmount: d.guarantee_amount ? String(d.guarantee_amount) : '',
+          bankName: d.bank_name || '',
+          bankAccount: d.bank_account || '',
+          guaranteeNo: d.guarantee_no || '',
+          guaranteeStartDate: d.guarantee_start_date || '',
+          guaranteeEndDate: d.guarantee_end_date || '',
+          warrantyValue: d.warranty_value ? String(d.warranty_value) : '',
+          warrantyUnit: (['days', 'months', 'years'] as const).includes(d.warranty_unit) ? d.warranty_unit : 'days',
+          deliveryDays: d.delivery_days ? String(d.delivery_days) : '',
+          hasTechnician: Boolean(d.req_tech_team || d.technicians),
+          techTeams: d.req_tech_team
+            ? [{ id: uid('team'), teamName: d.req_tech_team, technicians: (d.tech_full_details || d.technicians || '').split(',').map((s: string) => s.trim()).filter(Boolean) }]
+            : f.techTeams,
+          isPcAssembly: Boolean(Number(d.is_pc_assembly ?? 0)),
+          contractNo: d.contract_no || '',
+          purchaseOrderNo: d.purchase_order_no || '',
+          startDate: d.start_date || '',
+          contractDuration: d.contract_duration ? String(d.contract_duration) : '',
+          contractUnit: (['days', 'months', 'years'] as const).includes(d.contract_unit) ? d.contract_unit : 'days',
+          endDate: d.end_date || '',
+          endDateManual: true, // ใช้ end_date เดิมจาก server ตรงๆ ไม่คำนวณทับจากวันเริ่ม+ระยะเวลา
+          alertContractDays: d.alert_days_before_expire ? String(d.alert_days_before_expire) : f.alertContractDays,
+          biddingType: d.bidding_type === 'ยื่น' ? 'ยื่น' : 'ไม่ยื่น',
+          biddingDate: d.bidding_date || '',
+          quotationNo: d.quotation_no || '',
+          quoteCreator: d.quote_creator || '',
+        }));
+      } catch (e) {
+        console.error('project_API_mobile action=get_detail failed', e);
+        Alert.alert('โหลดข้อมูลเดิมไม่สำเร็จ', 'กรุณาลองเปิดหน้านี้ใหม่อีกครั้ง');
+      } finally {
+        if (!cancelled) setLoadingDetail(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [editId, userId]);
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -293,6 +535,28 @@ export default function CreateProjectScreen({ onBack, onSaved }: CreateProjectSc
     if (onBack) return onBack();
     if (router.canGoBack()) return router.back();
     router.push('/project_dashboard' as never);
+  }
+
+  // แนบไฟล์สัญญา — จำกัดนามสกุลตรงกับที่ project_API_mobile.php action=save_project อนุญาต
+  // (pdf/jpg/jpeg/png) ให้ตรงกับ create_project.php ต้นฉบับเป๊ะ
+  async function pickContractFile() {
+    try {
+      const res = await DocumentPicker.getDocumentAsync({
+        type: ['application/pdf', 'image/jpeg', 'image/png'],
+        copyToCacheDirectory: true,
+      });
+      if (res.canceled || !res.assets?.[0]) return;
+      const f = res.assets[0];
+      const ext = (f.name.split('.').pop() ?? '').toLowerCase();
+      if (!['pdf', 'jpg', 'jpeg', 'png'].includes(ext)) {
+        Alert.alert('นามสกุลไฟล์ไม่ถูกต้อง', 'รองรับเฉพาะ PDF, JPG, JPEG, PNG เท่านั้น');
+        return;
+      }
+      set('contractFile', { uri: f.uri, name: f.name, mimeType: f.mimeType });
+    } catch (e) {
+      console.error('pick contract file failed', e);
+      Alert.alert('เลือกไฟล์ไม่สำเร็จ', 'กรุณาลองใหม่อีกครั้ง');
+    }
   }
 
   function addTeam() {
@@ -318,6 +582,10 @@ export default function CreateProjectScreen({ onBack, onSaved }: CreateProjectSc
   }
 
   async function handleSave() {
+    if (editId && loadingDetail) {
+      Alert.alert('กรุณารอสักครู่', 'ระบบกำลังโหลดข้อมูลเดิมของโครงการ');
+      return;
+    }
     if (!form.isStockSite) {
       if (!form.companyId) return Alert.alert('กรอกข้อมูลไม่ครบ', 'กรุณาเลือกบริษัท');
       if (!form.isNewCustomer && !form.customerId) return Alert.alert('กรอกข้อมูลไม่ครบ', 'กรุณาเลือกลูกค้า หรือติ๊กเพิ่มลูกค้าใหม่');
@@ -329,22 +597,25 @@ export default function CreateProjectScreen({ onBack, onSaved }: CreateProjectSc
       if (form.biddingType === 'ยื่น' && !form.biddingDate.trim()) return Alert.alert('กรอกข้อมูลไม่ครบ', 'กรุณาระบุวันที่ยื่นซอง');
     }
 
-    // payload ตรงกับ $_POST[...] ที่ TODO เดิมของไฟล์นี้ระบุไว้ — ยังไม่ได้ยืนยันกับ backend จริง
+    // ชื่อ field ตรงกับ $_POST[...] ที่ create_project.php action=save_project รับจริง (ยืนยันแล้ว
+    // ผ่าน curl กับ project_API_mobile.php ซึ่งพอร์ต logic เดิมมาทั้งดุ้น)
     const fd = new FormData();
     fd.append('action', 'save_project');
+    fd.append('user_id', String(userId));
     if (editId) fd.append('edit_id', String(editId));
     fd.append('is_stock_site', form.isStockSite ? '1' : '0');
     fd.append('company_id', form.companyId);
     if (form.isNewCustomer) {
+      fd.append('is_new_customer', '1');
       fd.append('new_customer_name', form.newCustomer.name);
-      fd.append('new_customer_affiliation', form.newCustomer.affiliation);
-      fd.append('new_customer_contact_person', form.newCustomer.contactPerson);
-      fd.append('new_customer_address', form.newCustomer.address);
-      fd.append('new_customer_province', form.newCustomer.province);
-      fd.append('new_customer_district', form.newCustomer.district);
-      fd.append('new_customer_sub_district', form.newCustomer.subDistrict);
-      fd.append('new_customer_zip_code', form.newCustomer.zipCode);
-      fd.append('new_customer_remark', form.newCustomer.remark);
+      fd.append('new_affiliation', form.newCustomer.affiliation);
+      fd.append('new_contact_person', form.newCustomer.contactPerson);
+      fd.append('new_address', form.newCustomer.address);
+      fd.append('new_province', form.newCustomer.province);
+      fd.append('new_district', form.newCustomer.district);
+      fd.append('new_sub_district', form.newCustomer.subDistrict);
+      fd.append('new_zip_code', form.newCustomer.zipCode);
+      fd.append('new_remark', form.newCustomer.remark);
     } else {
       fd.append('customer_id', form.customerId);
     }
@@ -354,6 +625,8 @@ export default function CreateProjectScreen({ onBack, onSaved }: CreateProjectSc
     fd.append('sales_type', form.salesType);
     fd.append('sales_user', form.salesUser);
     fd.append('sales_team', form.salesTeam);
+    // ผู้ติดตามหนี้เป็น "บุคคล" เสมอตามต้นฉบับ (ฟอร์มนี้ตัดตัวเลือกทีมติดตามหนี้ออกเพื่อความง่าย)
+    fd.append('debt_type', 'บุคคล');
     fd.append('debt_user', form.debtUser);
     fd.append('guarantee_type', form.guaranteeType);
     if (showGuaranteeFields) {
@@ -386,11 +659,18 @@ export default function CreateProjectScreen({ onBack, onSaved }: CreateProjectSc
     fd.append('bidding_date', form.biddingDate);
     fd.append('quotation_no', form.quotationNo);
     fd.append('quote_creator', form.quoteCreator);
-    // หมายเหตุ: การแนบไฟล์สัญญา (contract_file) ยังเป็น stub — ต้องเพิ่ม expo-document-picker ก่อน
+    if (form.contractFile) {
+      // FormData ของ React Native รับไฟล์เป็น object { uri, name, type } (คนละแบบกับ Blob ฝั่งเว็บ)
+      fd.append('contract_file', {
+        uri: form.contractFile.uri,
+        name: form.contractFile.name,
+        type: form.contractFile.mimeType || 'application/octet-stream',
+      } as any);
+    }
 
     setSaving(true);
     try {
-      const res = await axios.post(API_URL, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const res = await axios.post(PROJECT_API_URL, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       if (res.data?.status === 'success' || res.data?.success) {
         Alert.alert('บันทึกสำเร็จ', editId ? 'แก้ไขข้อมูลโครงการเรียบร้อย!' : 'สร้างโครงการใหม่เรียบร้อย!', [
           { text: 'ตกลง', onPress: () => (onSaved ? onSaved() : handleBack()) },
@@ -407,7 +687,9 @@ export default function CreateProjectScreen({ onBack, onSaved }: CreateProjectSc
   }
 
   const today = new Date();
-  const todayShow = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
+  const todayShow = formatShortThaiDate(
+    `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+  );
 
   const showGuaranteeFields = form.guaranteeType !== 'ไม่มี';
   const isCashGuarantee = form.guaranteeType === 'เงินสด';
@@ -426,7 +708,7 @@ export default function CreateProjectScreen({ onBack, onSaved }: CreateProjectSc
           </View>
           <View style={styles.numberBadge}>
             <Text style={styles.numberBadgeLabel}>เลขหน้างาน</Text>
-            <Text style={styles.numberBadgeValue}>{editId ?? MOCK_NEXT_NUMBER}</Text>
+            <Text style={styles.numberBadgeValue}>{editId ?? nextNumber ?? '...'}</Text>
           </View>
         </View>
 
@@ -449,7 +731,22 @@ export default function CreateProjectScreen({ onBack, onSaved }: CreateProjectSc
             </TouchableOpacity>
 
             <FieldLabel text="บริษัท" required />
-            <ChipPicker options={COMPANIES} value={form.companyId} onChange={(v) => set('companyId', v)} />
+            {loadingMaster ? (
+              <ActivityIndicator style={{ alignSelf: 'flex-start', marginVertical: 6 }} color="#3b82f6" />
+            ) : (
+              <PickerTrigger
+                label={master.companies.find((o) => o.id === form.companyId)?.label ?? ''}
+                placeholder="เลือกบริษัท..."
+                onPress={() =>
+                  openPicker(
+                    'เลือกบริษัท',
+                    master.companies.map((o) => ({ value: o.id, label: o.label })),
+                    form.companyId,
+                    (v) => set('companyId', v)
+                  )
+                }
+              />
+            )}
 
             <View style={styles.customerHeaderRow}>
               <FieldLabel text="ชื่อลูกค้า" required />
@@ -460,20 +757,52 @@ export default function CreateProjectScreen({ onBack, onSaved }: CreateProjectSc
             </View>
 
             {!form.isNewCustomer ? (
-              <ChipPicker options={CUSTOMERS} value={form.customerId} onChange={(v) => set('customerId', v)} />
+              loadingMaster || (editId && loadingDetail) ? (
+                <ActivityIndicator style={{ alignSelf: 'flex-start', marginVertical: 6 }} color="#3b82f6" />
+              ) : (
+                <PickerTrigger
+                  label={master.customers.find((o) => o.id === form.customerId)?.label ?? ''}
+                  placeholder="เลือกลูกค้า..."
+                  onPress={() =>
+                    openPicker(
+                      'เลือกชื่อลูกค้า',
+                      master.customers.map((o) => ({ value: o.id, label: o.label })),
+                      form.customerId,
+                      (v) => set('customerId', v)
+                    )
+                  }
+                />
+              )
             ) : (
               <View style={styles.newCustomerBox}>
                 <TextInput style={styles.input} placeholder="ชื่อลูกค้าใหม่" placeholderTextColor="#94a3b8" value={form.newCustomer.name} onChangeText={(v) => setNew('name', v)} />
                 <TextInput style={styles.input} placeholder="สังกัด / หน่วยงาน เช่น สพฐ., อบต." placeholderTextColor="#94a3b8" value={form.newCustomer.affiliation} onChangeText={(v) => setNew('affiliation', v)} />
                 <TextInput style={styles.input} placeholder="ชื่อผู้ติดต่อ" placeholderTextColor="#94a3b8" value={form.newCustomer.contactPerson} onChangeText={(v) => setNew('contactPerson', v)} />
                 <TextInput style={styles.input} placeholder="ที่อยู่ (เลขที่, หมู่, ซอย, ถนน)" placeholderTextColor="#94a3b8" value={form.newCustomer.address} onChangeText={(v) => setNew('address', v)} />
+                {loadingThaiAddress && <Text style={styles.autoHint}>กำลังโหลดฐานข้อมูลที่อยู่ไทย...</Text>}
                 <View style={styles.rowGap}>
-                  <TextInput style={[styles.input, { flex: 1 }]} placeholder="จังหวัด" placeholderTextColor="#94a3b8" value={form.newCustomer.province} onChangeText={(v) => setNew('province', v)} />
-                  <TextInput style={[styles.input, { flex: 1 }]} placeholder="อำเภอ/เขต" placeholderTextColor="#94a3b8" value={form.newCustomer.district} onChangeText={(v) => setNew('district', v)} />
+                  <TouchableOpacity style={[styles.input, { flex: 1 }]} onPress={() => openAddressPicker('province')}>
+                    <Text style={form.newCustomer.province ? styles.addrPickedText : styles.addrPlaceholderText}>
+                      {form.newCustomer.province || 'จังหวัด'}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.input, { flex: 1 }]} onPress={() => openAddressPicker('district')}>
+                    <Text style={form.newCustomer.district ? styles.addrPickedText : styles.addrPlaceholderText}>
+                      {form.newCustomer.district || 'อำเภอ/เขต'}
+                    </Text>
+                  </TouchableOpacity>
                 </View>
                 <View style={styles.rowGap}>
-                  <TextInput style={[styles.input, { flex: 1 }]} placeholder="ตำบล/แขวง" placeholderTextColor="#94a3b8" value={form.newCustomer.subDistrict} onChangeText={(v) => setNew('subDistrict', v)} />
-                  <TextInput style={[styles.input, { flex: 1 }]} placeholder="รหัสไปรษณีย์" placeholderTextColor="#94a3b8" keyboardType="number-pad" value={form.newCustomer.zipCode} onChangeText={(v) => setNew('zipCode', v)} />
+                  <TouchableOpacity style={[styles.input, { flex: 1 }]} onPress={() => openAddressPicker('subDistrict')}>
+                    <Text style={form.newCustomer.subDistrict ? styles.addrPickedText : styles.addrPlaceholderText}>
+                      {form.newCustomer.subDistrict || 'ตำบล/แขวง'}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.input, { flex: 1 }]} onPress={() => openAddressPicker('zipCode')}>
+                    <Text style={form.newCustomer.zipCode ? styles.addrPickedText : styles.addrPlaceholderText}>
+                      {form.newCustomer.zipCode || 'รหัสไปรษณีย์'}
+                    </Text>
+                  </TouchableOpacity>
                 </View>
                 <TextInput style={[styles.input, styles.textarea]} placeholder="หมายเหตุ (ถ้ามี)" placeholderTextColor="#94a3b8" multiline value={form.newCustomer.remark} onChangeText={(v) => setNew('remark', v)} />
               </View>
@@ -483,7 +812,18 @@ export default function CreateProjectScreen({ onBack, onSaved }: CreateProjectSc
             <TextInput style={[styles.input, styles.textarea]} placeholder="ระบุชื่อโครงการ..." placeholderTextColor="#94a3b8" multiline value={form.projectName} onChangeText={(v) => set('projectName', v)} />
 
             <FieldLabel text="ประเภทงาน" required />
-            <ChipPicker options={JOB_TYPES} value={form.jobTypeId} onChange={(v) => set('jobTypeId', v)} />
+            <PickerTrigger
+              label={master.jobTypes.find((o) => o.id === form.jobTypeId)?.label ?? ''}
+              placeholder="เลือกประเภทงาน..."
+              onPress={() =>
+                openPicker(
+                  'เลือกประเภทงาน',
+                  master.jobTypes.map((o) => ({ value: o.id, label: o.label })),
+                  form.jobTypeId,
+                  (v) => set('jobTypeId', v)
+                )
+              }
+            />
 
             <FieldLabel text="ยอดงบ / โครงการ (บาท)" />
             <TextInput style={styles.input} placeholder="0.00" placeholderTextColor="#94a3b8" keyboardType="decimal-pad" value={form.projectBudget} onChangeText={(v) => set('projectBudget', v)} />
@@ -498,22 +838,41 @@ export default function CreateProjectScreen({ onBack, onSaved }: CreateProjectSc
               </TouchableOpacity>
             </View>
             {form.salesType === 'บุคคล' ? (
-              <ChipPicker options={USERS} value={form.salesUser} onChange={(v) => set('salesUser', v)} />
+              <PickerTrigger
+                label={form.salesUser}
+                placeholder="เลือกผู้รับผิดชอบ..."
+                onPress={() => openPicker('เลือกผู้รับผิดชอบโครงการ', master.users.map((u) => ({ value: u, label: u })), form.salesUser, (v) => set('salesUser', v))}
+              />
             ) : (
-              <ChipPicker options={SALES_TEAMS} value={form.salesTeam} onChange={(v) => set('salesTeam', v)} />
+              <PickerTrigger
+                label={form.salesTeam}
+                placeholder="เลือกทีม..."
+                onPress={() => openPicker('เลือกทีมผู้รับผิดชอบโครงการ', master.salesTeams.map((u) => ({ value: u, label: u })), form.salesTeam, (v) => set('salesTeam', v))}
+              />
             )}
 
             <FieldLabel text="ผู้ติดตามหนี้" />
-            <ChipPicker options={USERS} value={form.debtUser} onChange={(v) => set('debtUser', v)} />
+            <PickerTrigger
+              label={form.debtUser}
+              placeholder="เลือกผู้ติดตามหนี้..."
+              onPress={() => openPicker('เลือกผู้ติดตามหนี้', master.users.map((u) => ({ value: u, label: u })), form.debtUser, (v) => set('debtUser', v))}
+            />
 
             <View style={styles.divider} />
             <Text style={styles.subHeading}>การค้ำประกัน</Text>
 
             <FieldLabel text="ประเภทการค้ำประกัน" />
-            <ChipPicker
-              options={['ไม่มี', 'หนังสือค้ำ', 'ค้ำแบบจนกว่าจะหมดภาระผูกพันธ์', 'เงินสด']}
-              value={form.guaranteeType}
-              onChange={(v) => set('guaranteeType', v as GuaranteeType)}
+            <PickerTrigger
+              label={form.guaranteeType}
+              placeholder="เลือกประเภทการค้ำประกัน..."
+              onPress={() =>
+                openPicker(
+                  'เลือกประเภทการค้ำประกัน',
+                  ['ไม่มี', 'หนังสือค้ำ', 'ค้ำแบบจนกว่าจะหมดภาระผูกพันธ์', 'เงินสด'].map((o) => ({ value: o, label: o })),
+                  form.guaranteeType,
+                  (v) => set('guaranteeType', v as GuaranteeType)
+                )
+              }
             />
 
             {showGuaranteeFields && (
@@ -524,7 +883,11 @@ export default function CreateProjectScreen({ onBack, onSaved }: CreateProjectSc
                 {!isCashGuarantee ? (
                   <>
                     <FieldLabel text="ธนาคารผู้ออกหนังสือ" />
-                    <ChipPicker options={BANKS} value={form.bankName} onChange={(v) => set('bankName', v)} />
+                    <PickerTrigger
+                      label={form.bankName}
+                      placeholder="เลือกธนาคาร..."
+                      onPress={() => openPicker('เลือกธนาคารผู้ออกหนังสือ', master.banks.map((b) => ({ value: b, label: b })), form.bankName, (v) => set('bankName', v))}
+                    />
                     <FieldLabel text="เลขที่บัญชี" />
                     <TextInput style={styles.input} placeholder="ระบุเลขที่บัญชี..." placeholderTextColor="#94a3b8" value={form.bankAccount} onChangeText={(v) => set('bankAccount', v)} />
                     <FieldLabel text="เลขที่หนังสือค้ำ" />
@@ -540,11 +903,11 @@ export default function CreateProjectScreen({ onBack, onSaved }: CreateProjectSc
                 <View style={styles.rowGap}>
                   <View style={{ flex: 1 }}>
                     <FieldLabel text="วันเริ่มค้ำประกัน" />
-                    <TextInput style={styles.input} placeholder="วว/ดด/ปปปป" placeholderTextColor="#94a3b8" value={form.guaranteeStartDate} onChangeText={(v) => set('guaranteeStartDate', v)} />
+                    <DateField value={form.guaranteeStartDate} onChange={(v) => set('guaranteeStartDate', v)} />
                   </View>
                   <View style={{ flex: 1 }}>
                     <FieldLabel text="วันสิ้นสุดค้ำประกัน" />
-                    <TextInput style={styles.input} placeholder="วว/ดด/ปปปป" placeholderTextColor="#94a3b8" value={form.guaranteeEndDate} onChangeText={(v) => set('guaranteeEndDate', v)} />
+                    <DateField value={form.guaranteeEndDate} onChange={(v) => set('guaranteeEndDate', v)} />
                   </View>
                 </View>
 
@@ -552,7 +915,18 @@ export default function CreateProjectScreen({ onBack, onSaved }: CreateProjectSc
                 <View style={styles.rowGap}>
                   <TextInput style={[styles.input, { flex: 1 }]} placeholder="จำนวน" placeholderTextColor="#94a3b8" keyboardType="number-pad" value={form.warrantyValue} onChangeText={(v) => set('warrantyValue', v)} />
                   <View style={{ flex: 1 }}>
-                    <ChipPicker options={['days', 'months', 'years']} value={form.warrantyUnit} onChange={(v) => set('warrantyUnit', v as DurationUnit)} />
+                    <PickerTrigger
+                      label={form.warrantyUnit}
+                      placeholder="เลือกหน่วย..."
+                      onPress={() =>
+                        openPicker(
+                          'เลือกหน่วยระยะเวลารับประกัน',
+                          ['days', 'months', 'years'].map((o) => ({ value: o, label: o })),
+                          form.warrantyUnit,
+                          (v) => set('warrantyUnit', v as DurationUnit)
+                        )
+                      }
+                    />
                   </View>
                 </View>
               </>
@@ -583,7 +957,13 @@ export default function CreateProjectScreen({ onBack, onSaved }: CreateProjectSc
                     </View>
 
                     <FieldLabel text="ชื่อทีมที่ต้องการช่าง" />
-                    <ChipPicker options={TECH_TEAMS} value={team.teamName} onChange={(v) => updateTeamName(team.id, v)} />
+                    <PickerTrigger
+                      label={team.teamName}
+                      placeholder="เลือกทีมช่าง..."
+                      onPress={() =>
+                        openPicker('เลือกชื่อทีมที่ต้องการช่าง', master.techTeamOptions.map((o) => ({ value: o, label: o })), team.teamName, (v) => updateTeamName(team.id, v))
+                      }
+                    />
 
                     <FieldLabel text="รายชื่อช่างประจำทีมนี้" />
                     {team.technicians.map((name, tnIdx) => (
@@ -637,28 +1017,37 @@ export default function CreateProjectScreen({ onBack, onSaved }: CreateProjectSc
             </View>
 
             <FieldLabel text="วันที่เริ่มสัญญา" />
-            <TextInput style={styles.input} placeholder="วว/ดด/ปปปป" placeholderTextColor="#94a3b8" value={form.startDate} onChangeText={(v) => set('startDate', v)} />
+            <DateField value={form.startDate} onChange={(v) => set('startDate', v)} />
 
             <FieldLabel text="กำหนดส่งมอบงาน" />
             <View style={styles.rowGap}>
               <TextInput style={[styles.input, { flex: 1 }]} placeholder="ระบุจำนวน" placeholderTextColor="#94a3b8" keyboardType="number-pad" value={form.contractDuration} onChangeText={(v) => set('contractDuration', v)} />
               <View style={{ flex: 1 }}>
-                <ChipPicker options={['days', 'months', 'years']} value={form.contractUnit} onChange={(v) => set('contractUnit', v as DurationUnit)} />
+                <PickerTrigger
+                  label={form.contractUnit}
+                  placeholder="เลือกหน่วย..."
+                  onPress={() =>
+                    openPicker(
+                      'เลือกหน่วยระยะเวลาสัญญา',
+                      ['days', 'months', 'years'].map((o) => ({ value: o, label: o })),
+                      form.contractUnit,
+                      (v) => set('contractUnit', v as DurationUnit)
+                    )
+                  }
+                />
               </View>
             </View>
 
             <FieldLabel text="วันที่สิ้นสุดสัญญา" />
-            <TextInput
-              style={[styles.input, { color: '#15803d', fontWeight: '700' }]}
-              placeholder="คำนวณอัตโนมัติจากวันเริ่ม+ระยะเวลา"
-              placeholderTextColor="#94a3b8"
+            <DateField
               value={computedEndDate}
-              onChangeText={(v) => {
+              placeholder="คำนวณอัตโนมัติจากวันเริ่ม+ระยะเวลา"
+              onChange={(v) => {
                 set('endDateManual', true);
                 set('endDate', v);
               }}
             />
-            {!form.endDateManual && <Text style={styles.autoHint}>คำนวณอัตโนมัติ — พิมพ์เพื่อแก้ไขเอง</Text>}
+            {!form.endDateManual && <Text style={styles.autoHint}>คำนวณอัตโนมัติ — กดเพื่อแก้ไขเอง</Text>}
 
             <View style={styles.rowGap}>
               <View style={{ flex: 1 }}>
@@ -667,10 +1056,17 @@ export default function CreateProjectScreen({ onBack, onSaved }: CreateProjectSc
               </View>
               <View style={{ flex: 1 }}>
                 <FieldLabel text="แนบไฟล์เอกสารสัญญา" />
-                <TouchableOpacity style={styles.attachBtn} onPress={() => Alert.alert('แนบไฟล์', 'ต้องเพิ่ม expo-document-picker เพื่อเลือกไฟล์จริงบนมือถือ')}>
+                <TouchableOpacity style={styles.attachBtn} onPress={pickContractFile}>
                   <Ionicons name="attach-outline" size={14} color="#dc2626" />
-                  <Text style={styles.attachBtnText}>แนบไฟล์ PDF/รูปภาพ</Text>
+                  <Text style={styles.attachBtnText} numberOfLines={1}>
+                    {form.contractFile ? form.contractFile.name : 'แนบไฟล์ PDF/รูปภาพ'}
+                  </Text>
                 </TouchableOpacity>
+                {form.contractFile && (
+                  <TouchableOpacity onPress={() => set('contractFile', null)} style={{ marginTop: 4 }}>
+                    <Text style={{ color: '#ef4444', fontSize: 11, fontWeight: '700' }}>ลบไฟล์ที่แนบ</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             </View>
           </View>
@@ -691,7 +1087,7 @@ export default function CreateProjectScreen({ onBack, onSaved }: CreateProjectSc
             {form.biddingType === 'ยื่น' && (
               <>
                 <FieldLabel text="วันที่ยื่นซอง" required />
-                <TextInput style={styles.input} placeholder="วว/ดด/ปปปป" placeholderTextColor="#94a3b8" value={form.biddingDate} onChangeText={(v) => set('biddingDate', v)} />
+                <DateField value={form.biddingDate} onChange={(v) => set('biddingDate', v)} />
               </>
             )}
 
@@ -699,7 +1095,11 @@ export default function CreateProjectScreen({ onBack, onSaved }: CreateProjectSc
             <TextInput style={styles.input} placeholder="ระบุเลขที่ใบเสนอราคา..." placeholderTextColor="#94a3b8" value={form.quotationNo} onChangeText={(v) => set('quotationNo', v)} />
 
             <FieldLabel text="ผู้เปิดใบเสนอราคา" />
-            <ChipPicker options={USERS} value={form.quoteCreator} onChange={(v) => set('quoteCreator', v)} />
+            <PickerTrigger
+              label={form.quoteCreator}
+              placeholder="เลือกผู้เปิดใบเสนอราคา..."
+              onPress={() => openPicker('เลือกผู้เปิดใบเสนอราคา', master.users.map((u) => ({ value: u, label: u })), form.quoteCreator, (v) => set('quoteCreator', v))}
+            />
           </View>
 
           <View style={styles.footerRow}>
@@ -707,13 +1107,80 @@ export default function CreateProjectScreen({ onBack, onSaved }: CreateProjectSc
               <Ionicons name="close" size={16} color="#475569" />
               <Text style={styles.cancelBtnText}>ยกเลิก</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.saveBtn, saving && { opacity: 0.7 }]} onPress={handleSave} disabled={saving}>
+            <TouchableOpacity style={[styles.saveBtn, (saving || loadingDetail) && { opacity: 0.7 }]} onPress={handleSave} disabled={saving || loadingDetail}>
               {saving ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="save-outline" size={17} color="#fff" />}
-              <Text style={styles.saveBtnText}>{saving ? 'กำลังบันทึก...' : 'บันทึกข้อมูลโครงการ'}</Text>
+              <Text style={styles.saveBtnText}>{saving ? 'กำลังบันทึก...' : loadingDetail ? 'กำลังโหลดข้อมูลเดิม...' : 'บันทึกข้อมูลโครงการ'}</Text>
             </TouchableOpacity>
           </View>
         </View>
       </ScrollView>
+
+      {/* Modal เลือกที่อยู่แบบ cascading — จังหวัด/อำเภอ/ตำบล/รหัสไปรษณีย์ จาก raw_database.json */}
+      <Modal visible={addressPickerModal.visible} transparent animationType="slide" onRequestClose={() => setAddressPickerModal((s) => ({ ...s, visible: false }))}>
+        <TouchableOpacity style={styles.addrModalOverlay} activeOpacity={1} onPress={() => setAddressPickerModal((s) => ({ ...s, visible: false }))}>
+          <TouchableOpacity activeOpacity={1} style={styles.addrModalCard} onPress={() => {}}>
+            <View style={styles.addrModalTitleRow}>
+              <Text style={styles.addrModalTitle}>{addressPickerModal.title}</Text>
+              <TouchableOpacity onPress={() => setAddressPickerModal((s) => ({ ...s, visible: false }))}>
+                <Ionicons name="close" size={20} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+            <TextInput
+              style={styles.input}
+              placeholder="ค้นหา..."
+              placeholderTextColor="#94a3b8"
+              value={addressPickerModal.search}
+              onChangeText={(v) => setAddressPickerModal((s) => ({ ...s, search: v }))}
+            />
+            <ScrollView style={{ marginTop: 8 }} keyboardShouldPersistTaps="handled">
+              {(() => {
+                const term = addressPickerModal.search.trim().toLowerCase();
+                const filtered = term ? addressPickerModal.options.filter((o) => o.toLowerCase().includes(term)) : addressPickerModal.options;
+                if (filtered.length === 0) return <Text style={styles.addrModalEmpty}>ไม่พบตัวเลือกที่ตรงกัน</Text>;
+                return filtered.map((opt) => (
+                  <TouchableOpacity key={opt} style={styles.addrModalRow} onPress={() => selectAddressOption(opt)}>
+                    <Text style={styles.addrModalRowText}>{opt}</Text>
+                  </TouchableOpacity>
+                ));
+              })()}
+            </ScrollView>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* ป๊อปอัพเลือกตัวเลือกแบบใช้ร่วมกันทุกช่อง (แทนที่ ChipPicker/IdChipPicker แบบเลื่อนแนวนอน) */}
+      <Modal visible={pickerModal.visible} transparent animationType="fade" onRequestClose={() => setPickerModal((s) => ({ ...s, visible: false }))}>
+        <TouchableOpacity style={styles.pickerModalOverlay} activeOpacity={1} onPress={() => setPickerModal((s) => ({ ...s, visible: false }))}>
+          <View style={styles.pickerModalSheet}>
+            <Text style={styles.pickerModalTitle}>{pickerModal.title}</Text>
+            <ScrollView style={{ maxHeight: 380 }}>
+              {pickerModal.options.length === 0 ? (
+                <Text style={styles.pickerModalEmptyText}>ยังไม่มีตัวเลือก</Text>
+              ) : (
+                pickerModal.options.map((opt) => {
+                  const active = pickerModal.current === opt.value;
+                  return (
+                    <TouchableOpacity
+                      key={opt.value}
+                      style={[styles.pickerModalOption, active && styles.pickerModalOptionActive]}
+                      onPress={() => {
+                        pickerModal.onSelect(opt.value);
+                        setPickerModal((s) => ({ ...s, visible: false }));
+                      }}
+                    >
+                      <Text style={styles.pickerModalOptionText}>{opt.label}</Text>
+                      {active && <Ionicons name="checkmark" size={16} color="#2563eb" />}
+                    </TouchableOpacity>
+                  );
+                })
+              )}
+            </ScrollView>
+            <TouchableOpacity style={styles.pickerModalCloseBtn} onPress={() => setPickerModal((s) => ({ ...s, visible: false }))}>
+              <Text style={styles.pickerModalCloseBtnText}>ปิด</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -745,6 +1212,15 @@ const styles = StyleSheet.create({
   textarea: { minHeight: 64, textAlignVertical: 'top' },
   rowGap: { flexDirection: 'row', gap: 8 },
   autoHint: { fontSize: 10, color: '#94a3b8', marginTop: 4 },
+  addrPickedText: { fontSize: 13.5, color: '#0f172a', fontWeight: '600' },
+  addrPlaceholderText: { fontSize: 13.5, color: '#94a3b8' },
+  addrModalOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', justifyContent: 'flex-end' },
+  addrModalCard: { backgroundColor: '#fff', borderTopLeftRadius: 18, borderTopRightRadius: 18, maxHeight: '75%', padding: 16 },
+  addrModalTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  addrModalTitle: { fontSize: 15, fontWeight: '800', color: '#0f172a' },
+  addrModalRow: { paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
+  addrModalRowText: { fontSize: 14, color: '#1e293b' },
+  addrModalEmpty: { textAlign: 'center', color: '#94a3b8', paddingVertical: 24 },
 
   readonlyInput: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#f1f5f9', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10 },
   readonlyInputText: { fontSize: 13, color: '#64748b', fontWeight: '700' },
@@ -753,11 +1229,18 @@ const styles = StyleSheet.create({
   stockSiteTitle: { fontSize: 13, fontWeight: '800', color: '#047857' },
   stockSiteHint: { fontSize: 10.5, color: '#059669', marginTop: 2 },
 
-  chipsRow: { gap: 6, paddingVertical: 2 },
-  chip: { backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 50, paddingHorizontal: 12, paddingVertical: 8, maxWidth: 220 },
-  chipActive: { backgroundColor: '#2563eb', borderColor: '#2563eb' },
-  chipText: { fontSize: 12, color: '#475569', fontWeight: '600' },
-  chipTextActive: { color: '#fff' },
+  pickerTrigger: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#fff' },
+  pickerTriggerText: { fontSize: 13, color: '#0f172a', fontWeight: '600', flexShrink: 1 },
+  pickerTriggerPlaceholder: { color: '#94a3b8', fontWeight: '400' },
+  pickerModalOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', justifyContent: 'center', padding: 24 },
+  pickerModalSheet: { backgroundColor: '#fff', borderRadius: 16, padding: 16 },
+  pickerModalTitle: { fontSize: 13.5, fontWeight: '800', color: '#0f172a', marginBottom: 10 },
+  pickerModalOption: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, paddingHorizontal: 10, borderRadius: 8 },
+  pickerModalOptionActive: { backgroundColor: '#eff6ff' },
+  pickerModalOptionText: { fontSize: 12.5, fontWeight: '700', color: '#334155', flexShrink: 1 },
+  pickerModalCloseBtn: { marginTop: 8, alignSelf: 'center', paddingVertical: 8, paddingHorizontal: 20 },
+  pickerModalCloseBtnText: { fontSize: 12, fontWeight: '700', color: '#94a3b8' },
+  pickerModalEmptyText: { fontSize: 12, color: '#94a3b8', textAlign: 'center', paddingVertical: 16 },
 
   customerHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 },
   newCustomerToggle: { flexDirection: 'row', alignItems: 'center', gap: 4 },

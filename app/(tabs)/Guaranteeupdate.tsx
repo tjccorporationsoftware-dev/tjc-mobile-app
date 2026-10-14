@@ -32,7 +32,8 @@ import { FontAwesome5, Ionicons } from '@expo/vector-icons';
 import axios from 'axios';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Modal, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 // ✅ Config
 import { API_BASE } from '../../constants/config';
@@ -123,6 +124,18 @@ function mkSrItem(): SrItem {
   return { id: uid(), product: '', jobType: '', jobOther: '', issue: '' };
 }
 
+// ปุ่มกด-เปิดป๊อปอัพเลือกตัวเลือก — แทนที่ chip picker แบบเลื่อนแนวนอนเดิม
+function PickerTrigger({ label, placeholder, onPress }: { label: string; placeholder: string; onPress: () => void }) {
+  return (
+    <TouchableOpacity style={styles.pickerTrigger} onPress={onPress}>
+      <Text style={[styles.pickerTriggerText, !label && styles.pickerTriggerPlaceholder]} numberOfLines={1}>
+        {label || placeholder}
+      </Text>
+      <Ionicons name="chevron-down" size={16} color="#64748b" />
+    </TouchableOpacity>
+  );
+}
+
 // ====================================================================
 // Main screen
 // ====================================================================
@@ -142,6 +155,18 @@ export default function GuaranteeUpdateScreen({ onBack, onSaved }: GuaranteeUpda
 
   const [srReceiver, setSrReceiver] = useState('');
   const [srUrgency, setSrUrgency] = useState<Urgency>('normal');
+
+  // ป๊อปอัพเลือกตัวเลือกแบบใช้ร่วมกันทุกช่อง (แทนที่ chip picker แบบเลื่อนแนวนอนเดิม)
+  const [pickerModal, setPickerModal] = useState<{
+    visible: boolean;
+    title: string;
+    options: { value: string; label: string }[];
+    current: string;
+    onSelect: (v: string) => void;
+  }>({ visible: false, title: '', options: [], current: '', onSelect: () => {} });
+  function openPicker(title: string, options: { value: string; label: string }[], current: string, onSelect: (v: string) => void) {
+    setPickerModal({ visible: true, title, options, current, onSelect });
+  }
   const [srItems, setSrItems] = useState<SrItem[]>([mkSrItem()]);
 
   const loadRecord = useCallback(async () => {
@@ -326,13 +351,11 @@ export default function GuaranteeUpdateScreen({ onBack, onSaved }: GuaranteeUpda
               <Text style={styles.fieldLabel}>
                 ผู้รับเรื่อง <Text style={styles.required}>*</Text>
               </Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-                {MOCK_USERS.map((u) => (
-                  <TouchableOpacity key={u} onPress={() => setSrReceiver(u)} style={[styles.chip, srReceiver === u && styles.chipActiveRed]}>
-                    <Text style={[styles.chipText, srReceiver === u && styles.chipTextActive]}>{u}</Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
+              <PickerTrigger
+                label={srReceiver}
+                placeholder="เลือกผู้รับเรื่อง..."
+                onPress={() => openPicker('ผู้รับเรื่อง', MOCK_USERS.map((u) => ({ value: u, label: u })), srReceiver, setSrReceiver)}
+              />
 
               <Text style={styles.fieldLabel}>
                 ความเร่งด่วน <Text style={styles.required}>*</Text>
@@ -366,13 +389,11 @@ export default function GuaranteeUpdateScreen({ onBack, onSaved }: GuaranteeUpda
                   <Text style={styles.fieldLabel}>
                     ประเภทงาน <Text style={styles.required}>*</Text>
                   </Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-                    {MOCK_JOB_TYPES.map((jt) => (
-                      <TouchableOpacity key={jt} onPress={() => updateSrItem(it.id, 'jobType', jt)} style={[styles.chip, it.jobType === jt && styles.chipActiveRed]}>
-                        <Text style={[styles.chipText, it.jobType === jt && styles.chipTextActive]}>{jt}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
+                  <PickerTrigger
+                    label={it.jobType}
+                    placeholder="เลือกประเภทงาน..."
+                    onPress={() => openPicker('ประเภทงาน', MOCK_JOB_TYPES.map((jt) => ({ value: jt, label: jt })), it.jobType, (v) => updateSrItem(it.id, 'jobType', v))}
+                  />
                   {it.jobType === 'อื่นๆ' && (
                     <TextInput style={styles.input} placeholder="ระบุประเภทอื่นๆ..." placeholderTextColor="#94a3b8" value={it.jobOther} onChangeText={(v) => updateSrItem(it.id, 'jobOther', v)} />
                   )}
@@ -441,6 +462,36 @@ export default function GuaranteeUpdateScreen({ onBack, onSaved }: GuaranteeUpda
           </View>
         </View>
       </ScrollView>
+
+      {/* ป๊อปอัพเลือกตัวเลือกแบบใช้ร่วมกันทุกช่อง (แทนที่ chip picker แบบเลื่อนแนวนอนเดิม) */}
+      <Modal visible={pickerModal.visible} transparent animationType="fade" onRequestClose={() => setPickerModal((s) => ({ ...s, visible: false }))}>
+        <TouchableOpacity style={styles.pickerModalOverlay} activeOpacity={1} onPress={() => setPickerModal((s) => ({ ...s, visible: false }))}>
+          <View style={styles.pickerModalSheet}>
+            <Text style={styles.pickerModalTitle}>{pickerModal.title}</Text>
+            <ScrollView style={{ maxHeight: 380 }}>
+              {pickerModal.options.map((opt) => {
+                const active = pickerModal.current === opt.value;
+                return (
+                  <TouchableOpacity
+                    key={opt.value || '__none__'}
+                    style={[styles.pickerModalOption, active && styles.pickerModalOptionActive]}
+                    onPress={() => {
+                      pickerModal.onSelect(opt.value);
+                      setPickerModal((s) => ({ ...s, visible: false }));
+                    }}
+                  >
+                    <Text style={styles.pickerModalOptionText}>{opt.label}</Text>
+                    {active && <Ionicons name="checkmark" size={16} color="#e11d48" />}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+            <TouchableOpacity style={styles.pickerModalCloseBtn} onPress={() => setPickerModal((s) => ({ ...s, visible: false }))}>
+              <Text style={styles.pickerModalCloseBtnText}>ปิด</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -472,11 +523,17 @@ const styles = StyleSheet.create({
   fieldLabel: { fontSize: 11.5, fontWeight: '700', color: '#334155', marginBottom: 6, marginTop: 8 },
   required: { color: '#ef4444' },
 
-  chipsRow: { gap: 6, paddingBottom: 2 },
-  chip: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 50, paddingHorizontal: 11, paddingVertical: 7 },
-  chipActiveRed: { backgroundColor: '#e11d48', borderColor: '#e11d48' },
-  chipText: { fontSize: 11.5, color: '#475569', fontWeight: '600' },
-  chipTextActive: { color: '#fff' },
+  pickerTrigger: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#fff' },
+  pickerTriggerText: { fontSize: 13, color: '#0f172a', fontWeight: '600', flexShrink: 1 },
+  pickerTriggerPlaceholder: { color: '#94a3b8', fontWeight: '400' },
+  pickerModalOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', justifyContent: 'center', padding: 24 },
+  pickerModalSheet: { backgroundColor: '#fff', borderRadius: 16, padding: 16 },
+  pickerModalTitle: { fontSize: 13.5, fontWeight: '800', color: '#0f172a', marginBottom: 10 },
+  pickerModalOption: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, paddingHorizontal: 10, borderRadius: 8 },
+  pickerModalOptionActive: { backgroundColor: '#fef2f2' },
+  pickerModalOptionText: { fontSize: 12.5, fontWeight: '700', color: '#334155', flexShrink: 1 },
+  pickerModalCloseBtn: { marginTop: 8, alignSelf: 'center', paddingVertical: 8, paddingHorizontal: 20 },
+  pickerModalCloseBtnText: { fontSize: 12, fontWeight: '700', color: '#94a3b8' },
 
   rowGap: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   urgencyChip: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8 },

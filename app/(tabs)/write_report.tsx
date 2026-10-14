@@ -474,7 +474,7 @@ export default function WriteReportScreen() {
   const pickImage = async (type: "fuel" | "hotel" | "other", index = 0) => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         quality: 0.2, // 📉 บีบอัดให้เล็กลงเหลือ 20% (ลดภาระเซิร์ฟเวอร์)
         allowsEditing: true,
       });

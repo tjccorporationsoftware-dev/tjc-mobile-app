@@ -12,10 +12,14 @@
 //
 // ต้องมี useAuth() คืน user.id (เลข user_id ในตาราง users) — ถ้ายังไม่มี ต้องหาว่า
 // ตอน login เก็บ user_id ไว้ตรงไหน แล้วส่งเข้ามาที่ apiMobileGet/apiMobilePost ทุกครั้ง
+//
+// ย้ายมาจาก app/service/api_mobile.ts — ไฟล์นี้ไม่ใช่หน้าจอ แต่ expo-router มองว่าไฟล์
+// .ts ทุกไฟล์ใต้ app/ เป็น route ผู้สมัคร (candidate) ทำให้ log "Route ... is missing the
+// required default export" ทุกครั้งที่รันแอป จึงย้ายออกมานอก app/ ให้พ้นการสแกนของ router
 // ------------------------------------------------------------------
 
 import axios from 'axios';
-import { API_MODULES } from '../../constants/config';
+import { API_MODULES } from '../constants/config';
 
 export interface ApiMobileSuccess {
   status: 'success';
