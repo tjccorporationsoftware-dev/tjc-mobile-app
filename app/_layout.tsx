@@ -20,7 +20,9 @@ export interface UserData {
 
 interface AuthContextType {
   user: UserData | null;
-  signIn: (user: string, pass: string) => Promise<boolean>;
+  // beforeCommit: เรียกหลังเซิร์ฟเวอร์ยืนยันรหัสผ่านแล้ว แต่ก่อน setUser — หน้า login ใช้เล่นอนิเมชั่นสำเร็จให้จบ
+  // (setUser แล้ว InitialLayout จะ replace ไปหน้า news ทันที ถ้าเล่นทีหลังจะไม่ทันเห็น)
+  signIn: (user: string, pass: string, beforeCommit?: (user: UserData) => Promise<void>) => Promise<boolean>;
   signOut: () => void;
   isLoading: boolean;
 }
@@ -57,6 +59,7 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
   const signIn = async (
     username: string,
     password: string,
+    beforeCommit?: (user: UserData) => Promise<void>,
   ): Promise<boolean> => {
     try {
       // 1. สร้าง FormData สำหรับส่งไปให้ PHP ($_POST)
@@ -86,6 +89,8 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
           avatar: res.data.avatar || "",
           allowed_pages: res.data.allowed_pages || [],
         };
+        // อนิเมชั่นของหน้า login error ไม่ควรทำให้ล็อกอินล้ม
+        if (beforeCommit) await beforeCommit(userData).catch(() => {});
         setUser(userData);
         await AsyncStorage.setItem("user", JSON.stringify(userData));
         return true;
@@ -147,7 +152,7 @@ function InitialLayout() {
   if (isLoading) {
     return (
       <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-        <ActivityIndicator size="large" color="#4e54c8" />
+        <ActivityIndicator size="large" color="#1d4ed8" />
       </View>
     );
   }

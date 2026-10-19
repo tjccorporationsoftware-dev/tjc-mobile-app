@@ -3,11 +3,10 @@
 // ดู docs/Correspondence_Spec.md
 
 import { Ionicons } from "@expo/vector-icons";
-import DateTimePicker from "@react-native-community/datetimepicker";
 import axios from "axios";
 // 🌟 รูปแบบวันที่สั้น "d/m/yy" มาตรฐานเดียวกันทั้งแอป (แทน book_date_thai/doc_date_thai แบบเต็ม
 // "5 กันยายน 2569" ของเซิร์ฟเวอร์ และแทนการแสดง book_date ดิบ YYYY-MM-DD ตรงๆ)
-import { formatShortThaiDate } from "../../components/DateTimeField";
+import { CalendarPickerModal, formatShortThaiDate } from "../../components/DateTimeField";
 import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect } from "expo-router";
 import React, {
@@ -762,16 +761,15 @@ export default function CorrespondenceDashboard() {
       )}
 
       {showDatePicker && (
-        <DateTimePicker
-          value={filterDate ? new Date(filterDate) : new Date()}
-          mode="date"
-          onValueChange={(e, d) => {
+        <CalendarPickerModal
+          value={filterDate ? new Date(filterDate) : null}
+          onChange={(d) => {
             setShowDatePicker(false);
             const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
             setFilterDate(iso);
             setTimeout(applyFilter, 0);
           }}
-          onDismiss={() => setShowDatePicker(false)}
+          onClose={() => setShowDatePicker(false)}
         />
       )}
 

@@ -418,7 +418,7 @@ export default function EstimateDashboardScreen({ onBack, onCreateNew, onViewEst
   if (loading && estimates.length === 0) {
     return (
       <SafeAreaView style={styles.safeArea}>
-        <StatusBar barStyle="dark-content" />
+        <StatusBar barStyle="light-content" />
         <View style={styles.emptyBox}>
           <ActivityIndicator size="large" color="#3f51b5" />
           <Text style={styles.emptyText}>กำลังโหลดข้อมูล...</Text>
@@ -429,7 +429,7 @@ export default function EstimateDashboardScreen({ onBack, onCreateNew, onViewEst
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="dark-content" />
+      <StatusBar barStyle="light-content" />
       <FlatList
         data={filtered}
         keyExtractor={(p) => p.uuid}
