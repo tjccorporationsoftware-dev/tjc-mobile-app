@@ -1007,7 +1007,7 @@ export default function CheckCostScreen({ onBack, onSaved, editUuid }: CheckCost
   if (loadingEdit) {
     return (
       <SafeAreaView style={styles.safeArea}>
-        <StatusBar barStyle="dark-content" />
+        <StatusBar barStyle="light-content" />
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 }}>
           <ActivityIndicator size="large" color="#0891b2" />
           <Text style={{ color: '#94a3b8', fontSize: 12.5 }}>กำลังโหลดข้อมูล...</Text>
@@ -1018,7 +1018,7 @@ export default function CheckCostScreen({ onBack, onSaved, editUuid }: CheckCost
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="dark-content" />
+      <StatusBar barStyle="light-content" />
       <View style={styles.titleRow}>
         {onBack ? (
           <TouchableOpacity onPress={onBack} style={styles.backBtn}>

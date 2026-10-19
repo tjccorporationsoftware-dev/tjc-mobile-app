@@ -19,24 +19,10 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { API_BASE } from "../../constants/config";
 // 🌟 รูปแบบวันที่สั้น "d/m/yy" มาตรฐานเดียวกันทั้งแอป (แทน dd/mm/yyyy ปี พ.ศ. 4 หลัก)
-import { formatShortThaiDate } from "../../components/DateTimeField";
+import { CalendarPickerModal, dateToYmd, formatShortThaiDate, ymdToDate } from "../../components/DateTimeField";
 import { useAuth } from "../_layout";
 
 const ACTIVE_COLOR = "#f97316"; // 🟠 สีส้ม Admin
-const THAI_MONTHS = [
-  "มกราคม",
-  "กุมภาพันธ์",
-  "มีนาคม",
-  "เมษายน",
-  "พฤษภาคม",
-  "มิถุนายน",
-  "กรกฎาคม",
-  "สิงหาคม",
-  "กันยายน",
-  "ตุลาคม",
-  "พฤศจิกายน",
-  "ธันวาคม",
-];
 
 // --- Helper Functions ---
 const formatMoney = (amount: any) => {
@@ -88,117 +74,6 @@ const formatDateForAPI = (date: Date) => {
   const month = (date.getMonth() + 1).toString().padStart(2, "0");
   const day = date.getDate().toString().padStart(2, "0");
   return `${year}-${month}-${day}`;
-};
-
-// =====================================================================
-// 📅 Custom Calendar Component
-// =====================================================================
-const CustomCalendarModal = ({ visible, onClose, onSelect }: any) => {
-  const [currentDate, setCurrentDate] = useState(new Date());
-
-  if (!visible) return null;
-
-  const year = currentDate.getFullYear();
-  const month = currentDate.getMonth();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const firstDayIndex = new Date(year, month, 1).getDay();
-
-  const days = [];
-  for (let i = 0; i < firstDayIndex; i++) days.push(null);
-  for (let i = 1; i <= daysInMonth; i++) days.push(i);
-
-  const changeMonth = (offset: number) => {
-    const newDate = new Date(year, month + offset, 1);
-    setCurrentDate(newDate);
-  };
-
-  const handleSelectDay = (day: number) => {
-    const selected = new Date(year, month, day);
-    const offset = selected.getTimezoneOffset() * 60000;
-    const localISOTime = new Date(selected.getTime() - offset)
-      .toISOString()
-      .slice(0, 10);
-    onSelect(localISOTime);
-    onClose();
-  };
-
-  return (
-    <Modal visible={visible} transparent animationType="fade">
-      <View style={styles.calOverlay}>
-        <View style={styles.calContainer}>
-          <View style={styles.calHeader}>
-            <TouchableOpacity
-              onPress={() => changeMonth(-1)}
-              style={styles.calNavBtn}
-            >
-              <Ionicons name="chevron-back" size={24} color="#333" />
-            </TouchableOpacity>
-            <Text style={styles.calTitle}>
-              {THAI_MONTHS[month]} {year}
-            </Text>
-            <TouchableOpacity
-              onPress={() => changeMonth(1)}
-              style={styles.calNavBtn}
-            >
-              <Ionicons name="chevron-forward" size={24} color="#333" />
-            </TouchableOpacity>
-          </View>
-          <View style={styles.calWeekRow}>
-            {["อา", "จ", "อ", "พ", "พฤ", "ศ", "ส"].map((d, i) => (
-              <Text
-                key={i}
-                style={[
-                  styles.calWeekText,
-                  i === 0 || i === 6 ? { color: "#ef4444" } : null,
-                ]}
-              >
-                {d}
-              </Text>
-            ))}
-          </View>
-          <View style={styles.calGrid}>
-            {days.map((day, index) => (
-              <TouchableOpacity
-                key={index}
-                style={styles.calDayCell}
-                onPress={() => day && handleSelectDay(day)}
-                disabled={!day}
-              >
-                {day && (
-                  <View
-                    style={[
-                      styles.calDayCircle,
-                      day === new Date().getDate() &&
-                      month === new Date().getMonth() &&
-                      year === new Date().getFullYear()
-                        ? { backgroundColor: "#e0e7ff" }
-                        : null,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.calDayText,
-                        day === new Date().getDate() &&
-                        month === new Date().getMonth() &&
-                        year === new Date().getFullYear()
-                          ? { color: "#4f46e5", fontWeight: "bold" }
-                          : null,
-                      ]}
-                    >
-                      {day}
-                    </Text>
-                  </View>
-                )}
-              </TouchableOpacity>
-            ))}
-          </View>
-          <TouchableOpacity onPress={onClose} style={styles.calCloseBtn}>
-            <Text style={styles.calCloseText}>ยกเลิก</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </Modal>
-  );
 };
 
 // =====================================================================
@@ -1029,10 +904,11 @@ export default function HistoryAdmin() {
       </ScrollView>
 
       {/* Modals */}
-      <CustomCalendarModal
+      <CalendarPickerModal
         visible={showCalendar}
+        value={ymdToDate(calendarMode === "start" ? startDate : endDate)}
+        onChange={(d) => handleDateSelect(dateToYmd(d))}
         onClose={() => setShowCalendar(false)}
-        onSelect={handleDateSelect}
       />
 
       {/* Detail Modal */}
@@ -1395,56 +1271,6 @@ const styles = StyleSheet.create({
   },
   noteText: { fontSize: 14, color: "#334155", lineHeight: 20 },
 
-  calOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.6)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  calContainer: {
-    width: "85%",
-    backgroundColor: "#fff",
-    borderRadius: 16,
-    padding: 15,
-    elevation: 10,
-  },
-  calHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 15,
-  },
-  calTitle: { fontSize: 18, fontWeight: "bold", color: "#333" },
-  calNavBtn: { padding: 5 },
-  calWeekRow: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    marginBottom: 5,
-  },
-  calWeekText: {
-    width: 35,
-    textAlign: "center",
-    fontWeight: "bold",
-    fontSize: 14,
-    color: "#666",
-  },
-  calGrid: { flexDirection: "row", flexWrap: "wrap" },
-  calDayCell: {
-    width: "14.28%",
-    aspectRatio: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  calDayCircle: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  calDayText: { fontSize: 16, color: "#333" },
-  calCloseBtn: { marginTop: 15, alignSelf: "center", padding: 10 },
-  calCloseText: { color: "#666", fontSize: 14 },
   docCard: {
     backgroundColor: "#fff",
     borderRadius: 8,

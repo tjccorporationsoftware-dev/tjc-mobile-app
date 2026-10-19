@@ -16,7 +16,7 @@ import {
   View,
 } from "react-native";
 import { API_BASE } from "../../constants/config";
-import { formatShortThaiDate as formatDate } from "../../components/DateTimeField";
+import { CalendarPickerModal, dateToYmd, formatShortThaiDate as formatDate, ymdToDate } from "../../components/DateTimeField";
 
 // --- Helper Functions ---
 const formatMoney = (amount: any) => {
@@ -54,154 +54,6 @@ const openFile = (fileName: string, folder: string = "admin") => {
     Alert.alert("Error", "ไม่สามารถเปิดไฟล์ได้: " + fullUrl),
   );
 };
-
-// =====================================================================
-// 📅 Custom Calendar Component (เขียนเอง ไม่ใช้ Native)
-// =====================================================================
-const THAI_MONTHS = [
-  "มกราคม",
-  "กุมภาพันธ์",
-  "มีนาคม",
-  "เมษายน",
-  "พฤษภาคม",
-  "มิถุนายน",
-  "กรกฎาคม",
-  "สิงหาคม",
-  "กันยายน",
-  "ตุลาคม",
-  "พฤศจิกายน",
-  "ธันวาคม",
-];
-
-const CustomCalendarModal = ({ visible, onClose, onSelect }: any) => {
-  const [currentDate, setCurrentDate] = useState(new Date()); // ใช้ดูเดือนปัจจุบันในปฏิทิน
-
-  if (!visible) return null;
-
-  const year = currentDate.getFullYear();
-  const month = currentDate.getMonth();
-
-  // หาจำนวนวันในเดือนนี้
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  // หาวันแรกของเดือนเริ่มที่วันอะไร (0=อาทิตย์, 1=จันทร์...)
-  const firstDayIndex = new Date(year, month, 1).getDay();
-
-  // สร้าง Array สำหรับ render
-  const days = [];
-  // ช่องว่างก่อนวันที่ 1
-  for (let i = 0; i < firstDayIndex; i++) {
-    days.push(null);
-  }
-  // วันที่ 1 ถึงวันสุดท้าย
-  for (let i = 1; i <= daysInMonth; i++) {
-    days.push(i);
-  }
-
-  const changeMonth = (offset: number) => {
-    const newDate = new Date(year, month + offset, 1);
-    setCurrentDate(newDate);
-  };
-
-  const handleSelectDay = (day: number) => {
-    // สร้าง Date Object และแปลงเป็น YYYY-MM-DD string ส่งกลับไป
-    const selected = new Date(year, month, day);
-    // ปรับ Timezone offset ให้ถูกต้อง (กันเลื่อนวัน)
-    const offset = selected.getTimezoneOffset() * 60000;
-    const localISOTime = new Date(selected.getTime() - offset)
-      .toISOString()
-      .slice(0, 10);
-
-    onSelect(localISOTime);
-    onClose();
-  };
-
-  return (
-    <Modal visible={visible} transparent animationType="fade">
-      <View style={styles.calOverlay}>
-        <View style={styles.calContainer}>
-          {/* Header ปฏิทิน */}
-          <View style={styles.calHeader}>
-            <TouchableOpacity
-              onPress={() => changeMonth(-1)}
-              style={styles.calNavBtn}
-            >
-              <Ionicons name="chevron-back" size={24} color="#333" />
-            </TouchableOpacity>
-            <Text style={styles.calTitle}>
-              {THAI_MONTHS[month]} {year}
-            </Text>
-            <TouchableOpacity
-              onPress={() => changeMonth(1)}
-              style={styles.calNavBtn}
-            >
-              <Ionicons name="chevron-forward" size={24} color="#333" />
-            </TouchableOpacity>
-          </View>
-
-          {/* ชื่อวัน */}
-          <View style={styles.calWeekRow}>
-            {["อา", "จ", "อ", "พ", "พฤ", "ศ", "ส"].map((d, i) => (
-              <Text
-                key={i}
-                style={[
-                  styles.calWeekText,
-                  i === 0 || i === 6 ? { color: "#ef4444" } : null,
-                ]}
-              >
-                {d}
-              </Text>
-            ))}
-          </View>
-
-          {/* ตารางวันที่ */}
-          <View style={styles.calGrid}>
-            {days.map((day, index) => (
-              <TouchableOpacity
-                key={index}
-                style={styles.calDayCell}
-                onPress={() => day && handleSelectDay(day)}
-                disabled={!day}
-              >
-                {day && (
-                  <View
-                    style={[
-                      styles.calDayCircle,
-                      // ไฮไลท์วันปัจจุบัน (Optional)
-                      day === new Date().getDate() &&
-                      month === new Date().getMonth() &&
-                      year === new Date().getFullYear()
-                        ? { backgroundColor: "#e0e7ff" }
-                        : null,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.calDayText,
-                        day === new Date().getDate() &&
-                        month === new Date().getMonth() &&
-                        year === new Date().getFullYear()
-                          ? { color: "#4f46e5", fontWeight: "bold" }
-                          : null,
-                      ]}
-                    >
-                      {day}
-                    </Text>
-                  </View>
-                )}
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          {/* ปุ่มปิด */}
-          <TouchableOpacity onPress={onClose} style={styles.calCloseBtn}>
-            <Text style={styles.calCloseText}>ยกเลิก</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </Modal>
-  );
-};
-// =====================================================================
 
 export default function AdminDashboard() {
   const router = useRouter();
@@ -998,10 +850,11 @@ export default function AdminDashboard() {
       </ScrollView>
 
       {/* ✅ เรียกใช้ Custom Calendar Modal */}
-      <CustomCalendarModal
+      <CalendarPickerModal
         visible={showCalendar}
+        value={ymdToDate(calendarMode === "start" ? startDate : endDate)}
+        onChange={(d) => handleDateSelect(dateToYmd(d))}
         onClose={() => setShowCalendar(false)}
-        onSelect={handleDateSelect}
       />
 
       {/* Detail Modal */}
@@ -1499,64 +1352,6 @@ const styles = StyleSheet.create({
   simpleDocText: { fontSize: 13, color: "#334155", fontWeight: "700" },
 
   // --- Calendar ---
-  calOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.6)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  calContainer: {
-    width: "85%",
-    backgroundColor: "#fff",
-    borderRadius: 20,
-    padding: 20,
-    elevation: 10,
-  },
-  calHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 20,
-  },
-  calTitle: { fontSize: 20, fontWeight: "bold", color: "#333" },
-  calNavBtn: { padding: 10, backgroundColor: "#f1f5f9", borderRadius: 10 },
-  calWeekRow: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    marginBottom: 10,
-  },
-  calWeekText: {
-    width: 35,
-    textAlign: "center",
-    fontWeight: "bold",
-    fontSize: 15,
-    color: "#64748b",
-  },
-  calGrid: { flexDirection: "row", flexWrap: "wrap" },
-  calDayCell: {
-    width: "14.28%",
-    aspectRatio: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 5,
-  },
-  calDayCircle: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  calDayText: { fontSize: 16, color: "#333", fontWeight: "500" },
-  calCloseBtn: {
-    marginTop: 20,
-    alignSelf: "center",
-    paddingVertical: 12,
-    paddingHorizontal: 30,
-    backgroundColor: "#f1f5f9",
-    borderRadius: 12,
-  },
-  calCloseText: { color: "#475569", fontSize: 15, fontWeight: "bold" },
 
   // Reporter Item
   reporterItem: {

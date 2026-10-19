@@ -82,10 +82,8 @@ export interface ProjectFollowupScreenProps {
 
 // ====================================================================
 // ค่าเริ่มต้น/ตัวช่วย — ตัวเลือกสถานะติดตาม/ธนาคารจริงโหลดจาก get_followup_detail (call_statuses/
-// bank_list) ตอนเปิดหน้า ไม่ใช่ mock อีกต่อไป — ใช้ fallback นี้แค่ระหว่างรอโหลดครั้งแรก
+// bank_list) ตอนเปิดหน้า ใช้ตามที่ server ส่งมาเท่านั้น (ว่าง = มีแค่ "ไม่ระบุ" เหมือนเว็บ ไม่เติมสถานะเอง)
 // ====================================================================
-
-const FALLBACK_STATUSES = ['กำลังติดตาม', 'นัดโทรกลับ', 'ติดต่อไม่ได้', 'รอเอกสารจากลูกค้า', 'ปิดติดตามแล้ว'];
 
 const EMPTY_PROJECT: ProjectInfo = { jobNo: '', company: '', projectName: '', customer: '', budget: 0, paid: 0 };
 
@@ -124,8 +122,10 @@ function uid(): string {
   return `fu_new_${Date.now()}_${uidCounter}`;
 }
 
-function mkEntry(currentUser: string, defaultStatus: string): FollowupEntry {
-  return { id: uid(), isNew: true, name: '', status: defaultStatus, bankName: '', remark: '', owner: currentUser };
+// ครั้งใหม่ตั้งชื่อ "ครั้งที่ N" ให้เลย (N = ลำดับต่อจากที่มีบนจอ) + สถานะตัวแรกของกลุ่มติดตาม
+// เหมือน addFollowupRow() ของ project_followup.php
+function mkEntry(currentUser: string, defaultStatus: string, seq: number): FollowupEntry {
+  return { id: uid(), isNew: true, name: `ครั้งที่ ${seq}`, status: defaultStatus, bankName: '', remark: '', owner: currentUser };
 }
 
 function num(n: number): string {
@@ -139,14 +139,14 @@ function num(n: number): string {
 export default function ProjectFollowupScreen({ id, onBack, onSaved }: ProjectFollowupScreenProps) {
   const router = useRouter();
   const params = useLocalSearchParams<{ id?: string }>();
-  const projectId = id ?? params.id ?? '547';
+  const projectId = String(id ?? params.id ?? '');
   const { user } = useAuth();
   const userId = (user as any)?.id;
   const currentUserName = (user as any)?.fullname || 'ไม่ระบุ';
 
   const [project, setProject] = useState<ProjectInfo>(EMPTY_PROJECT);
   const [entries, setEntries] = useState<FollowupEntry[]>([]);
-  const [callStatuses, setCallStatuses] = useState<string[]>(FALLBACK_STATUSES);
+  const [callStatuses, setCallStatuses] = useState<string[]>([]);
   const [bankList, setBankList] = useState<string[]>([]);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -169,16 +169,22 @@ export default function ProjectFollowupScreen({ id, onBack, onSaved }: ProjectFo
 
   const loadData = useCallback(async () => {
     if (!userId) return;
+    // ไม่มีเลขหน้างานส่งมา = ห้ามเดาโครงการเอง (เดิม fallback เป็น 547 ซึ่งเป็นโครงการจริง บันทึกแล้วเข้าผิดงาน)
+    if (!projectId) {
+      setLoadError('ไม่พบเลขหน้างาน กรุณากลับไปเลือกโครงการใหม่');
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setLoadError(null);
     try {
       const res = await apiMobileGet(PROJECT_API_URL, 'get_followup_detail', { user_id: userId, project_id: projectId });
       const proj = mapProjectInfo(res.project ?? {});
-      const statuses: string[] = Array.isArray(res.call_statuses) && res.call_statuses.length > 0 ? res.call_statuses : FALLBACK_STATUSES;
+      const statuses: string[] = Array.isArray(res.call_statuses) ? res.call_statuses : [];
       const banks: string[] = Array.isArray(res.bank_list) ? res.bank_list : [];
       const actor = String(res.current_user || currentUserName);
       const rawEntries: any[] = Array.isArray(res.followups) ? res.followups : [];
-      const mapped: FollowupEntry[] = rawEntries.length > 0 ? rawEntries.map((r) => mapFollowupEntry(r, actor)) : [mkEntry(actor, statuses[0] ?? '')];
+      const mapped: FollowupEntry[] = rawEntries.length > 0 ? rawEntries.map((r) => mapFollowupEntry(r, actor)) : [mkEntry(actor, statuses[0] ?? '', 1)];
       setProject(proj);
       setCallStatuses(statuses);
       setBankList(banks);
@@ -212,8 +218,7 @@ export default function ProjectFollowupScreen({ id, onBack, onSaved }: ProjectFo
   }
 
   function addEntry() {
-    const e = mkEntry(currentUserName, callStatuses[0] ?? '');
-    e.name = `ครั้งที่ ${entries.length + 1}`;
+    const e = mkEntry(currentUserName, callStatuses[0] ?? '', entries.length + 1);
     setEntries((prev) => [...prev, e]);
     setExpandedIds((prev) => new Set(prev).add(e.id));
   }
@@ -259,6 +264,9 @@ export default function ProjectFollowupScreen({ id, onBack, onSaved }: ProjectFo
     try {
       const res = await axios.post(PROJECT_API_URL, body.toString(), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
       if (res.data?.status === 'success') {
+        // โหลดใหม่ทันที — save_followup ลบแถวที่ไม่อยู่ใน fu_id แล้วเพิ่มแถวใหม่ด้วย id ใหม่ ถ้าจอนี้ยังเปิดค้าง
+        // (เช่นฝังในหน้าอื่นแล้ว onSaved ไม่ได้ปิด) แล้วกดบันทึกซ้ำ แถว "ใหม่" ชุดเดิมจะถูกส่งไปเพิ่มซ้ำอีกรอบ
+        loadData();
         Alert.alert('บันทึกสำเร็จ', `บันทึกการติดตาม ${res.data.saved ?? entries.length} รายการเรียบร้อยแล้ว!`, [
           { text: 'ตกลง', onPress: () => (onSaved ? onSaved() : handleBack()) },
         ]);
@@ -400,10 +408,18 @@ export default function ProjectFollowupScreen({ id, onBack, onSaved }: ProjectFo
                     </View>
 
                     <FieldLabel text="สถานะติดตาม" />
+                    {/* มี "ไม่ระบุ" ให้ล้างสถานะได้ เหมือน <option value="">-- ไม่ระบุ --</option> ของเว็บ */}
                     <PickerTrigger
                       label={e.status}
-                      placeholder="เลือกสถานะ..."
-                      onPress={() => openPicker('สถานะติดตาม', callStatuses.map((s) => ({ value: s, label: s })), e.status, (v) => updateEntry(e.id, 'status', v))}
+                      placeholder="ไม่ระบุ"
+                      onPress={() =>
+                        openPicker(
+                          'สถานะติดตาม',
+                          [{ value: '', label: 'ไม่ระบุ' }, ...callStatuses.map((s) => ({ value: s, label: s }))],
+                          e.status,
+                          (v) => updateEntry(e.id, 'status', v)
+                        )
+                      }
                     />
 
                     <FieldLabel text="ธนาคาร (เข้าเช็ค)" />

@@ -22,8 +22,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { API_BASE } from '../../constants/config';
 import { useAuth } from '../_layout';
 
-const PRIMARY_COLOR = '#4e54c8';
-const SECONDARY_COLOR = '#8f94fb';
+// ธีมเดียวกับหน้า login / แถบหัว sidebar: น้ำเงิน -> ฟ้า
+const PRIMARY_COLOR = '#1d4ed8';
+const SECONDARY_COLOR = '#0ea5e9';
 
 export default function ProfileScreen() {
     const { user, signOut } = useAuth();
@@ -206,7 +207,7 @@ export default function ProfileScreen() {
 
     return (
         <View style={styles.container}>
-            <LinearGradient colors={[PRIMARY_COLOR, SECONDARY_COLOR]} style={styles.headerBackground}>
+            <LinearGradient colors={['#0a1f5c', PRIMARY_COLOR, SECONDARY_COLOR]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.headerBackground}>
                 <SafeAreaView edges={['top']} style={styles.headerContent}>
                     <View style={styles.profileHeaderCenter}>
                         <TouchableOpacity onPress={pickImage} disabled={uploading} style={styles.avatarWrapperBig}>
