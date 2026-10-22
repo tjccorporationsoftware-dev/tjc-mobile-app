@@ -50,9 +50,11 @@ const Colors = {
 // --- [CUSTOM COMPONENT] Beautiful Alert ---
 interface BeautifulAlertProps {
     visible: boolean; type: 'question' | 'success' | 'warning' | 'error' | 'delete'; title: string; message?: string; children?: React.ReactNode; confirmText?: string; cancelText?: string; showCancel?: boolean; onConfirm?: () => void; onCancel?: () => void; isDark: boolean;
+    /** วาดเป็นชั้นทับ (View) แทน <Modal> — ใช้ตอนอยู่ใน Modal อื่น: iOS เปิด Modal พี่น้องซ้อนกันไม่ได้ (กดแล้วเงียบ) */
+    inline?: boolean;
 }
 
-const BeautifulAlert = ({ visible, type, title, message, children, confirmText = 'ตกลง', cancelText = 'ยกเลิก', showCancel = true, onConfirm, onCancel, isDark }: BeautifulAlertProps) => {
+const BeautifulAlert = ({ visible, type, title, message, children, confirmText = 'ตกลง', cancelText = 'ยกเลิก', showCancel = true, onConfirm, onCancel, isDark, inline }: BeautifulAlertProps) => {
     if (!visible) return null;
     const theme = isDark ? Colors.dark : Colors.light;
     const getConfig = () => {
@@ -66,8 +68,7 @@ const BeautifulAlert = ({ visible, type, title, message, children, confirmText =
     };
     const config = getConfig();
 
-    return (
-        <Modal visible={visible} transparent animationType="fade" statusBarTranslucent>
+    const body = (
             <View style={[alertStyles.overlay, { backgroundColor: theme.modalOverlay }]}>
                 <BlurView intensity={isDark ? 40 : 20} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />
                 <View style={[alertStyles.container, { backgroundColor: theme.cardSolid }]}>
@@ -89,11 +90,18 @@ const BeautifulAlert = ({ visible, type, title, message, children, confirmText =
                     </View>
                 </View>
             </View>
+    );
+
+    if (inline) return <View style={alertStyles.inlineLayer}>{body}</View>;
+    return (
+        <Modal visible={visible} transparent animationType="fade" statusBarTranslucent>
+            {body}
         </Modal>
     );
 };
 
 const alertStyles = StyleSheet.create({
+    inlineLayer: { ...StyleSheet.absoluteFill, zIndex: 1000, elevation: 1000 },
     overlay: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
     container: { width: '100%', maxWidth: 340, borderRadius: 32, padding: 32, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.25, shadowRadius: 20, elevation: 10 },
     iconCircle: { width: 80, height: 80, borderRadius: 40, justifyContent: 'center', alignItems: 'center', marginBottom: 20 },
@@ -300,7 +308,8 @@ export default function DashboardScreen() {
         setFilterDate(selectedDate);
     };
 
-    const closeModal = () => { setModalVisible(false); setSelectedReport(null); };
+    // ปิดแจ้งเตือนที่ค้างอยู่ด้วย (เช่นกดย้อนกลับ Android ตอนแจ้งเตือนเปิด) ไม่ให้ไปโผล่ซ้ำหลังปิดหน้ารายละเอียด
+    const closeModal = () => { setModalVisible(false); setSelectedReport(null); setShowExtensionModal(false); setShowImageModal(false); closeAlert(); };
 
     const pickImages = async () => {
         const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsMultipleSelection: true, quality: 0.7 });
@@ -337,10 +346,10 @@ export default function DashboardScreen() {
                 formData.append('final_cost', inputFinalCost || '0');
                 formData.append('completed_by', myRealName);
                 completionFiles.forEach((file, index) => {
-                    const uriParts = file.uri.split('.');
-                    const fileType = uriParts[uriParts.length - 1];
-                    // @ts-ignore
-                    formData.append('completion_image[]', { uri: file.uri, name: `comp_${index}.${fileType}`, type: `image/${fileType}` });
+                    // นามสกุลจากไฟล์จริง (uri) ก่อน — iOS fileName อาจเป็น .HEIC ทั้งที่ไฟล์ที่ได้เป็น .jpg
+                    const ext = (file.uri.split('?')[0].split('.').pop() || file.fileName?.split('.').pop() || 'jpg').toLowerCase();
+                    // @ts-ignore: ไฟล์แบบ React Native { uri, name, type } — ส่งผ่าน axios (XHR) ได้
+                    formData.append('completion_image[]', { uri: file.uri, name: `comp_${index}.${ext}`, type: `image/${ext === 'jpg' ? 'jpeg' : ext}` });
                 });
             }
 
@@ -353,15 +362,17 @@ export default function DashboardScreen() {
                     setSelectedReport(prev => prev ? { ...prev, status: 'approved', completed_by_name: myRealName } : null);
                 }
 
-                closeModal();
                 setShowExtensionModal(false);
+                fetchData(); // โหลดรายการใหม่ทันที ไม่ต้องรอกดตกลง
                 let title = 'สำเร็จ', msg = 'บันทึกข้อมูลเรียบร้อยแล้ว';
                 if (status === 'processing') title = 'เริ่มงานแล้ว!';
                 if (status === 'approved') title = 'ส่งงานเรียบร้อย!';
                 if (extraData.action === 'request_extension') { title = 'แจ้งเลื่อนสำเร็จ'; msg = 'รอการอนุมัติหรือตรวจสอบ'; }
                 if (extraData.action === 'cancel_extension_request') { title = 'ยกเลิกคำขอแล้ว'; msg = 'สถานะกลับเป็นปกติ'; }
 
-                setTimeout(() => showAlert({ type: 'success', title: title, message: msg, confirmText: 'ตกลง', showCancel: false, onConfirm: () => { closeAlert(); fetchData(); } }), 300);
+                // แจ้งผลทับหน้ารายละเอียดก่อน แล้วค่อยปิดตอนกดตกลง — เดิมปิดหน้ารายละเอียดแล้วเปิดแจ้งเตือนต่อ
+                // ซึ่ง iOS เปิด Modal ใหม่ระหว่างที่อันเดิมกำลังเลื่อนปิดไม่ได้ (แจ้งเตือนไม่ขึ้น)
+                showAlert({ type: 'success', title: title, message: msg, confirmText: 'ตกลง', showCancel: false, onConfirm: () => { closeAlert(); closeModal(); } });
             } else {
                 showAlert({ type: 'error', title: 'เกิดข้อผิดพลาด!', message: res.data.message || 'ไม่สามารถบันทึกข้อมูลได้', confirmText: 'ลองใหม่อีกครั้ง', showCancel: false, onConfirm: closeAlert });
             }
@@ -387,7 +398,9 @@ export default function DashboardScreen() {
     const openExtensionModal = () => { setExtensionDate(new Date()); setExtensionReason(''); setShowExtensionModal(true); };
     const submitExtension = () => {
         if (!extensionReason.trim()) { alert('กรุณาระบุเหตุผล'); return; }
-        const dateStr = extensionDate.toISOString().split('T')[0];
+        // YYYY-MM-DD ตามเวลาเครื่อง — toISOString() เป็น UTC ขอเลื่อนก่อน 07:00 น. จะได้วันก่อนหน้าที่เลือก 1 วัน
+        const d = extensionDate;
+        const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
         handleUpdateStatus('pending', { action: 'request_extension', new_work_date: dateStr, reason: extensionReason, requested_by: myRealName });
     };
     const cancelExtensionRequest = () => {
@@ -398,7 +411,12 @@ export default function DashboardScreen() {
         if (!imgStr) return [];
         const rawImages = imgStr.includes(',') ? imgStr.split(',').map(s => s.trim()).filter(s => s !== '') : [imgStr.trim()];
         return rawImages.map(img => {
-            if (img.startsWith('http')) return img;
+            if (img.startsWith('http')) {
+                // get_all_reports สร้าง URL เป็น http(s)://HOST/uploads/... ตายตัว ไม่มีโฟลเดอร์ของเว็บ
+                // (เครื่อง dev อยู่ใต้ /tjc-api-server → 404 รูปไม่ขึ้น) — ต่อใหม่จากส่วนหลัง /uploads/ ด้วย IMG_BASE_URL
+                const at = img.indexOf('/uploads/');
+                return at >= 0 ? `${IMG_BASE_URL}/${img.slice(at + '/uploads/'.length)}` : img;
+            }
             let cleanFileName = img.replace('uploads/', '').replace('assign_img/', '').replace('complete_img/', '');
             const folder = type === 'assign' ? 'assign_img' : 'complete_img';
             return `${IMG_BASE_URL}/${folder}/${cleanFileName}`;
@@ -430,12 +448,20 @@ export default function DashboardScreen() {
         setModalVisible(true);
     };
 
+    // ใช้ร่วมกัน 3 ชั้น: ในหน้าต่างขอเลื่อน / ในหน้ารายละเอียด (inline) / ที่ root ตอนไม่มี Modal เปิด
+    const alertProps = {
+        visible: alertConfig.visible, type: alertConfig.type, title: alertConfig.title, message: alertConfig.message,
+        children: alertConfig.children, confirmText: alertConfig.confirmText, cancelText: alertConfig.cancelText,
+        showCancel: alertConfig.showCancel, onConfirm: alertConfig.onConfirm, onCancel: closeAlert, isDark,
+    };
+
     return (
         <View style={styles.container}>
             <StatusBar barStyle={isDark ? "light-content" : "dark-content"} backgroundColor="transparent" translucent />
 
             {/* Ambient Background Blobs (Premium Glass Effect) */}
-            <View style={StyleSheet.absoluteFillObject}>
+            {/* RN 0.86 ตัด StyleSheet.absoluteFillObject ออกแล้ว (ได้ undefined) — ใช้ absoluteFill แทน */}
+            <View style={StyleSheet.absoluteFill}>
                 <View style={[styles.ambientBlob, { top: -100, left: -50, backgroundColor: 'rgba(59, 130, 246, 0.15)' }]} />
                 <View style={[styles.ambientBlob, { top: 200, right: -100, backgroundColor: 'rgba(168, 85, 247, 0.12)' }]} />
             </View>
@@ -631,7 +657,7 @@ export default function DashboardScreen() {
                 </ScrollView>
             </SafeAreaView>
 
-            {/* --- Modals (Company Picker & Image) --- */}
+            {/* --- Modal เลือกบริษัท (เปิดจากหน้าหลัก) · รูปเต็มจอ/ขอเลื่อน ย้ายไปซ้อนในหน้ารายละเอียดแล้ว --- */}
             <Modal visible={showCompanyModal} transparent animationType="fade" onRequestClose={() => setShowCompanyModal(false)}>
                 <TouchableWithoutFeedback onPress={() => setShowCompanyModal(false)}>
                     <View style={styles.modalOverlay}>
@@ -654,14 +680,6 @@ export default function DashboardScreen() {
                         </TouchableWithoutFeedback>
                     </View>
                 </TouchableWithoutFeedback>
-            </Modal>
-
-            <Modal visible={showImageModal} transparent={true} animationType="fade" onRequestClose={() => setShowImageModal(false)}>
-                <View style={styles.fullImageContainer}>
-                    <BlurView intensity={90} tint="dark" style={StyleSheet.absoluteFill} />
-                    <TouchableOpacity style={styles.closeImageBtn} onPress={() => setShowImageModal(false)}><X size={36} color="white" /></TouchableOpacity>
-                    {activeImageUrl && (<Image source={{ uri: activeImageUrl }} style={styles.fullScreenImage} resizeMode="contain" />)}
-                </View>
             </Modal>
 
             {/* --- GRAND DETAIL MODAL (Web Match) --- */}
@@ -890,35 +908,49 @@ export default function DashboardScreen() {
                             </ScrollView>
                         )}
                     </View>
-                </View>
-            </Modal>
 
-            {/* Extension Request Modal */}
-            <Modal visible={showExtensionModal} transparent animationType="fade" onRequestClose={() => setShowExtensionModal(false)}>
-                <View style={[styles.modalOverlay, {justifyContent: 'center', alignItems: 'center'}]}>
-                    <BlurView intensity={isDark ? 80 : 40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />
-                    <View style={styles.grandExtModal}>
-                        <Text style={styles.grandModalTitleCenter}>แจ้งขอเลื่อนกำหนดส่ง</Text>
-                        
-                        <Text style={styles.grandInputLabel}>ต้องการเลื่อนไปวันที่</Text>
-                        <TouchableOpacity style={styles.grandDateInputBtn} onPress={() => setShowExtDatePicker(true)}>
-                            <Text style={styles.grandDateInputText}>{formatDate(extensionDate.toISOString())}</Text>
-                            <Calendar size={22} color="#F59E0B" />
-                        </TouchableOpacity>
-                        {showExtDatePicker && (<CalendarPickerModal value={extensionDate} onChange={(d) => setExtensionDate(d)} onClose={() => setShowExtDatePicker(false)} minimumDate={new Date()} />)}
-
-                        <Text style={styles.grandInputLabel}>สาเหตุ/หมายเหตุ</Text>
-                        <TextInput style={styles.grandReasonInput} multiline numberOfLines={4} placeholder="ระบุสาเหตุที่งานไม่เสร็จ..." placeholderTextColor={theme.textSecondary} value={extensionReason} onChangeText={setExtensionReason} />
-
-                        <View style={styles.grandActionRowModal}>
-                            <TouchableOpacity style={styles.grandBtnOutlineModal} onPress={() => setShowExtensionModal(false)}><Text style={styles.grandBtnOutlineTextModal}>ยกเลิก</Text></TouchableOpacity>
-                            <TouchableOpacity style={styles.grandBtnPrimaryModal} onPress={submitExtension}><Text style={styles.grandBtnPrimaryTextModal}>บันทึกการแจ้งเลื่อน</Text></TouchableOpacity>
+                    {/* Modal ที่เปิดจากในหน้ารายละเอียด ต้องซ้อนอยู่ข้างใน — iOS เปิด Modal พี่น้องทับกันไม่ได้ (กดแล้วเงียบ) */}
+                    <Modal visible={showImageModal} transparent={true} animationType="fade" onRequestClose={() => setShowImageModal(false)}>
+                        <View style={styles.fullImageContainer}>
+                            <BlurView intensity={90} tint="dark" style={StyleSheet.absoluteFill} />
+                            <TouchableOpacity style={styles.closeImageBtn} onPress={() => setShowImageModal(false)}><X size={36} color="white" /></TouchableOpacity>
+                            {activeImageUrl && (<Image source={{ uri: activeImageUrl }} style={styles.fullScreenImage} resizeMode="contain" />)}
                         </View>
-                    </View>
+                    </Modal>
+
+                    {/* Extension Request Modal */}
+                    <Modal visible={showExtensionModal} transparent animationType="fade" onRequestClose={() => setShowExtensionModal(false)}>
+                        <View style={[styles.modalOverlay, {justifyContent: 'center', alignItems: 'center'}]}>
+                            <BlurView intensity={isDark ? 80 : 40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />
+                            <View style={styles.grandExtModal}>
+                                <Text style={styles.grandModalTitleCenter}>แจ้งขอเลื่อนกำหนดส่ง</Text>
+                        
+                                <Text style={styles.grandInputLabel}>ต้องการเลื่อนไปวันที่</Text>
+                                <TouchableOpacity style={styles.grandDateInputBtn} onPress={() => setShowExtDatePicker(true)}>
+                                    <Text style={styles.grandDateInputText}>{formatDate(extensionDate.toISOString())}</Text>
+                                    <Calendar size={22} color="#F59E0B" />
+                                </TouchableOpacity>
+                                {showExtDatePicker && (<CalendarPickerModal value={extensionDate} onChange={(d) => setExtensionDate(d)} onClose={() => setShowExtDatePicker(false)} minimumDate={new Date()} />)}
+
+                                <Text style={styles.grandInputLabel}>สาเหตุ/หมายเหตุ</Text>
+                                <TextInput style={styles.grandReasonInput} multiline numberOfLines={4} placeholder="ระบุสาเหตุที่งานไม่เสร็จ..." placeholderTextColor={theme.textSecondary} value={extensionReason} onChangeText={setExtensionReason} />
+
+                                <View style={styles.grandActionRowModal}>
+                                    <TouchableOpacity style={styles.grandBtnOutlineModal} onPress={() => setShowExtensionModal(false)}><Text style={styles.grandBtnOutlineTextModal}>ยกเลิก</Text></TouchableOpacity>
+                                    <TouchableOpacity style={styles.grandBtnPrimaryModal} onPress={submitExtension}><Text style={styles.grandBtnPrimaryTextModal}>บันทึกการแจ้งเลื่อน</Text></TouchableOpacity>
+                                </View>
+                            </View>
+                            <BeautifulAlert inline {...alertProps} />
+                        </View>
+                    </Modal>
+
+                    {/* แจ้งเตือนของหน้ารายละเอียด — ตอนหน้าต่างขอเลื่อนเปิดอยู่ ใช้ตัวที่อยู่ในนั้นแทน */}
+                    {!showExtensionModal ? <BeautifulAlert inline {...alertProps} /> : null}
                 </View>
             </Modal>
 
-            <BeautifulAlert visible={alertConfig.visible} type={alertConfig.type} title={alertConfig.title} message={alertConfig.message} children={alertConfig.children} confirmText={alertConfig.confirmText} cancelText={alertConfig.cancelText} showCancel={alertConfig.showCancel} onConfirm={alertConfig.onConfirm} onCancel={closeAlert} isDark={isDark} />
+            {/* แจ้งเตือนตอนไม่มี Modal เปิดอยู่ */}
+            <BeautifulAlert {...alertProps} visible={alertConfig.visible && !modalVisible} />
         </View>
     );
 }

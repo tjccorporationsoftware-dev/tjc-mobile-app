@@ -47,6 +47,7 @@ import DriverTasksScreen from './DriverTasks';
 import EstimateDashboardScreen from './Estimatedashboard';
 import ProjectAccountingScreen from './projectaccounting';
 import ProjectFollowupScreen from './projectfollowup';
+import CostCheckScreen from './CostCheckScreen';
 
 // project_API_mobile.php — README_project.md
 const PROJECT_API_URL = `${API_MODULES}/project_API_mobile.php`;
@@ -738,10 +739,12 @@ export default function ProjectDashboardScreen({ onNavigate }: ProjectDashboardS
   // ไม่มี navigation library ต่อจากภายนอก (onNavigate) -> สลับหน้าเองภายในไฟล์นี้
   // ตอนนี้มีแค่ 'estimate' (ทุนตั้งต้น) ที่สร้างสกรีนจริงแล้ว ปุ่มอื่นยังเป็น Alert stub
   const [activeScreen, setActiveScreen] = useState<
-    'dashboard' | 'estimate' | 'driverTasks' | 'accounting' | 'incomplete' | 'projectAccounting' | 'projectFollowup' | 'delivery'
+    'dashboard' | 'estimate' | 'driverTasks' | 'accounting' | 'incomplete' | 'projectAccounting' | 'projectFollowup' | 'delivery' | 'costCheck'
   >('dashboard');
   // project_id ที่กำลังดูบัญชี — ตั้งก่อนสลับ activeScreen แล้วส่งเป็น prop ตรงๆ (ดู handleLinkIcon)
   const [accountingProjectId, setAccountingProjectId] = useState<string | undefined>(undefined);
+  // project_id ที่เปิดหน้าวิเคราะห์ต้นทุน (cost_check.php?project_id=) — ปุ่มในหน้ารายละเอียด แบบปุ่มใน project_details.php
+  const [costCheckProjectId, setCostCheckProjectId] = useState<string | undefined>(undefined);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -3433,6 +3436,16 @@ export default function ProjectDashboardScreen({ onNavigate }: ProjectDashboardS
                     <Ionicons name="cube-outline" size={16} color="#7c3aed" />
                     <Text style={styles.quickActionBtnText} numberOfLines={1}>สถานะอุปกรณ์</Text>
                   </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.quickActionBtn}
+                    onPress={() => {
+                      setCostCheckProjectId(String(p.id));
+                      setActiveScreen('costCheck');
+                    }}
+                  >
+                    <Ionicons name="pie-chart-outline" size={16} color="#0ea5e9" />
+                    <Text style={styles.quickActionBtnText} numberOfLines={1}>วิเคราะห์ต้นทุน</Text>
+                  </TouchableOpacity>
                 </View>
                 {!isClosed && perms.canForceComplete && (
                   <TouchableOpacity style={styles.primaryActionBtn} onPress={() => handleForceComplete(p)}>
@@ -4638,6 +4651,10 @@ export default function ProjectDashboardScreen({ onNavigate }: ProjectDashboardS
   }
   if (activeScreen === 'delivery') {
     return renderDeliveryHub();
+  }
+  if (activeScreen === 'costCheck') {
+    // หน้าวิเคราะห์ต้นทุนปิดจบ/ยกเลิกโครงการได้ → กลับมาแล้วโหลดรายการ+KPI ใหม่
+    return <CostCheckScreen id={costCheckProjectId} onBack={backToDashboardAndRefresh} />;
   }
 
   if (loading && projects.length === 0) {

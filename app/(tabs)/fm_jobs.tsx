@@ -571,12 +571,14 @@ export default function FmJobs() {
           type: `image/${ext === "jpg" ? "jpeg" : ext}`,
         } as any);
       }
-      const res = await fetch(`${API_BASE}/api_fm.php?action=complete_job`, {
-        method: "POST",
-        body: fd,
-        headers: { Accept: "application/json" },
+      // ส่งด้วย axios (XHR) — fetch ของ Expo SDK 57 (expo/fetch) ไม่รองรับไฟล์แบบ { uri, name, type } ใน FormData
+      const res = await axios.post(`${API_BASE}/api_fm.php?action=complete_job`, fd, {
+        headers: { Accept: "application/json", "Content-Type": "multipart/form-data" },
+        responseType: "text",
+        transformResponse: (d) => d, // เก็บเป็นข้อความดิบ แล้ว JSON.parse เองแบบเดิม
+        validateStatus: () => true,
       });
-      const txt = await res.text();
+      const txt = String(res.data ?? "");
       let data: any;
       try {
         data = JSON.parse(txt);

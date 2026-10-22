@@ -31,6 +31,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import axios from "axios";
 import { API_BASE, IMG_BASE_URL } from "../../constants/config";
 
 export default function DriverConfirmItems() {
@@ -356,13 +357,15 @@ export default function DriverConfirmItems() {
               appendImages(newDmg, "damaged_image_group[]");
               appendImages(newWork, "work_image_group[]");
 
-              const response = await fetch(`${API_BASE}/api_mobile.php?action=update_project_items`, {
-                method: "POST",
-                body: formData,
-                headers: { Accept: "application/json" },
+              // ส่งด้วย axios (XHR) — fetch ของ Expo SDK 57 (expo/fetch) ไม่รองรับไฟล์แบบ { uri, name, type } ใน FormData
+              const response = await axios.post(`${API_BASE}/api_mobile.php?action=update_project_items`, formData, {
+                headers: { Accept: "application/json", "Content-Type": "multipart/form-data" },
+                responseType: "text",
+                transformResponse: (d) => d, // เก็บเป็นข้อความดิบ แล้ว JSON.parse เองแบบเดิม
+                validateStatus: () => true,
               });
 
-              const textResult = await response.text();
+              const textResult = String(response.data ?? "");
               let result;
               try {
                 result = JSON.parse(textResult);

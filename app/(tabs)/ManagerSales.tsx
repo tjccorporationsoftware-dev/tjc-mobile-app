@@ -1,5 +1,6 @@
 import { FontAwesome5, Ionicons } from "@expo/vector-icons";
 import axios from "axios";
+import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect, useRouter } from "expo-router";
 import React, { useCallback, useRef, useState } from "react";
 import {
@@ -16,12 +17,14 @@ import {
   View,
 } from "react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { API_BASE, IMG_BASE_URL } from "../../constants/config";
 // 🌟 รูปแบบวันที่สั้น "d/m/yy" มาตรฐานเดียวกันทั้งแอป แทน toLocaleDateString("th-TH")/ชื่อเดือนย่อ
 import { formatShortThaiDate } from "../../components/DateTimeField";
 
-const PRIMARY_COLOR = "#2563eb";
+// โทนน้ำเงินชุดเดียวกับ sidebar / หน้า login (navy → blue → sky)
+const PRIMARY_COLOR = "#1d4ed8";
+const THEME_GRADIENT = ["#0a1f5c", "#1d4ed8", "#0ea5e9"] as const;
 const SUCCESS_COLOR = "#10b981";
 const WARNING_COLOR = "#f59e0b";
 const DANGER_COLOR = "#ef4444";
@@ -49,21 +52,46 @@ const TH_MONTHS_SHORT = [
 
 // ===== Design tokens: สี/ระยะ/ขนาดตัวอักษร ใช้ทั้งหน้าให้เป็นชุดเดียว =====
 const T = {
-  bg: "#f1f5f9",
+  bg: "#f0f5fd",
   surface: "#ffffff",
   line: "#e2e8f0",
-  lineSoft: "#f1f5f9",
+  lineSoft: "#eef2f7",
   text: "#0f172a",
   textSub: "#475569",
   textMute: "#94a3b8",
+  cardLine: "#e6ecf5",
   radius: 14,
   pad: 16,
   gap: 12,
 };
 const FS = { xs: 11, sm: 12, md: 14, lg: 16, xl: 20, hero: 30 };
+// เงาการ์ดบางๆ โทนน้ำเงินเข้ม ใช้กับการ์ด/แผงทั้งหน้า
+const CARD_SHADOW = {
+  shadowColor: "#0a1f5c",
+  shadowOpacity: 0.06,
+  shadowRadius: 10,
+  shadowOffset: { width: 0, height: 3 },
+  elevation: 2,
+};
+
+// ย่อเงินก้อนใหญ่ให้อ่านง่ายในที่แคบ: 63,583,333.33 → "63.58 ล้าน"
+const fmtMoneyShort = (n: number) =>
+  Math.abs(n) >= 1e6
+    ? (n / 1e6).toLocaleString(undefined, { maximumFractionDigits: 2 }) + " ล้าน"
+    : Math.round(n).toLocaleString();
+
+// สีเหรียญอันดับ 1-3 ใน popup สถิติทีมเซลส์ (ทอง / เงิน / ทองแดง)
+const RANK_COLORS = ["#f59e0b", "#64748b", "#c2410c"];
+
+// อักษรย่อบนวงกลมรูปโปรไฟล์ — ข้ามสระหน้า (เ แ โ ใ ไ) ไม่ให้วงกลมขึ้นแค่ "เ"
+const initialOf = (name: string) => {
+  const raw = String(name || "").trim();
+  return raw.replace(/^[เแโใไ]+/, "").charAt(0) || raw.charAt(0) || "?";
+};
 
 export default function ManagerSales() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -655,43 +683,80 @@ export default function ManagerSales() {
     return <View style={styles.calGrid}>{days}</View>;
   };
 
-  const renderEmployeeCard = ({ item }: { item: any }) => {
+  // ================= การ์ดพนักงาน 1 คน/ทีม ใน popup สถิติทีมเซลส์ =================
+  // แตะการ์ด = กรองหน้าหลักเป็นคนนี้, แตะชิปสถานะ = กรองคนนี้ + สถานะนั้น
+  const renderEmployeeCard = (item: any, rank: number) => {
     const isBidding = item.teamType === "bidding";
     const themeColor = isBidding ? "#7c3aed" : PRIMARY_COLOR;
     const yearActual = yearSalesByName[item.name] || 0;
+    const hasSales = item.totalProjectValue > 0;
+    // เหรียญอันดับ 1-3 ให้เฉพาะคนที่มียอดจริง (ยอด 0 ทั้งหมดไม่ควรมีใครได้ที่ 1)
+    const medal = hasSales && rank <= 3 ? RANK_COLORS[rank - 1] : null;
+    const statuses = Object.keys(item.statusCounts).sort(
+      (a, b) => item.statusCounts[b] - item.statusCounts[a],
+    );
+    const statusTotal = statuses.reduce(
+      (sum, st) => sum + item.statusCounts[st],
+      0,
+    );
+    // จับคู่ทีละ 2 ช่อง — แถวสุดท้ายที่เหลือช่องเดียวเติมช่องว่าง ให้ทุกช่องกว้างเท่ากัน
+    const statusPairs: (string | null)[][] = [];
+    for (let i = 0; i < statuses.length; i += 2)
+      statusPairs.push([statuses[i], statuses[i + 1] ?? null]);
+    const pick = (status: string) => {
+      setFilterReporter(item.name);
+      setFilterStatus(status);
+      fetchData(item.name, status);
+      setEmpModalVisible(false);
+    };
 
     return (
       <TouchableOpacity
+        key={item.name}
         activeOpacity={0.85}
-        style={[styles.empCard, { borderLeftColor: themeColor }]}
-        onPress={() => {
-          setFilterReporter(item.name);
-          setFilterStatus("");
-          fetchData(item.name, "");
-          setEmpModalVisible(false);
-        }}
+        style={styles.empCard}
+        onPress={() => pick("")}
       >
+        {/* ใคร + ยอดขายที่ปิดได้ */}
         <View style={styles.empHeader}>
           <View style={[styles.avatar, { backgroundColor: themeColor }]}>
             {isBidding ? (
               <Ionicons name="people" size={18} color="#fff" />
             ) : (
-              <Text style={styles.avatarText}>
-                {String(item.name || "?").charAt(0)}
-              </Text>
+              <Text style={styles.avatarText}>{initialOf(item.name)}</Text>
             )}
+            <View
+              style={[styles.rankBadge, medal ? { backgroundColor: medal } : null]}
+            >
+              <Text style={[styles.rankText, medal ? { color: "#fff" } : null]}>
+                {rank}
+              </Text>
+            </View>
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.empName} numberOfLines={1}>
               {item.name}
             </Text>
-            <Text style={styles.empReportCount}>
-              {item.totalReports} รายงานในช่วงที่เลือก
+            <Text style={styles.empMeta} numberOfLines={1}>
+              {item.totalReports} รายงาน
+              {item.totalExpense > 0
+                ? "  ·  เบิก ฿" + item.totalExpense.toLocaleString()
+                : ""}
+            </Text>
+          </View>
+          <View style={{ alignItems: "flex-end", maxWidth: "38%" }}>
+            <Text style={styles.empSalesLabel}>ยอดที่ปิดได้</Text>
+            <Text
+              style={[styles.empSales, { color: hasSales ? themeColor : T.textMute }]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+            >
+              ฿{fmtMoneyShort(item.totalProjectValue)}
             </Text>
           </View>
         </View>
 
-        {/* ใช้แถบเป้าชุดเดียวกับหน้าหลัก: ยอดเดือนเทียบเป้าเดือน, ยอดสะสมทั้งปีเทียบเป้าปี */}
+        {/* แถบเป้าชุดเดียวกับหน้าหลัก: ยอดเดือนเทียบเป้าเดือน, ยอดสะสมทั้งปีเทียบเป้าปี */}
         <View style={styles.empGoals}>
           {renderGoal(
             "เป้าเดือนนี้",
@@ -708,52 +773,69 @@ export default function ManagerSales() {
           )}
         </View>
 
-        <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
-          <View style={[styles.moneyBox, { backgroundColor: "#eff6ff" }]}>
-            <Text style={styles.moneyLabel}>ยอดขายทำได้</Text>
-            <Text
-              style={[styles.moneyValue, { color: "#1d4ed8" }]}
-              numberOfLines={1}
-            >
-              ฿{item.totalProjectValue.toLocaleString()}
-            </Text>
-          </View>
-          <View style={[styles.moneyBox, { backgroundColor: "#fef2f2" }]}>
-            <Text style={[styles.moneyLabel, { color: "#991b1b" }]}>
-              รวมเบิกจ่าย
-            </Text>
-            <Text
-              style={[styles.moneyValue, { color: "#b91c1c" }]}
-              numberOfLines={1}
-            >
-              ฿{item.totalExpense.toLocaleString()}
-            </Text>
-          </View>
-        </View>
+        {statuses.length > 0 && (
+          <View style={styles.empStatusBox}>
+            <View style={styles.empStatusHead}>
+              <Text style={styles.empStatusTitle}>สถานะงาน</Text>
+              <Text style={styles.empStatusTotal}>รวม {statusTotal} งาน</Text>
+            </View>
 
-        <View style={styles.empStatusWrap}>
-          {Object.keys(item.statusCounts).map((status, idx) => {
-            const color = getStatusColor(status);
-            return (
-              <TouchableOpacity
-                key={idx}
-                style={[styles.statusTag, { borderColor: color + "55" }]}
-                onPress={() => {
-                  setFilterReporter(item.name);
-                  setFilterStatus(status);
-                  fetchData(item.name, status);
-                  setEmpModalVisible(false);
-                }}
-              >
-                <Text style={[styles.statusTagCount, { color }]}>
-                  {item.statusCounts[status]}
-                </Text>
-                <Text style={styles.statusTagLabel} numberOfLines={1}>
-                  {status}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
+            {/* สัดส่วนทุกสถานะในแถบเดียว */}
+            <View style={styles.empStatusBar}>
+              {statuses.map((st) => (
+                <View
+                  key={st}
+                  style={{
+                    flex: item.statusCounts[st],
+                    backgroundColor: getStatusColor(st),
+                  }}
+                />
+              ))}
+            </View>
+
+            {/* ตาราง 2 คอลัมน์ ช่องกว้าง/สูงเท่ากันทั้งแถว — ชื่อยาวขึ้นได้ 3 บรรทัดแทนการตัดคำ */}
+            <View style={styles.empStatusGrid}>
+              {statusPairs.map((pair, r) => (
+                <View key={r} style={styles.empStatusRow}>
+                  {pair.map((st, c) => {
+                    if (!st) return <View key={"blank-" + c} style={{ flex: 1 }} />;
+                    const color = getStatusColor(st);
+                    const n = item.statusCounts[st];
+                    return (
+                      <TouchableOpacity
+                        key={st}
+                        activeOpacity={0.75}
+                        style={[styles.empStatusTile, { backgroundColor: color + "0F" }]}
+                        onPress={() => pick(st)}
+                      >
+                        <View
+                          style={[styles.empStatusAccent, { backgroundColor: color }]}
+                        />
+                        <Text style={styles.empStatusName} numberOfLines={3}>
+                          {st}
+                        </Text>
+                        <View style={{ alignItems: "flex-end" }}>
+                          <Text style={[styles.empStatusCount, { color }]}>
+                            {n}
+                          </Text>
+                          <Text style={styles.empStatusPct}>
+                            {Math.round((n / statusTotal) * 100)}%
+                          </Text>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              ))}
+            </View>
+          </View>
+        )}
+
+        <View style={styles.empFooter}>
+          <Text style={[styles.empFooterText, { color: themeColor }]}>
+            {isBidding ? "ดูรายงานของทีมนี้" : "ดูรายงานของคนนี้"}
+          </Text>
+          <Ionicons name="chevron-forward" size={13} color={themeColor} />
         </View>
       </TouchableOpacity>
     );
@@ -788,17 +870,185 @@ export default function ManagerSales() {
             ]}
           />
         </View>
+        {/* ตัวเลขเป้าหลักสิบ-ร้อยล้าน บรรทัดเดียวไม่พอ — แยก 2 บรรทัด + ย่อเป็น "ล้าน" */}
         <Text style={styles.goalFoot} numberOfLines={1}>
-          {target > 0
-            ? (done ? "เกินเป้า " : "ขาดอีก ") +
-              Math.abs(actual - target).toLocaleString() +
-              "  ·  เป้า " +
-              target.toLocaleString()
-            : "ยังไม่ได้ตั้งเป้า"}
+          {target > 0 ? "เป้า ฿" + fmtMoneyShort(target) : "ยังไม่ได้ตั้งเป้า"}
         </Text>
+        {target > 0 && (
+          <Text
+            style={[styles.goalFootSub, done && { color: SUCCESS_COLOR }]}
+            numberOfLines={1}
+          >
+            {(done ? "เกินเป้า ฿" : "ขาดอีก ฿") +
+              fmtMoneyShort(Math.abs(actual - target))}
+          </Text>
+        )}
       </View>
     );
   };
+
+  // ================= ตัวเลขรวม 1 ช่องในการ์ดสรุป =================
+  const renderStat = (
+    icon: string,
+    label: string,
+    value: string,
+    color: string,
+    tintValue = false,
+  ) => (
+    <View style={styles.stat}>
+      <View style={[styles.statIcon, { backgroundColor: color + "14" }]}>
+        <Ionicons name={icon as any} size={15} color={color} />
+      </View>
+      <Text
+        style={[styles.statValue, tintValue && { color }]}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+      >
+        {value}
+      </Text>
+      <Text style={styles.statLabel}>{label}</Text>
+    </View>
+  );
+
+  // ================= หัวข้อ section: ไอคอน + ชื่อ + ข้อความ/ป้ายด้านขวา =================
+  const renderSectionHeader = (
+    icon: string,
+    title: string,
+    right?: React.ReactNode,
+  ) => (
+    <View style={styles.secHead}>
+      <View style={styles.secIcon}>
+        <Ionicons name={icon as any} size={14} color={PRIMARY_COLOR} />
+      </View>
+      <Text style={styles.secTitle}>{title}</Text>
+      <View style={{ flex: 1 }} />
+      {right}
+    </View>
+  );
+
+  // ================= ช่วงเวลาลัด: แตะแล้วค้นหาเลย ไม่ต้องกดปุ่มค้นหาซ้ำ =================
+  const RANGE_PRESETS = [
+    {
+      label: "เดือนนี้",
+      s: new Date(today.getFullYear(), today.getMonth(), 1),
+      e: new Date(today.getFullYear(), today.getMonth() + 1, 0),
+    },
+    {
+      label: "เดือนที่แล้ว",
+      s: new Date(today.getFullYear(), today.getMonth() - 1, 1),
+      e: new Date(today.getFullYear(), today.getMonth(), 0),
+    },
+    {
+      label: "ปีนี้",
+      s: new Date(today.getFullYear(), 0, 1),
+      e: new Date(today.getFullYear(), 11, 31),
+    },
+  ];
+  const sameDay = (a: Date | null, b: Date) =>
+    !!a &&
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate();
+  const activePreset = RANGE_PRESETS.find(
+    (p) => sameDay(startDate, p.s) && sameDay(endDate, p.e),
+  )?.label;
+  const applyRange = (s: Date, e: Date) => {
+    setStartDate(s);
+    setEndDate(e);
+    fetchData(undefined, undefined, s, e);
+  };
+
+  // ================= แผงตัวกรอง (การ์ดขาวในพื้นน้ำเงินของ hero) =================
+  const renderFilterPanel = () => (
+    <Animated.View
+      entering={FadeInDown.duration(220)}
+      style={styles.filterCard}
+    >
+      <Text style={styles.filterLabel}>ช่วงเวลาด่วน</Text>
+      <View style={styles.presetRow}>
+        {RANGE_PRESETS.map((p) => {
+          const on = activePreset === p.label;
+          return (
+            <TouchableOpacity
+              key={p.label}
+              activeOpacity={0.8}
+              style={[styles.preset, on && styles.presetOn]}
+              onPress={() => applyRange(p.s, p.e)}
+            >
+              <Text style={[styles.presetText, on && styles.presetTextOn]}>
+                {p.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      <View style={styles.dateRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.filterLabel}>ตั้งแต่วันที่</Text>
+          <TouchableOpacity
+            onPress={() => openCustomDatePicker("start")}
+            style={styles.field}
+          >
+            <Ionicons name="calendar-outline" size={16} color={PRIMARY_COLOR} />
+            <Text
+              style={[styles.fieldText, !startDate && styles.fieldPlaceholder]}
+            >
+              {startDate ? fmtShort(startDate) : "ทั้งหมด"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.filterLabel}>ถึงวันที่</Text>
+          <TouchableOpacity
+            onPress={() => openCustomDatePicker("end")}
+            style={styles.field}
+          >
+            <Ionicons name="calendar-outline" size={16} color={PRIMARY_COLOR} />
+            <Text
+              style={[styles.fieldText, !endDate && styles.fieldPlaceholder]}
+            >
+              {endDate ? fmtShort(endDate) : "ทั้งหมด"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      <Text style={styles.filterLabel}>พนักงาน / ทีม</Text>
+      <TouchableOpacity
+        onPress={() => setSelectorVisible(true)}
+        style={styles.field}
+      >
+        <Ionicons name="person-outline" size={16} color={PRIMARY_COLOR} />
+        <Text
+          style={[
+            styles.fieldText,
+            { flex: 1 },
+            !filterReporter && styles.fieldPlaceholder,
+          ]}
+          numberOfLines={1}
+        >
+          {filterReporter || "พนักงานทั้งหมด"}
+        </Text>
+        <Ionicons name="chevron-down" size={16} color={T.textMute} />
+      </TouchableOpacity>
+
+      <View style={styles.filterActions}>
+        <TouchableOpacity onPress={resetFilters} style={styles.resetBtn}>
+          <Ionicons name="refresh" size={16} color={T.textSub} />
+          <Text style={styles.resetBtnText}>ล้าง</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => fetchData()}
+          style={styles.searchBtn}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="search" size={16} color="#fff" />
+          <Text style={styles.searchBtnText}>ค้นหา</Text>
+        </TouchableOpacity>
+      </View>
+    </Animated.View>
+  );
 
   // ================= การ์ดรายงาน: 1 การ์ด = 1 รายงาน, ข้างในบล็อกละ 1 งาน =================
   const renderRecentItem = (
@@ -808,6 +1058,7 @@ export default function ManagerSales() {
     const { item, jobs } = row;
     const expense = parseFloat(item.total_expense) || 0;
     const isOffice = item.gps === "Office";
+    const isBidding = item.team_type === "bidding";
     const receipts = [
       {
         on: !!item.fuel_receipt,
@@ -844,7 +1095,21 @@ export default function ManagerSales() {
         >
           {/* ใคร - เมื่อไหร่ - เบิกเท่าไหร่ */}
           <View style={styles.cardHeader}>
-            <View style={{ flex: 1, paddingRight: 8 }}>
+            <View
+              style={[
+                styles.cardAvatar,
+                { backgroundColor: (isBidding ? "#7c3aed" : PRIMARY_COLOR) + "16" },
+              ]}
+            >
+              {isBidding ? (
+                <Ionicons name="people" size={15} color="#7c3aed" />
+              ) : (
+                <Text style={[styles.cardAvatarText, { color: PRIMARY_COLOR }]}>
+                  {initialOf(displayNameOf(item))}
+                </Text>
+              )}
+            </View>
+            <View style={{ flex: 1, paddingRight: 4 }}>
               <Text style={styles.cardName} numberOfLines={1}>
                 {displayNameOf(item)}
               </Text>
@@ -999,31 +1264,66 @@ export default function ManagerSales() {
       ? fmtShort(startDate) + " – " + fmtShort(endDate)
       : "ทุกช่วงเวลา";
   const activeFilterCount = (filterReporter ? 1 : 0) + (filterStatus ? 1 : 0);
+  // popup สถิติทีมเซลส์: แยกกลุ่มแบบหน้าเว็บ (ทีมประมูลก่อน) แต่ละกลุ่มเรียงตามยอดขาย
+  const bySales = (a: any, b: any) =>
+    b.totalProjectValue - a.totalProjectValue || b.totalReports - a.totalReports;
+  const empGroups = [
+    {
+      key: "bidding",
+      title: "ทีมประมูล",
+      icon: "people",
+      color: "#7c3aed",
+      list: employeeStats.filter((e) => e.teamType === "bidding").sort(bySales),
+    },
+    {
+      key: "marketing",
+      title: "ทีมการตลาด (รายบุคคล)",
+      icon: "person",
+      color: PRIMARY_COLOR,
+      list: employeeStats.filter((e) => e.teamType !== "bidding").sort(bySales),
+    },
+  ].filter((g) => g.list.length > 0);
+  const empWithTarget = employeeStats.filter((e) => e.targetAmount > 0);
+  const empHitTarget = empWithTarget.filter(
+    (e) => e.totalProjectValue >= e.targetAmount,
+  ).length;
+
+  // สถานะงานเรียงจากมากไปน้อย — แถบยาวเทียบกับสถานะที่มีมากที่สุด
+  const statusRows = [...kpiList].sort((a, b) => b.count - a.count);
+  const statusMax = Math.max(1, ...statusRows.map((r) => r.count));
 
   return (
-    <SafeAreaView style={styles.container} edges={["top"]}>
-      <View style={styles.header}>
+    <View style={styles.container}>
+      {/* ===== หัวหน้า: ไล่สีแนวนอน (x อย่างเดียว) ชุดเดียวกับ hero ด้านล่าง
+          สีที่ตำแหน่งแนวนอนเดียวกันจึงตรงกันพอดี เลื่อนแล้ว hero ต่อกับหัวเป็นผืนเดียว ===== */}
+      <LinearGradient
+        colors={THEME_GRADIENT}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 0 }}
+        style={[styles.header, { paddingTop: insets.top + 10 }]}
+      >
         <TouchableOpacity
           onPress={() => router.replace("/(tabs)/manager_dashboard")}
-          style={styles.backBtn}
+          style={styles.headerBtn}
+          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
         >
-          <Ionicons name="arrow-back" size={22} color={T.text} />
+          <Ionicons name="arrow-back" size={20} color="#fff" />
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>ภาพรวมฝ่ายขาย</Text>
-          <Text style={styles.headerSub}>{rangeLabel}</Text>
+          <Text style={styles.headerSub} numberOfLines={1}>
+            ยอดขาย · เป้าหมาย · รายงานทีม
+          </Text>
         </View>
         <TouchableOpacity
           onPress={() => setShowFilter(!showFilter)}
-          style={[
-            styles.filterBtn,
-            showFilter && { backgroundColor: PRIMARY_COLOR },
-          ]}
+          style={[styles.headerBtn, showFilter && styles.headerBtnActive]}
+          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
         >
           <Ionicons
-            name="options-outline"
+            name={showFilter ? "close" : "options-outline"}
             size={20}
-            color={showFilter ? "#fff" : T.text}
+            color={showFilter ? PRIMARY_COLOR : "#fff"}
           />
           {activeFilterCount > 0 && !showFilter && (
             <View style={styles.filterDot}>
@@ -1031,66 +1331,15 @@ export default function ManagerSales() {
             </View>
           )}
         </TouchableOpacity>
-      </View>
-
-      {/* ตัวกรองที่ใช้อยู่ รวมไว้ที่เดียว กดกากบาทเพื่อล้างทีละอัน */}
-      {activeFilterCount > 0 && (
-        <View style={styles.chipBar}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.chipBarInner}
-          >
-            {filterReporter !== "" && (
-              <TouchableOpacity
-                style={styles.chip}
-                onPress={() => {
-                  setFilterReporter("");
-                  fetchData("", filterStatus);
-                }}
-              >
-                <Ionicons name="person" size={12} color={PRIMARY_COLOR} />
-                <Text style={styles.chipText} numberOfLines={1}>
-                  {filterReporter}
-                </Text>
-                <Ionicons name="close" size={13} color={T.textMute} />
-              </TouchableOpacity>
-            )}
-            {filterStatus !== "" && (
-              <TouchableOpacity
-                style={styles.chip}
-                onPress={() => {
-                  setFilterStatus("");
-                  fetchData(undefined, "");
-                }}
-              >
-                <View
-                  style={[
-                    styles.chipDot,
-                    { backgroundColor: getStatusColor(filterStatus) },
-                  ]}
-                />
-                <Text style={styles.chipText} numberOfLines={1}>
-                  {filterStatus}
-                </Text>
-                <Ionicons name="close" size={13} color={T.textMute} />
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity
-              onPress={resetFilters}
-              hitSlop={{ top: 8, bottom: 8 }}
-            >
-              <Text style={styles.chipClear}>ล้างทั้งหมด</Text>
-            </TouchableOpacity>
-          </ScrollView>
-        </View>
-      )}
+      </LinearGradient>
 
       <ScrollView
-        contentContainerStyle={{ paddingBottom: 100 }}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 32 }}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
+            tintColor="#fff"
+            colors={[PRIMARY_COLOR]}
             onRefresh={() => {
               yearCache.current = null;
               setRefreshing(true);
@@ -1099,99 +1348,127 @@ export default function ManagerSales() {
           />
         }
       >
-        {showFilter && (
-          <Animated.View entering={FadeInDown} style={styles.filterSection}>
-            <Text style={styles.sectionTitle}>ตัวกรองข้อมูล</Text>
-            <View style={{ marginBottom: 15 }}>
-              <Text style={styles.inputLabel}>เลือกพนักงาน</Text>
+        {/* พื้นที่เหนือขอบบนตอนดึงรีเฟรช (iOS เด้ง) ให้เป็นสีเดียวกับหัว ไม่โผล่พื้นเทา */}
+        <LinearGradient
+          colors={THEME_GRADIENT}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+          style={styles.overscrollFill}
+        />
+
+        {/* ===== Hero: ช่วงเวลา/ตัวกรองที่ใช้อยู่ + ยอดขายที่ปิดได้ ===== */}
+        <View style={styles.heroWrap}>
+          <LinearGradient
+            colors={THEME_GRADIENT}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.hero}
+          >
+            {/* ตัวกรองทั้งหมดรวมไว้แถวเดียว: แตะช่วงวันที่เพื่อเปิดแผงกรอง, แตะชิปอื่นเพื่อล้างทีละอัน */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.pillScroll}
+              contentContainerStyle={styles.pillRow}
+            >
               <TouchableOpacity
-                onPress={() => setSelectorVisible(true)}
-                style={styles.filterInput}
+                activeOpacity={0.8}
+                style={styles.pill}
+                onPress={() => setShowFilter(true)}
               >
-                <Text style={{ color: filterReporter ? "#333" : "#999" }}>
-                  {filterReporter || "พนักงานทั้งหมด"}
+                <Ionicons name="calendar-outline" size={13} color="#fff" />
+                <Text style={styles.pillText} numberOfLines={1}>
+                  {rangeLabel}
                 </Text>
-                <Ionicons name="chevron-down" size={20} color="#999" />
-              </TouchableOpacity>
-            </View>
-            <View style={styles.dateRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.inputLabel}>วันที่เริ่มต้น</Text>
-                <TouchableOpacity
-                  onPress={() => openCustomDatePicker("start")}
-                  style={styles.dateInput}
-                >
-                  <Ionicons name="calendar-outline" size={20} color="#666" />
-                  <Text
-                    style={{
-                      color: startDate ? "#333" : "#999",
-                      marginLeft: 8,
-                    }}
-                  >
-                    {startDate ? fmtShort(startDate) : "ทั้งหมด"}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.inputLabel}>ถึงวันที่</Text>
-                <TouchableOpacity
-                  onPress={() => openCustomDatePicker("end")}
-                  style={styles.dateInput}
-                >
-                  <Ionicons name="calendar-outline" size={20} color="#666" />
-                  <Text
-                    style={{ color: endDate ? "#333" : "#999", marginLeft: 8 }}
-                  >
-                    {endDate ? fmtShort(endDate) : "ทั้งหมด"}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-            <View style={styles.filterActions}>
-              <TouchableOpacity
-                onPress={() => fetchData()}
-                style={styles.searchBtn}
-              >
                 <Ionicons
-                  name="search"
-                  size={18}
-                  color="white"
-                  style={{ marginRight: 5 }}
+                  name="chevron-down"
+                  size={12}
+                  color="rgba(255,255,255,0.8)"
                 />
-                <Text style={{ color: "white", fontWeight: "bold" }}>
-                  ค้นหา
+              </TouchableOpacity>
+              {filterReporter !== "" && (
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  style={styles.pill}
+                  onPress={() => {
+                    setFilterReporter("");
+                    fetchData("", filterStatus);
+                  }}
+                >
+                  <Ionicons name="person" size={12} color="#fff" />
+                  <Text style={styles.pillText} numberOfLines={1}>
+                    {filterReporter}
+                  </Text>
+                  <Ionicons
+                    name="close-circle"
+                    size={14}
+                    color="rgba(255,255,255,0.85)"
+                  />
+                </TouchableOpacity>
+              )}
+              {filterStatus !== "" && (
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  style={styles.pill}
+                  onPress={() => {
+                    setFilterStatus("");
+                    fetchData(undefined, "");
+                  }}
+                >
+                  <View
+                    style={[
+                      styles.pillDot,
+                      { backgroundColor: getStatusColor(filterStatus) },
+                    ]}
+                  />
+                  <Text style={styles.pillText} numberOfLines={1}>
+                    {filterStatus}
+                  </Text>
+                  <Ionicons
+                    name="close-circle"
+                    size={14}
+                    color="rgba(255,255,255,0.85)"
+                  />
+                </TouchableOpacity>
+              )}
+              {activeFilterCount > 0 && (
+                <TouchableOpacity
+                  onPress={resetFilters}
+                  hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+                >
+                  <Text style={styles.pillClear}>ล้างทั้งหมด</Text>
+                </TouchableOpacity>
+              )}
+            </ScrollView>
+
+            {showFilter && renderFilterPanel()}
+
+            <View style={styles.heroTop}>
+              <Text style={styles.heroLabel}>ยอดขายที่ปิดได้</Text>
+              <View style={styles.heroTag}>
+                <Ionicons name="checkmark-circle" size={12} color="#6ee7b7" />
+                <Text style={styles.heroTagText} numberOfLines={1}>
+                  {successKeyword}
                 </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={resetFilters}
-                style={styles.resetBtn}
-              >
-                <Ionicons name="refresh" size={18} color="#666" />
-              </TouchableOpacity>
+              </View>
             </View>
-          </Animated.View>
-        )}
+            <Text
+              style={styles.heroValue}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+            >
+              ฿{summary.sales.toLocaleString()}
+            </Text>
+            <Text style={styles.heroCaption} numberOfLines={1}>
+              {filterReporter ? "เฉพาะ " + filterReporter : "รวมทั้งทีม"}
+              {filterStatus ? "  ·  สถานะ " + filterStatus : ""}
+            </Text>
+          </LinearGradient>
+        </View>
 
-        {/* ===== สรุปยอดขายเทียบเป้า ===== */}
-        <View style={styles.hero}>
-          <View style={styles.heroTop}>
-            <Text style={styles.heroLabel}>ยอดขายที่ปิดได้</Text>
-            <View style={styles.heroTag}>
-              <Ionicons
-                name="checkmark-circle"
-                size={11}
-                color={SUCCESS_COLOR}
-              />
-              <Text style={styles.heroTagText} numberOfLines={1}>
-                {successKeyword}
-              </Text>
-            </View>
-          </View>
-          <Text style={styles.heroValue} numberOfLines={1} adjustsFontSizeToFit>
-            ฿{summary.sales.toLocaleString()}
-          </Text>
-
-          <View style={styles.heroGoals}>
+        {/* ===== การ์ดสรุปลอยทับขอบ hero: เป้าเดือน/ปี + ตัวเลขรวม ===== */}
+        <View style={styles.summaryCard}>
+          <View style={styles.goalRow}>
             {renderGoal(
               "เป้าเดือนนี้",
               summary.sales,
@@ -1206,133 +1483,204 @@ export default function ManagerSales() {
               "#0284c7",
             )}
           </View>
-        </View>
-
-        {/* ===== ตัวเลขรวม: แยกหน่วย "รายงาน" กับ "งาน" ให้ชัด ===== */}
-        <View style={styles.statRow}>
-          <View style={styles.statTile}>
-            <Text style={styles.statValue}>
-              {summary.total.toLocaleString()}
-            </Text>
-            <Text style={styles.statLabel}>รายงาน</Text>
-          </View>
-          <View style={styles.statTile}>
-            <Text style={styles.statValue}>
-              {summary.jobs.toLocaleString()}
-            </Text>
-            <Text style={styles.statLabel}>งาน</Text>
-          </View>
-          <View style={styles.statTile}>
-            <Text
-              style={[styles.statValue, { color: DANGER_COLOR }]}
-              numberOfLines={1}
-              adjustsFontSizeToFit
-            >
-              ฿{summary.expense.toLocaleString()}
-            </Text>
-            <Text style={styles.statLabel}>เบิกจ่าย</Text>
-          </View>
-        </View>
-
-        {/* ===== สถานะงาน ===== */}
-        <View style={styles.section}>
-          <View style={styles.sectionRow}>
-            <Text style={styles.sectionHeader}>สถานะงาน</Text>
-            {kpiList.length > 0 && (
-              <Text style={styles.sectionHint}>แตะเพื่อกรอง</Text>
+          <View style={styles.summaryDivider} />
+          {/* แยกหน่วย "รายงาน" กับ "งาน" ให้ชัด (1 รายงานมีได้หลายงาน) */}
+          <View style={styles.statRow}>
+            {renderStat(
+              "document-text",
+              "รายงาน",
+              summary.total.toLocaleString(),
+              PRIMARY_COLOR,
+            )}
+            <View style={styles.statSep} />
+            {renderStat(
+              "briefcase",
+              "งาน",
+              summary.jobs.toLocaleString(),
+              "#0ea5e9",
+            )}
+            <View style={styles.statSep} />
+            {renderStat(
+              "wallet",
+              "เบิกจ่าย",
+              "฿" + summary.expense.toLocaleString(),
+              DANGER_COLOR,
+              summary.expense > 0,
             )}
           </View>
-          {kpiList.length === 0 ? (
-            <Text style={styles.mutedText}>ไม่มีข้อมูลสถานะในช่วงนี้</Text>
-          ) : (
-            <View style={styles.chipWrap}>
-              {kpiList.map((it, idx) => {
+        </View>
+
+        {/* ===== สถานะงาน: เรียงจากมากไปน้อย แถบยาวตามสัดส่วนเทียบสถานะที่มากที่สุด ===== */}
+        <View style={styles.section}>
+          {renderSectionHeader(
+            "stats-chart",
+            "สถานะงาน",
+            kpiList.length > 0 ? (
+              <Text style={styles.secHint}>แตะเพื่อกรอง</Text>
+            ) : null,
+          )}
+          <View style={styles.panel}>
+            {kpiList.length === 0 ? (
+              <Text style={styles.panelEmpty}>ไม่มีข้อมูลสถานะในช่วงนี้</Text>
+            ) : (
+              statusRows.map((it, idx) => {
                 const color = getStatusColor(it.status);
                 const isSelected = filterStatus === it.status;
                 return (
                   <TouchableOpacity
-                    key={idx}
-                    activeOpacity={0.8}
+                    key={it.status}
+                    activeOpacity={0.75}
                     onPress={() => {
                       const next = isSelected ? "" : it.status;
                       setFilterStatus(next);
                       fetchData(undefined, next);
                     }}
                     style={[
-                      styles.statusChip,
-                      {
-                        borderColor: isSelected ? color : T.line,
-                        backgroundColor: isSelected ? color + "14" : T.surface,
+                      styles.statusRow,
+                      isSelected && {
+                        backgroundColor: color + "12",
+                        borderColor: color + "55",
                       },
                     ]}
                   >
                     <View
-                      style={[styles.chipDot, { backgroundColor: color }]}
-                    />
-                    <Text
-                      style={[
-                        styles.statusChipText,
-                        isSelected && { color, fontWeight: "700" },
-                      ]}
-                      numberOfLines={1}
+                      style={[styles.statusIcon, { backgroundColor: color + "18" }]}
                     >
-                      {it.status}
-                    </Text>
-                    <Text style={[styles.statusChipCount, { color }]}>
-                      {it.count}
-                    </Text>
+                      <Ionicons
+                        name={getStatusIcon(it.status) as any}
+                        size={15}
+                        color={color}
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <View style={styles.statusRowTop}>
+                        <Text
+                          style={[
+                            styles.statusName,
+                            isSelected && { color, fontWeight: "800" },
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {it.status}
+                        </Text>
+                        <Text style={[styles.statusCount, { color }]}>
+                          {it.count}
+                        </Text>
+                      </View>
+                      <View style={styles.statusTrack}>
+                        <View
+                          style={[
+                            styles.statusFill,
+                            {
+                              width: `${(it.count / statusMax) * 100}%`,
+                              backgroundColor: color,
+                            },
+                          ]}
+                        />
+                      </View>
+                    </View>
                   </TouchableOpacity>
                 );
-              })}
-            </View>
-          )}
+              })
+            )}
+          </View>
         </View>
 
         {/* ===== ทีมเซลส์ ===== */}
         <View style={styles.section}>
-          <Text style={styles.sectionHeader}>ทีมเซลส์</Text>
+          {renderSectionHeader(
+            "people",
+            "ทีมเซลส์",
+            employeeStats.length > 0 ? (
+              <Text style={styles.secHint}>
+                {employeeStats.length} คน/ทีม
+              </Text>
+            ) : null,
+          )}
           <TouchableOpacity
-            style={styles.empModalBtn}
+            style={[styles.panel, styles.teamRow]}
             activeOpacity={0.85}
             disabled={employeeStats.length === 0}
             onPress={() => setEmpModalVisible(true)}
           >
-            <View style={{ flexDirection: "row", alignItems: "center" }}>
-              <View style={styles.avatarMicroGroup}>
-                {employeeStats.slice(0, 4).map((emp, i) => (
+            <View style={styles.avatarMicroGroup}>
+              {employeeStats.slice(0, 4).map((emp, i) => {
+                const isBidding = emp.teamType === "bidding";
+                return (
                   <View
                     key={i}
                     style={[
                       styles.avatarMicro,
-                      { marginLeft: i > 0 ? -12 : 0 },
+                      {
+                        marginLeft: i > 0 ? -10 : 0,
+                        backgroundColor: isBidding ? "#7c3aed" : PRIMARY_COLOR,
+                      },
                     ]}
                   >
-                    <Text style={styles.avatarMicroText}>
-                      {String(emp.name || "?").charAt(0)}
-                    </Text>
+                    {isBidding ? (
+                      <Ionicons name="people" size={13} color="#fff" />
+                    ) : (
+                      <Text style={styles.avatarMicroText}>
+                        {initialOf(emp.name)}
+                      </Text>
+                    )}
                   </View>
-                ))}
-              </View>
-              <Text style={styles.empModalBtnText}>
+                );
+              })}
+              {employeeStats.length > 4 && (
+                <View
+                  style={[
+                    styles.avatarMicro,
+                    styles.avatarMicroMore,
+                    { marginLeft: -10 },
+                  ]}
+                >
+                  <Text style={styles.avatarMicroMoreText}>
+                    +{employeeStats.length - 4}
+                  </Text>
+                </View>
+              )}
+              {employeeStats.length === 0 && (
+                <View style={[styles.avatarMicro, styles.avatarMicroMore]}>
+                  <Ionicons name="people-outline" size={14} color={T.textMute} />
+                </View>
+              )}
+            </View>
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={styles.teamTitle}>
                 {employeeStats.length > 0
-                  ? "ดูสถิติรายบุคคล (" + employeeStats.length + " คน)"
+                  ? "ดูสถิติรายบุคคล"
                   : "ยังไม่มีข้อมูลรายบุคคล"}
               </Text>
+              <Text style={styles.teamSub} numberOfLines={1}>
+                เป้า ยอดขาย และสถานะงานของแต่ละคน
+              </Text>
             </View>
-            <Ionicons name="chevron-forward" size={18} color={PRIMARY_COLOR} />
+            {employeeStats.length > 0 && (
+              <View style={styles.teamChevron}>
+                <Ionicons
+                  name="chevron-forward"
+                  size={16}
+                  color={PRIMARY_COLOR}
+                />
+              </View>
+            )}
           </TouchableOpacity>
         </View>
 
         {/* ===== รายการล่าสุด ===== */}
         <View style={styles.section}>
-          <View style={styles.sectionRow}>
-            <Text style={styles.sectionHeader}>รายการล่าสุด</Text>
-            {!loading && visibleList.length > 0 && (
-              <Text style={styles.sectionHint}>
-                {visibleList.length} รายงาน
-              </Text>
-            )}
-          </View>
+          {renderSectionHeader(
+            "document-text",
+            "รายการล่าสุด",
+            !loading && visibleList.length > 0 ? (
+              <View style={styles.countBadge}>
+                <Text style={styles.countBadgeText}>
+                  {visibleList.length} รายงาน
+                </Text>
+              </View>
+            ) : null,
+          )}
 
           {loading ? (
             <ActivityIndicator
@@ -1342,11 +1690,13 @@ export default function ManagerSales() {
             />
           ) : visibleList.length === 0 ? (
             <View style={styles.empty}>
-              <Ionicons
-                name="document-text-outline"
-                size={30}
-                color={T.textMute}
-              />
+              <View style={styles.emptyIcon}>
+                <Ionicons
+                  name="document-text-outline"
+                  size={26}
+                  color={PRIMARY_COLOR}
+                />
+              </View>
               <Text style={styles.emptyText}>
                 {activeFilterCount > 0
                   ? "ไม่พบรายงานตามตัวกรองนี้"
@@ -2044,358 +2394,468 @@ export default function ManagerSales() {
         </View>
       </Modal>
 
-      {/* Employee List Modal (Popup สถิติรายบุคคลแนวตั้ง) */}
-      <Modal visible={empModalVisible} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { height: "85%", padding: 0 }]}>
-            <View
-              style={[
-                styles.modalHeader,
-                { padding: 20, paddingBottom: 15, marginBottom: 0 },
-              ]}
+      {/* ===== Popup สถิติทีมเซลส์: bottom sheet — สรุปทั้งทีมด้านบน, การ์ดรายคนแยกกลุ่มด้านล่าง =====
+          Android edge-to-edge: Modal ไม่ได้ inset เอง จึงใช้ insets ของหน้าหลักเว้นขอบล่างให้ */}
+      <Modal
+        visible={empModalVisible}
+        transparent
+        animationType="slide"
+        statusBarTranslucent
+        navigationBarTranslucent
+        onRequestClose={() => setEmpModalVisible(false)}
+      >
+        <View style={styles.sheetOverlay}>
+          <TouchableOpacity
+            style={{ flex: 1 }}
+            activeOpacity={1}
+            onPress={() => setEmpModalVisible(false)}
+          />
+          <View style={[styles.sheet, { paddingBottom: insets.bottom }]}>
+            <LinearGradient
+              colors={THEME_GRADIENT}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={styles.sheetHeader}
             >
-              <Text style={styles.modalTitle}>👥 สถิติทีมเซลส์</Text>
-              <TouchableOpacity onPress={() => setEmpModalVisible(false)}>
-                <Ionicons name="close-circle" size={28} color="#999" />
-              </TouchableOpacity>
-            </View>
+              <View style={styles.sheetHandle} />
+              <View style={styles.sheetTitleRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.sheetTitle}>สถิติทีมเซลส์</Text>
+                  <Text style={styles.sheetSub} numberOfLines={1}>
+                    {rangeLabel}
+                    {filterStatus ? "  ·  สถานะ " + filterStatus : ""}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.headerBtn}
+                  onPress={() => setEmpModalVisible(false)}
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                >
+                  <Ionicons name="close" size={20} color="#fff" />
+                </TouchableOpacity>
+              </View>
 
-            <ScrollView contentContainerStyle={{ padding: 20, paddingTop: 10 }}>
-              {/* ➕ [ปรับแก้] แยกกลุ่มทีมประมูล (สีม่วง) และ ทีมการตลาด (สีน้ำเงิน) แบบหน้าเว็บ */}
+              {/* สรุปรวมทั้งทีมในช่วงที่เลือก */}
+              <View style={styles.sheetStats}>
+                <View style={styles.sheetStat}>
+                  <Text
+                    style={styles.sheetStatValue}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                  >
+                    ฿{fmtMoneyShort(summary.sales)}
+                  </Text>
+                  <Text style={styles.sheetStatLabel}>ยอดที่ปิดได้รวม</Text>
+                </View>
+                <View style={styles.sheetStat}>
+                  <Text style={styles.sheetStatValue}>
+                    {employeeStats.length}
+                  </Text>
+                  <Text style={styles.sheetStatLabel}>คน/ทีม</Text>
+                </View>
+                <View style={styles.sheetStat}>
+                  <Text style={styles.sheetStatValue}>
+                    {empWithTarget.length > 0
+                      ? empHitTarget + "/" + empWithTarget.length
+                      : "—"}
+                  </Text>
+                  <Text style={styles.sheetStatLabel}>ถึงเป้าเดือน</Text>
+                </View>
+              </View>
+            </LinearGradient>
 
-              {employeeStats.filter((e) => e.teamType === "bidding").length >
-                0 && (
-                  <View style={{ marginBottom: 15 }}>
-                    <Text
-                      style={{
-                        fontSize: 16,
-                        fontWeight: "bold",
-                        color: "#7c3aed",
-                        marginBottom: 10,
-                      }}
+            <ScrollView contentContainerStyle={styles.sheetBody}>
+              <View style={styles.sheetHintRow}>
+                <Ionicons name="swap-vertical" size={12} color={T.textMute} />
+                <Text style={styles.sheetHint}>
+                  เรียงตามยอดที่ปิดได้ · แตะการ์ดเพื่อดูรายงานของคนนั้น
+                </Text>
+              </View>
+              {empGroups.map((g) => (
+                <View key={g.key} style={{ marginBottom: 6 }}>
+                  <View style={styles.secHead}>
+                    <View
+                      style={[styles.secIcon, { backgroundColor: g.color + "16" }]}
                     >
-                      <Ionicons name="people" size={16} /> ทีมประมูล
-                    </Text>
-                    {employeeStats
-                      .filter((e) => e.teamType === "bidding")
-                      .map((emp, index) => (
-                        <View key={`bid-${index}`}>
-                          {renderEmployeeCard({ item: emp })}
-                        </View>
-                      ))}
-                  </View>
-                )}
-
-              {employeeStats.filter((e) => e.teamType !== "bidding").length >
-                0 && (
-                  <View style={{ marginBottom: 15 }}>
-                    <Text
-                      style={{
-                        fontSize: 16,
-                        fontWeight: "bold",
-                        color: PRIMARY_COLOR,
-                        marginBottom: 10,
-                      }}
+                      <Ionicons name={g.icon as any} size={14} color={g.color} />
+                    </View>
+                    <Text style={styles.secTitle}>{g.title}</Text>
+                    <View style={{ flex: 1 }} />
+                    <View
+                      style={[styles.countBadge, { backgroundColor: g.color + "14" }]}
                     >
-                      <Ionicons name="person" size={16} /> ทีมการตลาด (รายบุคคล)
-                    </Text>
-                    {employeeStats
-                      .filter((e) => e.teamType !== "bidding")
-                      .map((emp, index) => (
-                        <View key={`mkt-${index}`}>
-                          {renderEmployeeCard({ item: emp })}
-                        </View>
-                      ))}
+                      <Text style={[styles.countBadgeText, { color: g.color }]}>
+                        {g.list.length + (g.key === "bidding" ? " ทีม" : " คน")}
+                      </Text>
+                    </View>
                   </View>
-                )}
+                  {g.list.map((emp, i) => renderEmployeeCard(emp, i + 1))}
+                </View>
+              ))}
             </ScrollView>
           </View>
         </View>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: T.bg },
 
-  // ===== Header + แถบตัวกรองที่ใช้อยู่ =====
+  // ===== หัวหน้า (ไล่สีน้ำเงิน) =====
   header: {
     flexDirection: "row",
     alignItems: "center",
+    gap: 12,
     paddingHorizontal: T.pad,
-    paddingVertical: 12,
-    backgroundColor: T.surface,
-    borderBottomWidth: 1,
-    borderBottomColor: T.line,
+    paddingBottom: 12,
   },
-  backBtn: {
+  headerBtn: {
     width: 38,
     height: 38,
+    borderRadius: 12,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: T.bg,
-    borderRadius: 10,
-    marginRight: 12,
+    backgroundColor: "rgba(255,255,255,0.16)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.24)",
   },
-  headerTitle: { fontSize: FS.xl, fontWeight: "800", color: T.text },
-  headerSub: { fontSize: FS.sm, color: T.textSub, marginTop: 1 },
-  filterBtn: {
-    width: 38,
-    height: 38,
-    justifyContent: "center",
-    alignItems: "center",
-    borderRadius: 10,
-    backgroundColor: T.bg,
+  headerBtnActive: { backgroundColor: "#fff", borderColor: "#fff" },
+  headerTitle: { fontSize: FS.xl - 2, fontWeight: "800", color: "#fff" },
+  headerSub: {
+    fontSize: FS.xs,
+    color: "rgba(255,255,255,0.75)",
+    marginTop: 1,
   },
   filterDot: {
     position: "absolute",
-    top: -2,
-    right: -2,
-    minWidth: 16,
-    height: 16,
+    top: -5,
+    right: -5,
+    minWidth: 18,
+    height: 18,
     paddingHorizontal: 4,
-    borderRadius: 8,
-    backgroundColor: PRIMARY_COLOR,
+    borderRadius: 9,
+    backgroundColor: WARNING_COLOR,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 2,
-    borderColor: T.surface,
+    borderColor: "#fff",
   },
   filterDotText: { color: "#fff", fontSize: 9, fontWeight: "800" },
-  chipBar: {
-    backgroundColor: T.surface,
-    borderBottomWidth: 1,
-    borderBottomColor: T.line,
-    paddingVertical: 8,
+
+  // ===== Hero =====
+  overscrollFill: {
+    position: "absolute",
+    top: -600,
+    left: 0,
+    right: 0,
+    height: 600,
   },
-  chipBarInner: {
-    gap: 8,
-    alignItems: "center",
-    paddingHorizontal: T.pad,
+  heroWrap: {
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
+    overflow: "hidden",
   },
-  chip: {
+  hero: { paddingHorizontal: T.pad, paddingTop: 4, paddingBottom: 56 },
+  pillScroll: { marginHorizontal: -T.pad, flexGrow: 0 },
+  pillRow: { gap: 8, alignItems: "center", paddingHorizontal: T.pad },
+  pill: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    maxWidth: 200,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    maxWidth: 220,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
     borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.16)",
     borderWidth: 1,
-    borderColor: T.line,
-    backgroundColor: T.bg,
+    borderColor: "rgba(255,255,255,0.26)",
   },
-  chipText: { fontSize: FS.sm, color: T.text, fontWeight: "600", flexShrink: 1 },
-  chipDot: { width: 7, height: 7, borderRadius: 4 },
-  chipClear: {
+  pillText: {
     fontSize: FS.sm,
-    color: DANGER_COLOR,
-    fontWeight: "600",
-    paddingHorizontal: 4,
-  },
-
-  // ===== แผงตัวกรอง =====
-  filterSection: {
-    backgroundColor: T.surface,
-    padding: T.pad,
-    margin: T.pad,
-    marginBottom: 0,
-    borderRadius: T.radius,
-    borderWidth: 1,
-    borderColor: T.line,
-  },
-  sectionTitle: {
-    fontSize: FS.lg,
+    color: "#fff",
     fontWeight: "700",
-    color: T.text,
-    marginBottom: 14,
+    flexShrink: 1,
   },
-  inputLabel: {
+  pillDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    borderWidth: 1.5,
+    borderColor: "#fff",
+  },
+  pillClear: {
     fontSize: FS.sm,
-    color: T.textSub,
-    marginBottom: 6,
-    fontWeight: "600",
-  },
-  filterInput: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: 12,
-    borderWidth: 1,
-    borderColor: T.line,
-    borderRadius: 10,
-    backgroundColor: T.bg,
-  },
-  dateRow: { flexDirection: "row", gap: 12, marginBottom: 16 },
-  dateInput: {
-    flexDirection: "row",
-    alignItems: "center",
-    padding: 12,
-    borderWidth: 1,
-    borderColor: T.line,
-    borderRadius: 10,
-    backgroundColor: T.bg,
-  },
-  filterActions: { flexDirection: "row", gap: 10 },
-  searchBtn: {
-    flex: 1,
-    flexDirection: "row",
-    backgroundColor: PRIMARY_COLOR,
-    paddingVertical: 13,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  resetBtn: {
-    width: 50,
-    backgroundColor: T.bg,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: T.line,
-  },
-
-  // ===== Hero: ยอดขายเทียบเป้า =====
-  hero: {
-    backgroundColor: T.surface,
-    margin: T.pad,
-    marginBottom: T.gap,
-    padding: T.pad,
-    borderRadius: T.radius,
-    borderWidth: 1,
-    borderColor: T.line,
+    color: "#fde68a",
+    fontWeight: "700",
+    paddingHorizontal: 4,
   },
   heroTop: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     gap: 8,
+    marginTop: 18,
   },
-  heroLabel: { fontSize: FS.sm, color: T.textSub, fontWeight: "600" },
+  heroLabel: {
+    fontSize: FS.sm + 1,
+    color: "rgba(255,255,255,0.85)",
+    fontWeight: "600",
+  },
   heroTag: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
-    maxWidth: 150,
-    backgroundColor: SUCCESS_COLOR + "14",
-    paddingHorizontal: 8,
+    maxWidth: 160,
+    backgroundColor: "rgba(16,185,129,0.22)",
+    borderWidth: 1,
+    borderColor: "rgba(110,231,183,0.45)",
+    paddingHorizontal: 9,
     paddingVertical: 3,
     borderRadius: 999,
   },
   heroTagText: {
     fontSize: FS.xs,
-    color: "#047857",
+    color: "#d1fae5",
     fontWeight: "700",
     flexShrink: 1,
   },
   heroValue: {
-    fontSize: FS.hero,
+    fontSize: 34,
     fontWeight: "800",
-    color: T.text,
+    color: "#fff",
     marginTop: 4,
     letterSpacing: -0.5,
   },
-  heroGoals: {
-    flexDirection: "row",
-    marginTop: 16,
-    paddingTop: 14,
-    borderTopWidth: 1,
-    borderTopColor: T.lineSoft,
+  heroCaption: {
+    fontSize: FS.sm,
+    color: "rgba(255,255,255,0.7)",
+    marginTop: 2,
   },
-  heroGoalSep: { width: 1, backgroundColor: T.lineSoft, marginHorizontal: 14 },
+
+  // ===== แผงตัวกรอง =====
+  filterCard: {
+    backgroundColor: T.surface,
+    borderRadius: 16,
+    padding: 14,
+    marginTop: 12,
+  },
+  filterLabel: {
+    fontSize: FS.xs,
+    color: T.textSub,
+    fontWeight: "700",
+    marginBottom: 6,
+  },
+  presetRow: { flexDirection: "row", gap: 8, marginBottom: 14 },
+  preset: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: T.bg,
+    borderWidth: 1,
+    borderColor: T.line,
+  },
+  presetOn: { backgroundColor: PRIMARY_COLOR, borderColor: PRIMARY_COLOR },
+  presetText: { fontSize: FS.sm, color: T.textSub, fontWeight: "700" },
+  presetTextOn: { color: "#fff" },
+  dateRow: { flexDirection: "row", gap: 10, marginBottom: 14 },
+  field: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    height: 44,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: T.line,
+    backgroundColor: T.bg,
+  },
+  fieldText: { fontSize: FS.md, color: T.text, fontWeight: "600" },
+  fieldPlaceholder: { color: T.textMute, fontWeight: "500" },
+  filterActions: { flexDirection: "row", gap: 10, marginTop: 14 },
+  resetBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    height: 44,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: T.line,
+    backgroundColor: T.surface,
+  },
+  resetBtnText: { fontSize: FS.md, color: T.textSub, fontWeight: "700" },
+  searchBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: PRIMARY_COLOR,
+  },
+  searchBtnText: { fontSize: FS.md, color: "#fff", fontWeight: "800" },
+
+  // ===== การ์ดสรุปลอยทับขอบ hero =====
+  summaryCard: {
+    backgroundColor: T.surface,
+    marginHorizontal: T.pad,
+    marginTop: -40,
+    padding: T.pad,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: T.cardLine,
+    shadowColor: "#0a1f5c",
+    shadowOpacity: 0.1,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
+  },
+  goalRow: { flexDirection: "row" },
+  heroGoalSep: { width: 1, backgroundColor: T.line, marginHorizontal: 14 },
   goalTop: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 6,
+    marginBottom: 7,
   },
-  goalLabel: { fontSize: FS.xs, color: T.textSub, fontWeight: "600" },
-  goalPct: { fontSize: FS.sm, fontWeight: "800" },
+  goalLabel: { fontSize: FS.xs, color: T.textSub, fontWeight: "700" },
+  goalPct: { fontSize: FS.md, fontWeight: "800" },
   goalTrack: {
-    height: 5,
+    height: 6,
     borderRadius: 3,
-    backgroundColor: T.line,
+    backgroundColor: T.lineSoft,
     overflow: "hidden",
   },
   goalFill: { height: "100%", borderRadius: 3 },
-  goalFoot: { fontSize: 10, color: T.textMute, marginTop: 5 },
-
-  // ===== ตัวเลขรวม 3 ช่อง =====
-  statRow: {
-    flexDirection: "row",
-    gap: T.gap,
-    paddingHorizontal: T.pad,
-    marginBottom: 4,
+  goalFoot: { fontSize: 10, color: T.textMute, marginTop: 6 },
+  goalFootSub: { fontSize: 10, color: T.textSub, fontWeight: "700", marginTop: 1 },
+  summaryDivider: {
+    height: 1,
+    backgroundColor: T.lineSoft,
+    marginVertical: 14,
   },
-  statTile: {
-    flex: 1,
-    backgroundColor: T.surface,
-    borderRadius: T.radius,
-    borderWidth: 1,
-    borderColor: T.line,
-    paddingVertical: 12,
-    paddingHorizontal: 8,
+  statRow: { flexDirection: "row", alignItems: "center" },
+  statSep: { width: 1, alignSelf: "stretch", backgroundColor: T.lineSoft },
+  stat: { flex: 1, alignItems: "center", paddingHorizontal: 6 },
+  statIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 10,
     alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 6,
   },
   statValue: { fontSize: FS.lg, fontWeight: "800", color: T.text },
-  statLabel: { fontSize: FS.xs, color: T.textMute, marginTop: 2 },
+  statLabel: { fontSize: FS.xs, color: T.textMute, marginTop: 1 },
 
   // ===== Section ทั่วไป =====
-  section: { paddingHorizontal: T.pad, marginTop: 20 },
-  sectionRow: {
+  section: { paddingHorizontal: T.pad, marginTop: 22 },
+  secHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 10,
+  },
+  secIcon: {
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: PRIMARY_COLOR + "14",
+  },
+  secTitle: { fontSize: FS.lg, fontWeight: "800", color: T.text },
+  secHint: { fontSize: FS.sm, color: T.textMute },
+  countBadge: {
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: PRIMARY_COLOR + "14",
+  },
+  countBadgeText: { fontSize: FS.xs, color: PRIMARY_COLOR, fontWeight: "800" },
+  panel: {
+    backgroundColor: T.surface,
+    borderRadius: T.radius + 2,
+    borderWidth: 1,
+    borderColor: T.cardLine,
+    padding: 6,
+    ...CARD_SHADOW,
+  },
+  panelEmpty: {
+    fontSize: FS.sm,
+    color: T.textMute,
+    textAlign: "center",
+    paddingVertical: 16,
+  },
+
+  // ===== แถวสถานะงาน =====
+  statusRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "transparent",
+  },
+  statusIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  statusRowTop: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    gap: 8,
+    marginBottom: 6,
   },
-  sectionHeader: {
-    fontSize: FS.lg,
-    fontWeight: "700",
-    color: T.text,
-    marginBottom: 10,
+  statusName: { flex: 1, fontSize: FS.md, color: T.text, fontWeight: "600" },
+  statusCount: { fontSize: FS.md, fontWeight: "800" },
+  statusTrack: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: T.lineSoft,
+    overflow: "hidden",
   },
-  sectionHint: { fontSize: FS.sm, color: T.textMute, marginBottom: 10 },
-  mutedText: { fontSize: FS.sm, color: T.textMute },
-
-  // ===== ชิปสถานะ =====
-  chipWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  statusChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 999,
-    borderWidth: 1,
-  },
-  statusChipText: {
-    fontSize: FS.sm,
-    color: T.textSub,
-    fontWeight: "600",
-    maxWidth: 140,
-  },
-  statusChipCount: { fontSize: FS.sm, fontWeight: "800" },
+  statusFill: { height: "100%", borderRadius: 2 },
 
   // ===== การ์ดรายงาน =====
   card: {
     backgroundColor: T.surface,
-    borderRadius: T.radius,
+    borderRadius: T.radius + 2,
     borderWidth: 1,
-    borderColor: T.line,
+    borderColor: T.cardLine,
     paddingHorizontal: 14,
     paddingTop: 12,
-    paddingBottom: 4,
+    paddingBottom: 2,
     marginBottom: T.gap,
+    ...CARD_SHADOW,
   },
   cardHeader: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
+    alignItems: "center",
+    gap: 10,
     paddingBottom: 10,
     borderBottomWidth: 1,
     borderBottomColor: T.lineSoft,
   },
+  cardAvatar: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  cardAvatarText: { fontSize: FS.md, fontWeight: "800" },
   cardName: { fontSize: FS.md, fontWeight: "700", color: T.text },
   cardMetaRow: {
     flexDirection: "row",
@@ -2423,7 +2883,7 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
   },
   jobDivider: { borderTopWidth: 1, borderTopColor: T.lineSoft },
-  jobCustomer: { fontSize: FS.md, fontWeight: "600", color: PRIMARY_COLOR },
+  jobCustomer: { fontSize: FS.md, fontWeight: "700", color: PRIMARY_COLOR },
   jobProject: { fontSize: FS.sm, color: T.textSub, marginTop: 2 },
   statusPill: {
     paddingHorizontal: 8,
@@ -2460,14 +2920,28 @@ const styles = StyleSheet.create({
   // ===== Empty state =====
   empty: {
     alignItems: "center",
-    paddingVertical: 36,
+    paddingVertical: 32,
+    paddingHorizontal: 20,
     backgroundColor: T.surface,
-    borderRadius: T.radius,
+    borderRadius: T.radius + 2,
     borderWidth: 1,
-    borderColor: T.line,
+    borderColor: "#cbd5e1",
     borderStyle: "dashed",
   },
-  emptyText: { fontSize: FS.sm, color: T.textMute, marginTop: 8 },
+  emptyIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: PRIMARY_COLOR + "12",
+  },
+  emptyText: {
+    fontSize: FS.sm,
+    color: T.textSub,
+    marginTop: 10,
+    textAlign: "center",
+  },
   emptyBtn: {
     marginTop: 12,
     paddingHorizontal: 16,
@@ -2477,35 +2951,32 @@ const styles = StyleSheet.create({
   },
   emptyBtnText: { fontSize: FS.sm, color: PRIMARY_COLOR, fontWeight: "700" },
 
-  // ===== ปุ่มเปิดสถิติทีม =====
-  empModalBtn: {
-    flexDirection: "row",
-    justifyContent: "space-between",
+  // ===== ทีมเซลส์ =====
+  teamRow: { flexDirection: "row", alignItems: "center", padding: 14 },
+  teamTitle: { fontSize: FS.md, fontWeight: "800", color: T.text },
+  teamSub: { fontSize: FS.xs, color: T.textMute, marginTop: 2 },
+  teamChevron: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     alignItems: "center",
-    backgroundColor: T.surface,
-    padding: 14,
-    borderRadius: T.radius,
-    borderWidth: 1,
-    borderColor: T.line,
-  },
-  empModalBtnText: {
-    marginLeft: 12,
-    fontWeight: "700",
-    color: PRIMARY_COLOR,
-    fontSize: FS.md,
+    justifyContent: "center",
+    backgroundColor: PRIMARY_COLOR + "12",
   },
   avatarMicroGroup: { flexDirection: "row" },
   avatarMicro: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     backgroundColor: PRIMARY_COLOR,
     justifyContent: "center",
     alignItems: "center",
     borderWidth: 2,
     borderColor: T.surface,
   },
-  avatarMicroText: { color: "#fff", fontSize: FS.xs, fontWeight: "700" },
+  avatarMicroText: { color: "#fff", fontSize: FS.sm, fontWeight: "800" },
+  avatarMicroMore: { backgroundColor: T.lineSoft },
+  avatarMicroMoreText: { color: T.textSub, fontSize: FS.xs, fontWeight: "800" },
 
   // ===== Modal =====
   modalOverlay: {
@@ -2627,30 +3098,100 @@ const styles = StyleSheet.create({
     borderBottomColor: T.lineSoft,
   },
 
-  // ===== การ์ดพนักงานใน Modal สถิติทีม =====
+  // ===== Popup สถิติทีมเซลส์ (bottom sheet) =====
+  sheetOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(10,31,92,0.5)",
+    justifyContent: "flex-end",
+  },
+  sheet: {
+    height: "88%",
+    backgroundColor: T.bg,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    overflow: "hidden",
+  },
+  sheetHeader: { paddingHorizontal: T.pad, paddingTop: 8, paddingBottom: 14 },
+  sheetHandle: {
+    alignSelf: "center",
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "rgba(255,255,255,0.45)",
+    marginBottom: 10,
+  },
+  sheetTitleRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+  sheetTitle: { fontSize: FS.xl - 2, fontWeight: "800", color: "#fff" },
+  sheetSub: {
+    fontSize: FS.xs,
+    color: "rgba(255,255,255,0.78)",
+    marginTop: 2,
+  },
+  sheetStats: { flexDirection: "row", gap: 8, marginTop: 14 },
+  sheetStat: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: 9,
+    paddingHorizontal: 6,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.14)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.22)",
+  },
+  sheetStatValue: { fontSize: FS.md + 1, fontWeight: "800", color: "#fff" },
+  sheetStatLabel: {
+    fontSize: 10,
+    color: "rgba(255,255,255,0.78)",
+    marginTop: 2,
+  },
+  sheetBody: { padding: T.pad, paddingBottom: 24 },
+  sheetHintRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginBottom: 14,
+  },
+  sheetHint: { fontSize: FS.xs, color: T.textMute },
+
+  // ===== การ์ดพนักงานใน popup สถิติทีมเซลส์ =====
   empCard: {
     backgroundColor: T.surface,
-    borderRadius: T.radius,
-    padding: 14,
-    width: "100%",
-    marginBottom: 12,
+    borderRadius: T.radius + 2,
     borderWidth: 1,
-    borderColor: T.line,
-    borderLeftWidth: 4,
+    borderColor: T.cardLine,
+    padding: 14,
+    marginBottom: T.gap,
+    ...CARD_SHADOW,
   },
-  empHeader: { flexDirection: "row", alignItems: "center", marginBottom: 8 },
+  empHeader: { flexDirection: "row", alignItems: "center", gap: 12 },
   avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     backgroundColor: PRIMARY_COLOR,
     justifyContent: "center",
     alignItems: "center",
-    marginRight: 10,
   },
-  avatarText: { color: "#fff", fontWeight: "700", fontSize: FS.lg },
-  empName: { fontSize: FS.md, fontWeight: "700", color: T.text },
-  empReportCount: { fontSize: FS.sm, color: T.textMute },
+  avatarText: { color: "#fff", fontWeight: "800", fontSize: FS.lg },
+  rankBadge: {
+    position: "absolute",
+    right: -5,
+    bottom: -4,
+    minWidth: 20,
+    height: 20,
+    paddingHorizontal: 4,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: T.line,
+    borderWidth: 2,
+    borderColor: T.surface,
+  },
+  rankText: { fontSize: 10, fontWeight: "800", color: T.textSub },
+  empName: { fontSize: FS.md + 1, fontWeight: "800", color: T.text },
+  empMeta: { fontSize: FS.xs, color: T.textMute, marginTop: 2 },
+  empSalesLabel: { fontSize: 10, color: T.textMute, fontWeight: "600" },
+  empSales: { fontSize: FS.lg, fontWeight: "800", marginTop: 1 },
   empGoals: {
     flexDirection: "row",
     marginTop: 12,
@@ -2658,33 +3199,64 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: T.lineSoft,
   },
-  moneyBox: {
-    flex: 1,
-    padding: 9,
-    borderRadius: 10,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  moneyLabel: { fontSize: 10, color: INFO_COLOR },
-  moneyValue: { fontSize: FS.md, fontWeight: "700", marginTop: 1 },
-  empStatusWrap: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 6,
+  // กล่องสถานะงานในการ์ด: หัว + แถบสัดส่วน + ตาราง 2 คอลัมน์
+  empStatusBox: {
     marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: T.lineSoft,
   },
-  statusTag: {
+  empStatusHead: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  empStatusTitle: { fontSize: FS.xs, color: T.textSub, fontWeight: "700" },
+  empStatusTotal: { fontSize: FS.xs, color: T.textMute, fontWeight: "600" },
+  empStatusBar: {
+    flexDirection: "row",
+    gap: 2,
+    height: 8,
+    borderRadius: 4,
+    overflow: "hidden",
+    backgroundColor: T.lineSoft,
+    marginBottom: 10,
+  },
+  empStatusGrid: { gap: 8 },
+  empStatusRow: { flexDirection: "row", gap: 8 },
+  empStatusTile: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-    borderRadius: 999,
-    borderWidth: 1,
-    backgroundColor: T.surface,
+    gap: 8,
+    minHeight: 54,
+    paddingVertical: 8,
+    paddingLeft: 8,
+    paddingRight: 10,
+    borderRadius: 10,
   },
-  statusTagCount: { fontSize: FS.sm, fontWeight: "800" },
-  statusTagLabel: { fontSize: FS.xs, color: T.textSub, maxWidth: 130 },
+  empStatusAccent: { width: 3, alignSelf: "stretch", borderRadius: 2 },
+  empStatusName: {
+    flex: 1,
+    fontSize: FS.sm,
+    lineHeight: 16,
+    color: T.text,
+    fontWeight: "600",
+  },
+  empStatusCount: { fontSize: FS.lg, fontWeight: "800", lineHeight: 20 },
+  empStatusPct: { fontSize: 10, color: T.textMute, fontWeight: "600" },
+  empFooter: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: 2,
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: T.lineSoft,
+  },
+  empFooterText: { fontSize: FS.sm, fontWeight: "700" },
 
   // ===== ปฏิทินเลือกวันที่ =====
   calHeader: {

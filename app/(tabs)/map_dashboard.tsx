@@ -184,7 +184,7 @@ export default function MapDashboardScreen() {
     <View style={styles.container}>
       <MapView
         ref={mapRef}
-        style={StyleSheet.absoluteFillObject}
+        style={StyleSheet.absoluteFill} // RN 0.86 ตัด absoluteFillObject ออกแล้ว (ได้ undefined แผนที่จะไม่มีขนาด)
         provider={PROVIDER_GOOGLE}
         mapType={mapType}
         initialRegion={{
