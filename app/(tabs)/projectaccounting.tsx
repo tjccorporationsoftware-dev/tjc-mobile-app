@@ -1,44 +1,45 @@
 /**
  * ProjectAccountingScreen.tsx
  * ------------------------------------------------------------------
- * Mobile mockup ของหน้า project_accounting.php "โหมดปกติ" (ลงบัญชีลูกหนี้แบ่งงวด)
- * เปิดจากปุ่ม "ลงบัญชี" ในหน้า AccountingDashboard ผ่าน expo-router:
- *   router.push({ pathname: '/ProjectAccounting', params: { id } })
- * จึงอ่าน id ผ่าน useLocalSearchParams() ตรงๆ เหมือนไฟล์อื่นในชุดนี้
+ * หน้าลงบัญชีรับชำระ — พอร์ตจาก project_accounting.php "โหมดปกติ" (ลงบัญชีลูกหนี้แบ่งงวด)
+ * เปิดได้ 2 ทาง:
+ *   - ฝังในหน้าอื่น (AccountingDashboard / project_dashboard) ส่ง id + onBack/onSaved/onOpenFollowup มาเป็น props
+ *   - เปิดเป็น route ตรง ๆ: router.push({ pathname: '/projectaccounting', params: { id } })
+ *     (อ่าน id ผ่าน useLocalSearchParams() เหมือนไฟล์อื่นในชุดนี้)
  *
  * ต้นฉบับมี 3 โหมด (ปกติ / แผนผ่อนชำระ ?plan_id= / ค้ำเงินสด ?lg_id=) — ปุ่ม "ลงบัญชี" ของ
  * accounting_dashboard.php ส่งมาแค่ ?id= เสมอ ไม่มี plan_id/lg_id เลย ดังนั้นไฟล์นี้ทำเฉพาะ
  * "โหมดปกติ" เท่านั้น ตรงกับเงื่อนไข !$is_plan_mode && !$is_lg_mode ของต้นฉบับ
  *
- * สถานะไฟล์นี้: เชื่อม API จริงแล้ว (GET โหลดข้อมูลโครงการ+งวด, POST ajax_save บันทึก) ผ่าน
- * project_accounting.php — action/param names เป็นการเดาตาม TODO เดิม ยังไม่ได้ยืนยันกับ backend จริง
+ * ต่อ API จริงทั้งโหลดและบันทึก (accounting_API_mobile.php — README_accounting.md):
+ *  - โหลด: action=get_detail = ข้อมูลโครงการ + งวดชำระทุกงวด (พร้อมผู้บันทึก/เวลาบันทึก) + ตัวเลือก
+ *    ในฟอร์มชุดเดียวกับเว็บ (สถานะกลุ่มจ่ายเงิน, ธนาคาร bank_masters, VAT setup_vat) + สิทธิ์ can_do_accounting
+ *  - บันทึก: action=save_payments ส่งงวดทั้งชุดเป็น JSON ก้อนเดียว เซิร์ฟเวอร์ลบงวดเดิมของโครงการแล้ว
+ *    เขียนใหม่ทั้งชุดใน transaction — งวดเดิมจับคู่ด้วย row_uid (pp_uid) จึงคงผู้บันทึก/เวลาบันทึกเดิม และลง
+ *    ประวัติผู้แก้ไขเฉพาะงวดที่ค่าเปลี่ยนจริง ส่วนผู้บันทึกงวดใหม่เซิร์ฟเวอร์ใส่เองจาก user_id
  *
- * ตรงกับพฤติกรรม/สูตรจริงจาก project_accounting.php (โหมดปกติ):
- *  - สูตรคำนวณต่องวดตรงกับ calculateRow() เป๊ะ (VAT 7%, 3 โหมดกรอก: ก่อน VAT / รวม VAT /
+ * กติกาที่พอร์ตจากต้นฉบับ (โหมดปกติ):
+ *  - สูตรคำนวณต่องวดตรงกับ calculateRow() เป๊ะ (VAT จาก setup_vat, 3 โหมดกรอก: ก่อน VAT / รวม VAT /
  *    รับสุทธิ, หัก ณ ที่จ่าย 0-5%, หักค่าธรรมเนียม+ค่าปรับ):
- *      mode=base : base=amount, vat=base*7%, gross=base+vat, wht=base*wht%, net=gross-wht-fee-fine
- *      mode=gross: gross=amount, base=gross/1.07, vat=gross-base, wht=base*wht%, net=gross-wht-fee-fine
- *      mode=net  : net=amount, base=(net+fee+fine)/(1.07-wht%), vat=base*7%, gross=base+vat, wht=base*wht%
+ *      mode=base : base=amount, vat=base*VAT, gross=base+vat, wht=base*wht%, net=gross-wht-fee-fine
+ *      mode=gross: gross=amount, base=gross/(1+VAT), vat=gross-base, wht=base*wht%, net=gross-wht-fee-fine
+ *      mode=net  : net=amount, base=(net+fee+fine)/(1+VAT-wht%), vat=base*VAT, gross=base+vat, wht=base*wht%
+ *  - สถานะให้เลือกเฉพาะกลุ่ม "จ่ายเงิน" จาก master — งวดใหม่ตั้งต้นที่ตัวแรกของกลุ่ม, ปุ่ม "ปิดยอด" ใช้ชื่อ
+ *    สถานะที่มีคำว่า "ปิดยอด" จาก master, ทุกสถานะในกลุ่ม (+ 'โอน'/'รับเช็คแล้ว' ของงวดเก่า) ต้องกรอกยอด
+ *  - ยอดที่กรอกรวมครบงบ -> ตั้งงวดสุดท้ายที่มียอดเป็น "ปิดยอด" ให้อัตโนมัติ (autoCloseIfFull)
+ *  - สถานะ "รับเช็คแล้ว" (งวดเก่า) -> โผล่ช่องเลขที่เช็ค + วันที่ลงเช็ค / เปลี่ยนเป็นสถานะอื่นล้างช่องเช็คทิ้ง
  *  - แต่ละงวดพับ/ขยายได้เหมือนกันกับหน้าติดตามหนี้ (ProjectFollowupScreen)
- *  - เลือกสถานะ "แจ้งซ่อม" -> โผล่ฟอร์มย่อยเปิดใบแจ้งซ่อม (โครงสร้างเดียวกับ guarantee_update.php)
- *  - เลือกสถานะ "รับเช็คแล้ว" -> โผล่ช่องเลขที่เช็ค + วันที่ลงเช็ค
- *  - แถบสรุปยอดรวมทุกงวดท้ายหน้า (รวมยอดที่กรอก/ก่อนVAT/VAT/หัก ณ ที่จ่าย/ธรรมเนียม/ค่าปรับ/
- *    รับสุทธิรวม) รวมจากทุกงวดจริง ไม่ใช่ตัวเลขคงที่
+ *  - แถบสรุปยอดรวมทุกงวดท้ายหน้า รวมจากทุกงวดจริง ไม่ใช่ตัวเลขคงที่
  *  - ปุ่มลัด "ไปหน้าติดตามหนี้" (การติดตามหนี้แยกออกไปอีกหน้าแล้วในต้นฉบับ)
+ *  - ไม่มีสิทธิ์ acc_do_accounting -> ไม่โชว์ฟอร์มเลย (เว็บกันตั้งแต่เปิดหน้า)
  *
- * ที่ตัดออก/ทำให้ง่ายลง (เกินขอบเขต mockup):
- *  - "จัดการสถานะ" (ตั้งค่าตัวเลือกสถานะเอง) และ "Export สรุปเงินเข้า" — ฟีเจอร์แอดมิน/ส่งออกไฟล์
- *  - ระบบ auto-close (ตั้งงวดสุดท้ายเป็น "ปิดยอด" อัตโนมัติเมื่อยอดกรอกครบงบ) — ต้องมี logic
- *    เพิ่มเติมพอสมควร ตัดออกไปก่อนเพื่อความเรียบง่าย ผู้ใช้เลือกสถานะปิดยอดเองได้ตรงๆ
- *  - แนบไฟล์ในฟอร์มแจ้งซ่อม — ต้อง expo-document-picker (เป็น stub)
- *
- * ต้องติดตั้ง (ถ้ายังไม่มี): npx expo install @expo/vector-icons expo-router
+ * ที่ตัดออก (ฟีเจอร์แอดมิน/ส่งออกไฟล์): "จัดการสถานะ" และ "Export สรุปเงินเข้า"
  * ------------------------------------------------------------------
  */
 
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Modal, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -48,13 +49,9 @@ import { API_MODULES } from '../../constants/config';
 import { DateField, formatShortThaiDateTime } from '../../components/DateTimeField';
 import { apiMobileGet, apiMobilePost } from '../../service/api_mobile';
 
-// ⚠️ project_accounting.php (เว็บ) ถูกบังคับผ่าน auth.php ที่ต้องมี PHP session cookie จาก login
-// หน้าเว็บ แต่แอปมือถือ login แบบ stateless (ไม่มี session) ทุก request ที่เคยยิงตรงมาที่ไฟล์นี้จึง
-// โดน redirect ไป login.php เงียบๆ (ข้อมูลโครงการ/งวดชำระไม่เคยโหลดขึ้นจริงเลย) — ฝั่งโหลดข้อมูล
-// (loadData) จึงเปลี่ยนมาใช้ accounting_API_mobile.php action=get_detail แทน ซึ่งมี detail ครบ
-// รวม payment_items (งวดชำระ) ในคำตอบเดียวอยู่แล้ว (README_accounting.md ข้อ 4.4) — ยืนยันแล้วว่า
-// เป็น action จริง ไม่ใช่การเดา ส่วนฝั่งบันทึก (handleSave) ยังไม่มี action เขียนที่ยืนยันแล้ว
-// (accounting_API_mobile.php ไม่มี action สำหรับบันทึกงวดชำระ) จึงยังเป็น stub อยู่ก่อน
+// ⚠️ ห้ามยิงตรงไป project_accounting.php (เว็บ) — หน้านั้นบังคับ PHP session จาก login หน้าเว็บ
+// แต่แอปมือถือ login แบบ stateless (ไม่มี session) จึงโดน redirect ไป login.php เงียบ ๆ ทุกครั้ง
+// ทั้งโหลด (get_detail) และบันทึก (save_payments) จึงใช้ accounting_API_mobile.php แทน
 const ACCOUNTING_API_URL = `${API_MODULES}/accounting_API_mobile.php`;
 
 // ====================================================================
@@ -78,16 +75,13 @@ interface PaymentRow {
   receivedDate: string;
   receiptDate: string;
   remark: string;
-  owner: string;
-  createdAtShow?: string;
+  owner: string; // ผู้บันทึก — งวดเดิม = created_by จาก DB, งวดใหม่ = คนที่ล็อกอินอยู่ (โชว์เฉย ๆ เซิร์ฟเวอร์ใส่เอง)
+  createdAtShow: string; // วันเวลาที่บันทึก
   chequeNo: string;
   chequeDate: string;
-  // ฟอร์มแจ้งซ่อม (เฉพาะตอนสถานะ = 'แจ้งซ่อม')
-  srReceiver: string;
-  srUrgency: 'normal' | 'urgent' | 'critical';
-  srProduct: string;
-  srJobType: string;
-  srIssue: string;
+  // ธงของระบบตั้ง "ปิดยอด" อัตโนมัติ (เหมือน data-user-picked / data-auto-closed ของต้นฉบับ)
+  userPicked?: boolean; // ผู้ใช้เลือกสถานะเองแล้ว -> ระบบไม่แตะงวดนี้อีก
+  autoClosed?: boolean; // ระบบตั้ง "ปิดยอด" ให้เอง -> ถอยกลับได้ถ้ายอดกลับมาไม่ครบ
 }
 
 interface ProjectInfo {
@@ -100,51 +94,85 @@ interface ProjectInfo {
   contact?: string;
 }
 
+// ตัวเลือกในฟอร์มจาก get_detail — ชุดเดียวกับที่ project_accounting.php ใช้วาดฟอร์ม (ห้าม hardcode ในแอป
+// เคย hardcode แล้วชื่อสถานะ "ปิดยอด" สะกดไม่ตรง master ทำให้คอลัมน์สถานะจ่ายเงินบนเว็บมองไม่เห็น)
+interface FormOptions {
+  payStatuses: string[]; // สถานะกลุ่ม "จ่ายเงิน" เรียงตาม master
+  defaultStatus: string; // สถานะตั้งต้นของงวดใหม่ (ตัวแรกของกลุ่ม)
+  closingStatus: string; // ชื่อสถานะ "ปิดยอด" จริงจาก master
+  reqAmountStatuses: string[]; // สถานะที่ต้องกรอกยอดเงิน
+  banks: string[]; // bank_masters
+  vatRate: number; // setup_vat แปลงเป็นทศนิยมแล้ว (7% = 0.07)
+}
+
 export interface ProjectAccountingScreenProps {
   id?: string; // ถ้าส่งมาตรงๆ (เช่น embed จาก AccountingDashboard) จะใช้ค่านี้แทนค่าจาก route params
   onBack?: () => void;
   onSaved?: () => void;
+  // ปุ่ม "ไปหน้าติดตามหนี้" — หน้าที่ฝังหน้านี้ไว้ส่งมาเพื่อสลับไปหน้าติดตามภายในตัวเอง
+  // (ไม่ส่ง = เปิด route /projectfollowup แบบเดิม ใช้ตอนเปิดหน้านี้เป็น route เดี่ยว ๆ)
+  onOpenFollowup?: (id: string) => void;
 }
 
 // ====================================================================
 // Constants
 // ====================================================================
 
-const VAT_RATE = 0.07;
-const CURRENT_USER = 'คุณธนา';
-const STATUS_LIST = ['รอชำระ', 'จ่ายเงินแล้ว (บางส่วน)', 'จ่ายเงินครบแล้ว (ปิดยอด)', 'รับเช็คแล้ว', 'แจ้งซ่อม'];
-const STATUS_FULL = 'จ่ายเงินครบแล้ว (ปิดยอด)';
-const REQ_AMOUNT_STATUSES = ['จ่ายเงินแล้ว (บางส่วน)', 'จ่ายเงินครบแล้ว (ปิดยอด)', 'รับเช็คแล้ว'];
-const BANK_LIST = ['ธนาคารกรุงไทย', 'ธนาคารกสิกรไทย', 'ธนาคารไทยพาณิชย์', 'ธนาคารกรุงเทพ'];
 const WHT_OPTIONS = [0, 1, 2, 3, 4, 5];
 const CALC_MODE_OPTIONS: { value: CalcMode; label: string }[] = [
   { value: 'base', label: '1. ราคาก่อน VAT' },
   { value: 'gross', label: '2. ราคารวม VAT' },
   { value: 'net', label: '3. หลังหักภาษี (รับสุทธิ)' },
 ];
-const MOCK_USERS = ['คุณธนา', 'คุณสมชาย', 'คุณกานดา', 'คุณปิยะ'];
-const MOCK_JOB_TYPES = ['ซ่อมบำรุงทั่วไป', 'ระบบไฟฟ้า', 'ระบบปรับอากาศ', 'ระบบกล้องวงจรปิด', 'อื่นๆ'];
+// งวดเก่าที่ยังติดสถานะนี้มีช่องเลขที่เช็ค/วันที่ลงเช็ค (ต้นฉบับเทียบชื่อนี้ตรง ๆ เหมือนกัน)
+const CHEQUE_STATUS = 'รับเช็คแล้ว';
+const NEW_ROW_STAMP = 'ระบบจะประทับให้เมื่อกดบันทึก';
 
 const EMPTY_PROJECT: ProjectInfo = { jobNo: '', projectName: '', customer: '', budget: 0, paidGross: 0 };
+const EMPTY_OPTIONS: FormOptions = { payStatuses: [], defaultStatus: '', closingStatus: '', reqAmountStatuses: [], banks: [], vatRate: 0.07 };
 
 // แปลงข้อมูลดิบจาก accounting_API_mobile.php action=get_detail ให้เข้ารูป ProjectInfo/PaymentRow
-// ชื่อคีย์ยึดตาม acc_row_to_json()/get_payment_items ใน accounting_API_mobile.php จริง (ยืนยันแล้ว)
-function mapProjectInfo(raw: any): ProjectInfo {
+// ชื่อคีย์ยึดตาม acc_row_to_json()/get_detail ใน accounting_API_mobile.php จริง (ยืนยันแล้ว)
+function mapProjectInfo(raw: any, paidGross: number): ProjectInfo {
   return {
     jobNo: String(raw.display_code ?? ''),
     projectName: String(raw.project_name ?? ''),
     customer: String(raw.customer_name ?? ''),
     budget: Number(raw.project_budget ?? 0),
-    paidGross: Number(raw.total_gross_amount ?? 0),
+    paidGross,
     address: raw.customer_address || undefined,
     contact: raw.contact_person || undefined,
   };
 }
 
+function mapFormOptions(res: any): FormOptions {
+  const strList = (v: any): string[] => (Array.isArray(v) ? v.map((x) => String(x)) : []);
+  const payStatuses = strList(res.pay_statuses);
+  const defaultStatus = String(res.default_pay_status || payStatuses[0] || '');
+  const vat = Number(res.vat_percent ?? 7);
+  return {
+    payStatuses,
+    defaultStatus,
+    closingStatus: String(res.closing_pay_status || defaultStatus),
+    reqAmountStatuses: strList(res.req_amount_statuses),
+    banks: strList(res.bank_list),
+    vatRate: Number.isFinite(vat) ? vat / 100 : 0.07,
+  };
+}
+
+// ชื่อสถานะของงวดเดิมที่สะกดต่างจาก master แค่ เเ/แ หรือช่องว่าง (แอปรุ่นเก่าเคยบันทึกไว้) -> ใช้ชื่อ master
+// ไม่ตรงอะไรเลยคืนค่าเดิม (โชว์เป็น "สถานะเดิม" ให้เลือกเปลี่ยนเอง) — กติกาเดียวกับ accApi_match_pay_status() ฝั่ง API
+function matchPayStatus(status: string, names: string[]): string {
+  const s = status.trim();
+  if (!s || names.includes(s)) return s;
+  const norm = (v: string) => v.trim().replace(/เเ/g, 'แ').replace(/\s+/g, ' ');
+  return names.find((n) => norm(n) === norm(s)) ?? s;
+}
+
 // ⚠️ id ต้องเป็น row_uid (คงตัวข้ามการลบ/เขียนใหม่ฝั่ง save_payments) ไม่ใช่ id ตัวเลขจาก DB —
 // ถ้าส่ง id ตัวเลขกลับไปเป็น pp_uid, save_payments จะจับคู่กับแถวเดิมไม่ได้ (มองว่าเป็นงวดใหม่ทุกครั้ง)
 // ทำให้ created_by/ประวัติการแก้ไขหลุดทุกครั้งที่บันทึก — get_detail จึงต้องส่ง row_uid มาด้วยเสมอ
-function mapPaymentRow(raw: any): PaymentRow {
+function mapPaymentRow(raw: any, opts: FormOptions): PaymentRow {
   return mkRow({
     id: String(raw.row_uid || raw.id || uid()),
     isNew: false,
@@ -152,7 +180,7 @@ function mapPaymentRow(raw: any): PaymentRow {
     amount: String(raw.payment_amount ?? ''),
     calcMode: (raw.calc_mode || 'base') as CalcMode,
     whtPercent: Number(raw.wht_percent ?? 0),
-    status: String(raw.call_status ?? STATUS_LIST[0]),
+    status: matchPayStatus(String(raw.call_status ?? ''), opts.payStatuses),
     fee: String(raw.fee_amount ?? ''),
     fine: String(raw.fine_amount ?? ''),
     bankName: String(raw.bank_name ?? ''),
@@ -160,8 +188,9 @@ function mapPaymentRow(raw: any): PaymentRow {
     receivedDate: String(raw.payment_received_date ?? ''),
     receiptDate: String(raw.receipt_date ?? ''),
     remark: String(raw.remark ?? ''),
-    owner: CURRENT_USER,
-    createdAtShow: raw.created_at ? formatShortThaiDateTime(raw.created_at) : raw.created_at_thai ?? undefined,
+    // ผู้บันทึก/เวลาบันทึกจริงของงวดนั้น — งวดเก่าที่ยังไม่มีชื่อปล่อยว่าง (คนแรกที่แก้จะกลายเป็นผู้บันทึก เหมือนเว็บ)
+    owner: String(raw.created_by ?? '').trim(),
+    createdAtShow: raw.created_at ? formatShortThaiDateTime(raw.created_at) : 'ไม่ระบุ',
     chequeNo: String(raw.cheque_no ?? ''),
     chequeDate: String(raw.cheque_date ?? ''),
   });
@@ -181,7 +210,7 @@ function mkRow(partial: Partial<PaymentRow> = {}): PaymentRow {
     amount: '',
     calcMode: 'base',
     whtPercent: 0,
-    status: STATUS_LIST[0],
+    status: '',
     fee: '',
     fine: '',
     bankName: '',
@@ -189,14 +218,10 @@ function mkRow(partial: Partial<PaymentRow> = {}): PaymentRow {
     receivedDate: '',
     receiptDate: '',
     remark: '',
-    owner: CURRENT_USER,
+    owner: '',
+    createdAtShow: NEW_ROW_STAMP,
     chequeNo: '',
     chequeDate: '',
-    srReceiver: '',
-    srUrgency: 'normal',
-    srProduct: '',
-    srJobType: '',
-    srIssue: '',
     ...partial,
   };
 }
@@ -209,8 +234,8 @@ function toFloat(s: string): number {
   return parseFloat((s || '').replace(/,/g, '')) || 0;
 }
 
-// เทียบเท่า calculateRow() ของต้นฉบับเป๊ะ
-function calcRow(amountStr: string, feeStr: string, fineStr: string, mode: CalcMode, whtPercent: number) {
+// เทียบเท่า calculateRow() ของต้นฉบับเป๊ะ (vatRate = GLOBAL_VAT_RATE จาก setup_vat)
+function calcRow(amountStr: string, feeStr: string, fineStr: string, mode: CalcMode, whtPercent: number, vatRate: number) {
   const amount = toFloat(amountStr);
   const fee = toFloat(feeStr);
   const fine = toFloat(fineStr);
@@ -223,45 +248,81 @@ function calcRow(amountStr: string, feeStr: string, fineStr: string, mode: CalcM
 
   if (mode === 'base') {
     base = amount;
-    vat = base * VAT_RATE;
+    vat = base * vatRate;
     gross = base + vat;
     wht = base * whtRate;
     net = gross - wht - fee - fine;
   } else if (mode === 'gross') {
     gross = amount;
-    base = gross / (1 + VAT_RATE);
+    base = gross / (1 + vatRate);
     vat = gross - base;
     wht = base * whtRate;
     net = gross - wht - fee - fine;
   } else {
     net = amount;
     const target = net + fee + fine;
-    const factor = 1 + VAT_RATE - whtRate;
+    const factor = 1 + vatRate - whtRate;
     base = factor !== 0 ? target / factor : 0;
-    vat = base * VAT_RATE;
+    vat = base * vatRate;
     gross = base + vat;
     wht = base * whtRate;
   }
   return { base, vat, gross, wht, fee, fine, net };
 }
 
+// เทียบเท่า autoCloseIfFull() ของต้นฉบับ — ยอดที่กรอกรวมครบงบเมื่อไหร่ ตั้งงวดสุดท้ายเป็น "ปิดยอด" ให้เลย
+//  - เทียบ "ยอดที่กรอกรวม" กับงบประมาณ (สูตรเดียวกับคอลัมน์ค้างชำระของหน้าลูกหนี้)
+//  - แตะเฉพาะงวดสุดท้ายที่มียอดเงิน และไม่แตะงวดที่ผู้ใช้เลือกสถานะเองแล้ว
+//  - แก้ยอดจนไม่ครบ สถานะที่ระบบตั้งให้จะถอยกลับเป็นสถานะตั้งต้น (ของที่ผู้ใช้เลือกเองไม่โดน)
+//  - เรียกเฉพาะตอนผู้ใช้แก้ยอด/เพิ่ม/ลบงวด ไม่เรียกตอนโหลดหน้า (งานที่จ่ายครบอยู่แล้วจะไม่ถูกเปลี่ยนเอง)
+// คืนแถวชุดใหม่ + ข้อความแจ้งเตือน (ถ้ามีการเปลี่ยนสถานะ)
+function autoCloseIfFull(rows: PaymentRow[], budget: number, opts: FormOptions): { rows: PaymentRow[]; message?: string } {
+  if (budget <= 0 || !opts.closingStatus) return { rows };
+  const target = [...rows].reverse().find((r) => toFloat(r.amount) > 0);
+  if (!target || target.userPicked) return { rows };
+
+  const sumEntered = rows.reduce((s, r) => s + toFloat(r.amount), 0);
+  const isFull = sumEntered + 0.01 >= budget;
+  // ตั้งสถานะให้ = เปลี่ยนสถานะ -> ล้างช่องเช็คเหมือนตอนเปลี่ยนสถานะเองบนเว็บ
+  const setStatus = (status: string, autoClosed: boolean) =>
+    rows.map((r) => (r.id === target.id ? { ...r, status, autoClosed, chequeNo: '', chequeDate: '' } : r));
+
+  if (isFull && target.status !== opts.closingStatus) {
+    return { rows: setStatus(opts.closingStatus, true), message: `ยอดครบตามงบแล้ว — ตั้งสถานะงวดนี้เป็น "${opts.closingStatus}" ให้อัตโนมัติ` };
+  }
+  if (!isFull && target.autoClosed && opts.defaultStatus) {
+    return { rows: setStatus(opts.defaultStatus, false), message: `ยอดยังไม่ครบงบ — ถอยสถานะกลับเป็น "${opts.defaultStatus}"` };
+  }
+  return { rows };
+}
+
 // ====================================================================
 // Main screen
 // ====================================================================
 
-export default function ProjectAccountingScreen({ id, onBack, onSaved }: ProjectAccountingScreenProps) {
+export default function ProjectAccountingScreen({ id, onBack, onSaved, onOpenFollowup }: ProjectAccountingScreenProps) {
   const router = useRouter();
   const params = useLocalSearchParams<{ id?: string }>();
-  const projectId = id ?? params.id ?? '547';
+  // ไม่มี id = เปิดผิดทาง ห้ามเดาเลขหน้างานเอง (เดิม fallback เป็น 547 ของ mockup — เสี่ยงบันทึกผิดโครงการ)
+  const projectId = String(id ?? params.id ?? '');
   const { user } = useAuth();
   const userId = (user as any)?.id;
+  // ผู้บันทึกงวดใหม่ = คนที่ล็อกอินอยู่ (โชว์เฉย ๆ — ตอนบันทึกเซิร์ฟเวอร์ใส่ชื่อจาก user_id เอง)
+  const currentUserName = String(user?.fullname ?? '').trim();
 
   const [project, setProject] = useState<ProjectInfo>(EMPTY_PROJECT);
-  const [rows, setRows] = useState<PaymentRow[]>([mkRow({ name: 'งวดที่ 1' })]);
+  const [opts, setOpts] = useState<FormOptions>(EMPTY_OPTIONS);
+  const [rows, setRows] = useState<PaymentRow[]>([]);
+  // โหลดงวดมาครบทุกงวดไหม — ไม่ครบห้ามบันทึก (save_payments ลบงวดเดิมทั้งโครงการแล้วเขียนใหม่)
+  const [allRowsLoaded, setAllRowsLoaded] = useState(true);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [noPermission, setNoPermission] = useState(false);
   const [saving, setSaving] = useState(false);
+  // แจ้งเตือนแบบไม่ขวางทาง (ระบบตั้ง/ถอยสถานะ "ปิดยอด" ให้เอง) เหมือน accToast() ของต้นฉบับ
+  const [toast, setToast] = useState<string | null>(null);
+  const autoMsgRef = useRef<string | null>(null);
 
   // ป๊อปอัพเลือกตัวเลือกแบบใช้ร่วมกันทุกช่อง (แทนที่ chip picker แบบเลื่อนแนวนอนเดิม)
   const [pickerModal, setPickerModal] = useState<{
@@ -275,19 +336,38 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
     setPickerModal({ visible: true, title, options, current, onSelect });
   }
 
-  const outstanding = Math.max(project.budget - project.paidGross, 0);
-
   const loadData = useCallback(async () => {
     if (!userId) return;
+    if (!projectId) {
+      setLoadError('ไม่พบเลขหน้างาน กรุณากลับไปเลือกโครงการใหม่');
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setLoadError(null);
+    setNoPermission(false);
     try {
-      const res = await apiMobileGet(ACCOUNTING_API_URL, 'get_detail', { user_id: userId, project_id: projectId });
-      const proj = mapProjectInfo(res.detail ?? {});
+      // limit = เพดานของ API — ต้องได้ครบทุกงวด เพราะตอนบันทึกเซิร์ฟเวอร์ลบงวดเดิมทั้งโครงการแล้วเขียนใหม่
+      const res = await apiMobileGet(ACCOUNTING_API_URL, 'get_detail', { user_id: userId, project_id: projectId, limit: 2000 });
+      // ไม่มีสิทธิ์ "ลงบัญชีรับชำระ" -> เว็บกันตั้งแต่เปิดหน้า (project_accounting.php:12) แอปจึงไม่โชว์ฟอร์มเช่นกัน
+      if (Number(res.can_do_accounting ?? 0) !== 1) {
+        setNoPermission(true);
+        return;
+      }
+      const options = mapFormOptions(res);
+      if (options.payStatuses.length === 0) throw new Error('โหลดตัวเลือกสถานะจ่ายเงินไม่ได้ กรุณาลองใหม่อีกครั้ง');
+
       const rawRows: any[] = Array.isArray(res.payment_items) ? res.payment_items : [];
-      const mappedRows: PaymentRow[] = rawRows.length > 0 ? rawRows.map(mapPaymentRow) : [mkRow({ name: 'งวดที่ 1' })];
-      setProject(proj);
+      // "จ่ายแล้ว" แบบเว็บ = รวมยอดที่กรอกเฉพาะงวดที่มียอดรับสุทธิ > 0 (project_accounting.php:1132-1138)
+      const paidGross = rawRows.reduce((sum, r) => (Number(r.net_amount ?? 0) > 0 ? sum + Number(r.payment_amount ?? 0) : sum), 0);
+      const mappedRows: PaymentRow[] =
+        rawRows.length > 0
+          ? rawRows.map((r) => mapPaymentRow(r, options))
+          : [mkRow({ name: 'งวดที่ 1', status: options.defaultStatus, owner: currentUserName })];
+      setOpts(options);
+      setProject(mapProjectInfo(res.detail ?? {}, paidGross));
       setRows(mappedRows);
+      setAllRowsLoaded(rawRows.length >= Number(res.payment_items_total ?? rawRows.length));
       setExpandedIds(new Set(mappedRows.filter((r) => r.isNew).map((r) => r.id)));
     } catch (e: any) {
       console.error('load accounting_API_mobile get_detail failed', e);
@@ -295,19 +375,36 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
     } finally {
       setLoading(false);
     }
-  }, [projectId, userId]);
+  }, [projectId, userId, currentUserName]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 3000);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  // ข้อความจากระบบตั้ง "ปิดยอด" อัตโนมัติ — จดไว้ใน ref ตอนคำนวณแถวชุดใหม่ แล้วค่อยโชว์หลัง render
+  useEffect(() => {
+    if (autoMsgRef.current) {
+      setToast(autoMsgRef.current);
+      autoMsgRef.current = null;
+    }
+  }, [rows]);
+
   const rowCalcs = useMemo(() => {
     const map: Record<string, ReturnType<typeof calcRow>> = {};
     rows.forEach((r) => {
-      map[r.id] = calcRow(r.amount, r.fee, r.fine, r.calcMode, r.whtPercent);
+      map[r.id] = calcRow(r.amount, r.fee, r.fine, r.calcMode, r.whtPercent, opts.vatRate);
     });
     return map;
-  }, [rows]);
+  }, [rows, opts.vatRate]);
+
+  // ป้าย "VAT 7%" ตามอัตราจริง (เว็บโชว์ floatval ของ vat_percent เช่น 7 / 7.5)
+  const vatPctText = String(Math.round(opts.vatRate * 10000) / 100);
 
   const totals = useMemo(() => {
     return rows.reduce(
@@ -333,6 +430,8 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
   }
 
   function goFollowup() {
+    // ฝังอยู่ในหน้าอื่น -> ให้หน้านั้นสลับไปหน้าติดตามเอง (push route จะหลุดออกจากหน้าที่ฝังไว้ กดกลับแล้วหลงทาง)
+    if (onOpenFollowup) return onOpenFollowup(projectId);
     router.push({ pathname: '/projectfollowup', params: { id: projectId } });
   }
 
@@ -345,39 +444,88 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
     });
   }
 
+  // แก้ที่กระทบยอด (ยอด/ค่าธรรมเนียม/ค่าปรับ/โหมด/ภาษี, เพิ่ม/ลบงวด) -> เช็คตั้ง "ปิดยอด" อัตโนมัติด้วย
+  // เหมือนต้นฉบับที่ calculateRow() -> calculateTotal() -> autoCloseIfFull() ทุกครั้ง
+  function setRowsAndAutoClose(update: (prev: PaymentRow[]) => PaymentRow[]) {
+    setRows((prev) => {
+      const res = autoCloseIfFull(update(prev), project.budget, opts);
+      if (res.message) autoMsgRef.current = res.message;
+      return res.rows;
+    });
+  }
+
   function addRow(preset?: Partial<PaymentRow>) {
-    const r = mkRow({ name: `งวดที่ ${rows.length + 1}`, ...preset });
-    setRows((prev) => [...prev, r]);
+    const r = mkRow({ name: `งวดที่ ${rows.length + 1}`, status: opts.defaultStatus, owner: currentUserName, ...preset });
+    setRowsAndAutoClose((prev) => [...prev, r]);
     setExpandedIds((prev) => new Set(prev).add(r.id));
   }
 
   function removeRow(row: PaymentRow) {
+    const drop = () => setRowsAndAutoClose((prev) => prev.filter((r) => r.id !== row.id));
     if (!row.isNew) {
       Alert.alert('ยืนยันการลบงวดนี้?', 'งวดนี้เป็น "ข้อมูลในระบบ" หากลบทิ้งและกดบันทึก ประวัติจะหายไปอย่างถาวร', [
         { text: 'ยกเลิก', style: 'cancel' },
-        { text: 'ยืนยันการลบ', style: 'destructive', onPress: () => setRows((prev) => prev.filter((r) => r.id !== row.id)) },
+        { text: 'ยืนยันการลบ', style: 'destructive', onPress: drop },
       ]);
     } else {
-      setRows((prev) => prev.filter((r) => r.id !== row.id));
+      drop();
     }
   }
 
   function updateRow<K extends keyof PaymentRow>(id: string, field: K, value: PaymentRow[K]) {
-    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
+    const update = (prev: PaymentRow[]) => prev.map((r) => (r.id === id ? { ...r, [field]: value } : r));
+    if (field === 'amount' || field === 'fee' || field === 'fine' || field === 'calcMode' || field === 'whtPercent') setRowsAndAutoClose(update);
+    else setRows(update);
   }
 
-  // ฝั่งบันทึก — action=save_payments จริง (accounting_API_mobile.php) เพิ่มใหม่โดยพอร์ตตรรกะ
-  // "โหมดปกติ" ของ project_accounting.php ทั้งหมด (ลบทั้งโครงการแล้วเขียนใหม่ทุกงวด โดยใช้ row_uid
-  // คงตัวข้ามการลบ/สร้างใหม่ กันประวัติผู้บันทึก/ผู้แก้ไขหาย) ทดสอบ insert/resave/แก้ไขข้ามผู้ใช้/
-  // ลบแถวจริงแล้วก่อนส่งมอบ — ไม่รองรับฟอร์มย่อย "แจ้งซ่อม" (เกินขอบเขต mockup เดิม)
+  // ผู้ใช้เลือกสถานะเอง -> ติดธงไว้ ระบบจะไม่ไปทับงวดนี้อีก และถ้าไม่ใช่ "รับเช็คแล้ว" ล้างช่องเช็คทิ้ง
+  // (เหมือน change event ของ select สถานะในต้นฉบับ — เลือกค่าเดิมซ้ำไม่นับว่าเปลี่ยน)
+  function pickStatus(id: string, status: string) {
+    setRows((prev) =>
+      prev.map((r) =>
+        r.id === id && r.status !== status
+          ? { ...r, status, userPicked: true, autoClosed: false, ...(status !== CHEQUE_STATUS ? { chequeNo: '', chequeDate: '' } : {}) }
+          : r
+      )
+    );
+  }
+
+  // ตัวเลือกสถานะ = กลุ่ม "จ่ายเงิน" จาก master — งวดเดิมที่ติดสถานะนอกลิสต์ โชว์ค่าเดิมต่อท้ายไว้
+  // (ไม่งั้นกดบันทึกแล้วสถานะจะถูกเปลี่ยนเงียบ ๆ โดยที่ผู้ใช้ไม่ได้เลือก)
+  function statusOptions(current: string) {
+    const list = opts.payStatuses.map((s) => ({ value: s, label: s }));
+    if (current && !opts.payStatuses.includes(current)) list.push({ value: current, label: `${current} (สถานะเดิม)` });
+    return list;
+  }
+
+  // ธนาคาร = bank_masters — ค่าเดิมที่ไม่อยู่ในลิสต์แล้ว ยังโชว์ไว้ให้ ไม่งั้นบันทึกแล้วธนาคารเดิมหายเงียบ ๆ
+  function bankOptions(current: string) {
+    const list = [{ value: '', label: 'ไม่ระบุ' }, ...opts.banks.map((b) => ({ value: b, label: b }))];
+    if (current && !opts.banks.includes(current)) list.push({ value: current, label: `${current} (ค่าเดิม)` });
+    return list;
+  }
+
+  // บันทึก — action=save_payments (accounting_API_mobile.php) พอร์ตตรรกะบันทึก "โหมดปกติ" ของ
+  // project_accounting.php ทั้งชุด: ลบงวดเดิมทั้งโครงการแล้วเขียนใหม่ทุกงวดใน transaction โดยส่ง row_uid
+  // ของงวดเดิมกลับไปเป็น pp_uid ให้เซิร์ฟเวอร์ยกผู้บันทึก/เวลาบันทึกเดิมข้ามมา และลงประวัติผู้แก้ไข
+  // เฉพาะงวดที่ค่าเปลี่ยนจริง (งวดใหม่ส่ง pp_uid ว่าง = ผู้บันทึกคือคนที่ล็อกอินอยู่)
   async function handleSave() {
     if (!userId) return;
+    if (!allRowsLoaded) {
+      Alert.alert('บันทึกไม่ได้', 'งานนี้มีงวดชำระมากเกินกว่าที่แอปโหลดได้ กรุณาบันทึกผ่านหน้าเว็บ');
+      return;
+    }
     const invalidName = rows.some((r) => !r.name.trim());
     if (invalidName) {
       Alert.alert('กรอกข้อมูลไม่ครบ', 'กรุณาระบุ "ชื่องวด" ให้ครบทุกรายการก่อนบันทึก');
       return;
     }
-    const invalidAmount = rows.some((r) => REQ_AMOUNT_STATUSES.includes(r.status) && toFloat(r.amount) <= 0);
+    // เว็บไม่มีตัวเลือกสถานะว่าง (select ต้องมีค่าเสมอ) แอปจึงบังคับเลือกให้ครบเช่นกัน
+    if (rows.some((r) => !r.status.trim())) {
+      Alert.alert('กรอกข้อมูลไม่ครบ', 'กรุณาเลือก "สถานะจ่ายเงิน" ให้ครบทุกงวดก่อนบันทึก');
+      return;
+    }
+    const invalidAmount = rows.some((r) => opts.reqAmountStatuses.includes(r.status) && toFloat(r.amount) <= 0);
     if (invalidAmount) {
       Alert.alert('กรอกข้อมูลไม่ครบ', 'มีงวดที่สถานะต้องระบุยอดเงิน แต่ยังไม่ได้กรอก');
       return;
@@ -442,8 +590,29 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 20 }}>
           <Ionicons name="alert-circle-outline" size={28} color="#ef4444" />
           <Text style={{ color: '#64748b', fontSize: 13, textAlign: 'center' }}>{loadError}</Text>
-          <TouchableOpacity style={styles.addBtnPaid} onPress={loadData}>
-            <Text style={styles.addBtnPaidText}>ลองใหม่</Text>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <TouchableOpacity style={styles.addBtnPlain} onPress={handleBack}>
+              <Text style={styles.addBtnPlainText}>กลับ</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.addBtnPaid} onPress={loadData}>
+              <Text style={styles.addBtnPaidText}>ลองใหม่</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // ไม่มีสิทธิ์ "ลงบัญชีรับชำระ" — เว็บขึ้นหน้า "ไม่มีสิทธิ์เข้าถึง" ตั้งแต่เปิด แอปจึงไม่โชว์ฟอร์มเหมือนกัน
+  if (noPermission) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="light-content" />
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, padding: 20 }}>
+          <Ionicons name="lock-closed-outline" size={28} color="#ef4444" />
+          <Text style={{ color: '#64748b', fontSize: 13, textAlign: 'center' }}>ไม่มีสิทธิ์ลงบัญชีรับชำระ ติดต่อผู้ดูแลระบบเพื่อขอสิทธิ์</Text>
+          <TouchableOpacity style={styles.addBtnPaid} onPress={handleBack}>
+            <Text style={styles.addBtnPaidText}>กลับ</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -496,7 +665,7 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
                 <Ionicons name="add" size={13} color="#059669" />
                 <Text style={styles.addBtnPlainText}>เพิ่มงวด</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.addBtnPaid} onPress={() => addRow({ name: 'งวดสุดท้าย (ปิดยอด)', status: STATUS_FULL })}>
+              <TouchableOpacity style={styles.addBtnPaid} onPress={() => addRow({ name: 'งวดสุดท้าย (ปิดยอด)', status: opts.closingStatus })}>
                 <Ionicons name="checkmark-done" size={13} color="#fff" />
                 <Text style={styles.addBtnPaidText}>ปิดยอด</Text>
               </TouchableOpacity>
@@ -506,8 +675,8 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
           {rows.map((r, idx) => {
             const c = rowCalcs[r.id];
             const expanded = expandedIds.has(r.id);
-            const showCheque = r.status === 'รับเช็คแล้ว';
-            const showSr = r.status === 'แจ้งซ่อม';
+            const showCheque = r.status === CHEQUE_STATUS;
+            const amountRequired = opts.reqAmountStatuses.includes(r.status);
 
             return (
               <View key={r.id} style={[styles.rowCard, r.isNew && styles.rowCardNew]}>
@@ -526,15 +695,16 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
                     <Text style={styles.collapsedName}>{r.name || `งวดที่ ${idx + 1}`}</Text>
                     <View style={styles.collapsedMetaRow}>
                       <Text style={styles.collapsedMeta}>🕐 {r.createdAtShow}</Text>
-                      <Text style={styles.collapsedMeta}>👤 {r.owner}</Text>
+                      <Text style={styles.collapsedMeta}>👤 {r.owner || '-'}</Text>
                     </View>
                     <View style={styles.collapsedValRow}>
                       <Text style={styles.collapsedValLabel}>รับสุทธิงวดนี้</Text>
                       <Text style={styles.collapsedValValue}>{num(c.net)}</Text>
                     </View>
                     <View style={styles.collapsedStatusBadge}>
-                      <Text style={styles.collapsedStatusBadgeText}>{r.status}</Text>
+                      <Text style={styles.collapsedStatusBadgeText}>{r.status || '-'}</Text>
                     </View>
+                    {!!r.remark.trim() && <Text style={styles.collapsedRemark}>💬 {r.remark}</Text>}
                     <View style={styles.expandBtn}>
                       <Ionicons name="create-outline" size={12} color="#475569" />
                       <Text style={styles.expandBtnText}>แก้ไข</Text>
@@ -545,7 +715,7 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
                     <FieldLabel text="ชื่องวด" required />
                     <TextInput style={styles.input} placeholder="เช่น งวดที่ 1" placeholderTextColor="#94a3b8" value={r.name} onChangeText={(v) => updateRow(r.id, 'name', v)} />
 
-                    <FieldLabel text="ยอดเงินที่กรอก (บาท)" required={REQ_AMOUNT_STATUSES.includes(r.status)} />
+                    <FieldLabel text="ยอดเงินที่กรอก (บาท)" required={amountRequired} />
                     <TextInput style={styles.input} placeholder="0.00" placeholderTextColor="#94a3b8" keyboardType="decimal-pad" value={r.amount} onChangeText={(v) => updateRow(r.id, 'amount', v)} />
 
                     <FieldLabel text="ยอดที่กรอกคือ..." />
@@ -575,7 +745,7 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
                     <PickerTrigger
                       label={r.status}
                       placeholder="เลือกสถานะ..."
-                      onPress={() => openPicker('สถานะจ่ายเงิน', STATUS_LIST.map((s) => ({ value: s, label: s })), r.status, (v) => updateRow(r.id, 'status', v))}
+                      onPress={() => openPicker('สถานะจ่ายเงิน', statusOptions(r.status), r.status, (v) => pickStatus(r.id, v))}
                     />
 
                     <View style={styles.rowGap}>
@@ -593,14 +763,7 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
                     <PickerTrigger
                       label={r.bankName}
                       placeholder="ไม่ระบุ"
-                      onPress={() =>
-                        openPicker(
-                          'ธนาคาร (เข้าเช็ค)',
-                          [{ value: '', label: 'ไม่ระบุ' }, ...BANK_LIST.map((b) => ({ value: b, label: b }))],
-                          r.bankName,
-                          (v) => updateRow(r.id, 'bankName', v)
-                        )
-                      }
+                      onPress={() => openPicker('ธนาคาร (เข้าเช็ค)', bankOptions(r.bankName), r.bankName, (v) => updateRow(r.id, 'bankName', v))}
                     />
 
                     {/* สรุปยอดงวดนี้ */}
@@ -610,7 +773,7 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
                         <Text style={styles.rowSummaryValue}>{num(c.base)}</Text>
                       </View>
                       <View style={styles.rowSummaryLine}>
-                        <Text style={styles.rowSummaryLabel}>VAT 7%</Text>
+                        <Text style={styles.rowSummaryLabel}>VAT {vatPctText}%</Text>
                         <Text style={[styles.rowSummaryValue, { color: '#059669' }]}>{num(c.vat)}</Text>
                       </View>
                       <View style={styles.rowSummaryLine}>
@@ -653,10 +816,22 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
                       onChangeText={(v) => updateRow(r.id, 'remark', v)}
                     />
 
-                    <FieldLabel text="ผู้บันทึก" />
-                    <View style={styles.stampBox}>
-                      <Ionicons name="person-outline" size={13} color="#059669" />
-                      <Text style={styles.stampBoxText}>{r.owner || '—'}</Text>
+                    {/* ใครลงงวดนี้ ลงเมื่อไหร่ — ระบบเติมให้ ไม่ให้เลือก/แก้เอง (เหมือนต้นฉบับ) */}
+                    <View style={styles.rowGap}>
+                      <View style={{ flex: 1 }}>
+                        <FieldLabel text="ผู้บันทึก" />
+                        <View style={styles.stampBox}>
+                          <Ionicons name="person-outline" size={13} color="#059669" />
+                          <Text style={styles.stampBoxText}>{r.owner || '—'}</Text>
+                        </View>
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <FieldLabel text="วันเวลาที่บันทึก" />
+                        <View style={styles.stampBox}>
+                          <Ionicons name="time-outline" size={13} color="#d97706" />
+                          <Text style={styles.stampBoxText}>{r.createdAtShow}</Text>
+                        </View>
+                      </View>
                     </View>
 
                     {showCheque && (
@@ -672,41 +847,6 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
                             <DateField value={r.chequeDate} onChange={(v) => updateRow(r.id, 'chequeDate', v)} />
                           </View>
                         </View>
-                      </View>
-                    )}
-
-                    {showSr && (
-                      <View style={styles.srBox}>
-                        <Text style={styles.srBoxTitle}>
-                          <Ionicons name="build-outline" size={12} color="#e11d48" /> ข้อมูลสำหรับเปิดใบแจ้งซ่อม
-                        </Text>
-                        <FieldLabel text="ผู้รับเรื่อง" required />
-                        <PickerTrigger
-                          label={r.srReceiver}
-                          placeholder="เลือกผู้รับเรื่อง..."
-                          onPress={() => openPicker('ผู้รับเรื่อง', MOCK_USERS.map((u) => ({ value: u, label: u })), r.srReceiver, (v) => updateRow(r.id, 'srReceiver', v))}
-                        />
-                        <FieldLabel text="สินค้า / อุปกรณ์" required />
-                        <TextInput style={styles.input} placeholder="เช่น กล้องวงจรปิด, PC..." placeholderTextColor="#94a3b8" value={r.srProduct} onChangeText={(v) => updateRow(r.id, 'srProduct', v)} />
-                        <FieldLabel text="ประเภทงาน" required />
-                        <PickerTrigger
-                          label={r.srJobType}
-                          placeholder="เลือกประเภทงาน..."
-                          onPress={() => openPicker('ประเภทงาน', MOCK_JOB_TYPES.map((jt) => ({ value: jt, label: jt })), r.srJobType, (v) => updateRow(r.id, 'srJobType', v))}
-                        />
-                        <FieldLabel text="อาการ / ปัญหาที่พบ" required />
-                        <TextInput
-                          style={[styles.input, styles.textarea]}
-                          placeholder="ระบุอาการเสีย..."
-                          placeholderTextColor="#94a3b8"
-                          multiline
-                          value={r.srIssue}
-                          onChangeText={(v) => updateRow(r.id, 'srIssue', v)}
-                        />
-                        <TouchableOpacity style={styles.attachBtn} onPress={() => Alert.alert('แนบไฟล์', 'ต้องเพิ่ม expo-document-picker เพื่อแนบไฟล์จริงบนมือถือ')}>
-                          <Ionicons name="attach-outline" size={12} color="#64748b" />
-                          <Text style={styles.attachBtnText}>อัปโหลดไฟล์แนบ (ถ้ามี)</Text>
-                        </TouchableOpacity>
                       </View>
                     )}
 
@@ -728,7 +868,7 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
             </Text>
             <SummaryLine label="รวมยอดที่กรอก (ยอดเรียกเก็บ)" value={num(totals.entered)} color="#60a5fa" />
             <SummaryLine label="มูลค่ารวม (ก่อน VAT)" value={num(totals.base)} color="#e2e8f0" />
-            <SummaryLine label="รวม VAT 7%" value={num(totals.vat)} color="#4ade80" />
+            <SummaryLine label={`รวม VAT ${vatPctText}%`} value={num(totals.vat)} color="#4ade80" />
             <SummaryLine label="รวมหักภาษี ณ ที่จ่าย" value={`-${num(totals.wht)}`} color="#f87171" />
             <SummaryLine label="รวมค่าธรรมเนียม" value={`-${num(totals.fee)}`} color="#f87171" />
             <SummaryLine label="รวมค่าปรับ" value={`-${num(totals.fine)}`} color="#f87171" />
@@ -750,6 +890,13 @@ export default function ProjectAccountingScreen({ id, onBack, onSaved }: Project
           </View>
         </View>
       </ScrollView>
+
+      {toast ? (
+        <View style={styles.toast} pointerEvents="none">
+          <Ionicons name="information-circle" size={16} color="#ffffff" />
+          <Text style={styles.toastText}>{toast}</Text>
+        </View>
+      ) : null}
 
       {/* ป๊อปอัพเลือกตัวเลือกแบบใช้ร่วมกันทุกช่อง (แทนที่ chip picker แบบเลื่อนแนวนอนเดิม) */}
       <Modal visible={pickerModal.visible} transparent animationType="fade" onRequestClose={() => setPickerModal((s) => ({ ...s, visible: false }))}>
@@ -893,6 +1040,7 @@ const styles = StyleSheet.create({
   collapsedValValue: { fontSize: 13, color: '#059669', fontWeight: '900' },
   collapsedStatusBadge: { alignSelf: 'flex-start', backgroundColor: '#f1f5f9', borderRadius: 8, paddingHorizontal: 9, paddingVertical: 3, marginTop: 6 },
   collapsedStatusBadgeText: { fontSize: 11, color: '#334155', fontWeight: '700' },
+  collapsedRemark: { fontSize: 11, color: '#64748b', marginTop: 6 },
   expandBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, marginTop: 10 },
   expandBtnText: { fontSize: 11, fontWeight: '700', color: '#475569' },
 
@@ -926,11 +1074,6 @@ const styles = StyleSheet.create({
   chequeBox: { backgroundColor: '#f5f3ff', borderWidth: 1, borderColor: '#d8b4fe', borderStyle: 'dashed', borderRadius: 10, padding: 11, marginTop: 12 },
   chequeBoxTitle: { fontSize: 11.5, fontWeight: '800', color: '#7c3aed', marginBottom: 4 },
 
-  srBox: { backgroundColor: '#fff1f2', borderWidth: 1, borderColor: '#fecdd3', borderLeftWidth: 4, borderLeftColor: '#e11d48', borderRadius: 10, padding: 11, marginTop: 12 },
-  srBoxTitle: { fontSize: 11.5, fontWeight: '800', color: '#e11d48', marginBottom: 4 },
-  attachBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 8, alignSelf: 'flex-start' },
-  attachBtnText: { fontSize: 10.5, color: '#64748b', fontWeight: '600' },
-
   divider: { height: 1, backgroundColor: '#e2e8f0', marginVertical: 6 },
 
   collapseBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, alignSelf: 'center', backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 50, paddingHorizontal: 14, paddingVertical: 7, marginTop: 14 },
@@ -950,4 +1093,8 @@ const styles = StyleSheet.create({
   cancelBtnText: { color: '#475569', fontWeight: '700', fontSize: 13 },
   saveBtn: { flex: 1.4, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#059669', borderRadius: 12, paddingVertical: 14 },
   saveBtnText: { color: '#fff', fontWeight: '700', fontSize: 13 },
+
+  // แจ้งเตือนแบบไม่ขวางทาง (ค่าเดียวกับ toast ของ accounting_dashboard.tsx)
+  toast: { position: 'absolute', left: 16, right: 16, bottom: 22, minHeight: 46, borderRadius: 14, backgroundColor: '#22364c', paddingHorizontal: 14, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  toastText: { flex: 1, color: '#ffffff', fontSize: 12.5, fontWeight: '700' },
 });

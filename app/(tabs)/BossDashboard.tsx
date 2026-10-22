@@ -12,10 +12,11 @@ import 'moment/locale/th';
 import {
     Loader2, CheckCircle2, Inbox, FileText, LayoutDashboard,
     Clock, Calendar, Crown, Image as ImageIcon, History, Send, Play,
-    Paperclip, Trash2, Camera, ChevronRight, Briefcase, User,
+    Paperclip, Trash2, Camera, Briefcase, User,
     AlertTriangle, Info, AlertCircle, Users, FileBarChart,
-    Flag, Building2, ChevronDown, CalendarDays, Filter, ChevronLeft, X
+    Flag, Building2, ChevronDown, CalendarDays, Filter, X
 } from 'lucide-react-native';
+import { CalendarPickerModal, dateToYmd, ymdToDate } from '../../components/DateTimeField';
 
 // ✅ Config
 import { API_BASE } from '../../constants/config';
@@ -291,7 +292,6 @@ export default function BossDashboard() {
 
     const [showCompanyModal, setShowCompanyModal] = useState(false);
     const [showCalendarModal, setShowCalendarModal] = useState(false);
-    const [displayMonth, setDisplayMonth] = useState(moment());
 
     const [modalVisible, setModalVisible] = useState(false);
     const [selectedTask, setSelectedTask] = useState<Task | null>(null);
@@ -512,51 +512,15 @@ const handleReadTask = async (taskId: string) => {
     }
 };
 
-    const renderCalendarModal = () => {
-        const startOfMonth = (filterDate ? moment(filterDate) : displayMonth).clone().startOf('month');
-        const startDay = startOfMonth.day();
-        const daysInMonth = displayMonth.daysInMonth();
-        const calendarDays = [];
-        for (let i = 0; i < startDay; i++) { calendarDays.push(null); }
-        for (let i = 1; i <= daysInMonth; i++) { calendarDays.push(i); }
-
-        return (
-            <Modal visible={showCalendarModal} transparent animationType="fade" onRequestClose={() => setShowCalendarModal(false)}>
-                <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowCalendarModal(false)}>
-                    <View style={styles.calendarContainer}>
-                        <View style={styles.calendarHeader}>
-                            <TouchableOpacity onPress={() => setDisplayMonth(displayMonth.clone().subtract(1, 'month'))} style={{ padding: 5 }}>
-                                <ChevronLeft size={24} color={COLORS.textSecondary} />
-                            </TouchableOpacity>
-                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-                                <Text style={styles.calendarTitle}>{displayMonth.format('MMMM')}</Text>
-                                <Text style={styles.calendarYear}>{displayMonth.format('YYYY')}</Text>
-                            </View>
-                            <TouchableOpacity onPress={() => setDisplayMonth(displayMonth.clone().add(1, 'month'))} style={{ padding: 5 }}>
-                                <ChevronRight size={24} color={COLORS.textSecondary} />
-                            </TouchableOpacity>
-                        </View>
-                        <View style={styles.weekRow}>
-                            {['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'].map((d, i) => (<Text key={i} style={styles.weekText}>{d}</Text>))}
-                        </View>
-                        <View style={styles.daysGrid}>
-                            {calendarDays.map((day, index) => {
-                                if (day === null) return <View key={index} style={styles.dayCell} />;
-                                const thisDate = displayMonth.clone().date(day).format('YYYY-MM-DD');
-                                const isSelected = filterDate !== '' && thisDate === filterDate;
-                                const isToday = thisDate === moment().format('YYYY-MM-DD');
-                                return (
-                                    <TouchableOpacity key={index} style={[styles.dayCell, isSelected && styles.dayCellSelected, isToday && !isSelected && styles.dayCellToday]} onPress={() => { setFilterDate(thisDate); setShowCalendarModal(false); }}>
-                                        <Text style={[styles.dayText, isSelected && { color: '#FFF', fontWeight: '700' }, isToday && !isSelected && { color: COLORS.primary, fontWeight: '700' }]}>{day}</Text>
-                                    </TouchableOpacity>
-                                );
-                            })}
-                        </View>
-                    </View>
-                </TouchableOpacity>
-            </Modal>
-        );
-    };
+    // ปฏิทินแบบหน้า ManagerSales (CalendarPickerModal ตัวกลาง) — filterDate เป็น 'YYYY-MM-DD' ('' = ไม่กรอง)
+    const renderCalendarModal = () => (
+        <CalendarPickerModal
+            visible={showCalendarModal}
+            value={ymdToDate(filterDate)}
+            onChange={(d) => setFilterDate(dateToYmd(d))}
+            onClose={() => setShowCalendarModal(false)}
+        />
+    );
 
     // ✅ REDESIGNED MODAL CONTENT 
     const renderModalContent = () => {
@@ -959,7 +923,7 @@ const renderTaskItem = ({ item }: { item: Task }) => {
 };
     return (
         <SafeAreaView style={styles.container}>
-            <StatusBar barStyle="dark-content" backgroundColor="#F1F5F9" />
+            <StatusBar barStyle="light-content" />
 
             {/* HEADER */}
             <View style={styles.headerContainer}>
@@ -1009,11 +973,7 @@ const renderTaskItem = ({ item }: { item: Task }) => {
                 )}
 
                 {/* ตัวเลือกวันที่ แสดงให้ทุกคนเห็นเหมือนเดิม */}
-                <TouchableOpacity style={styles.dropdownSelector} activeOpacity={0.7} onPress={() => { 
-    // ถ้า filterDate ว่าง ให้ใช้ moment() (วันนี้) เป็นตัวตั้งต้นปฏิทิน
-    setDisplayMonth(filterDate ? moment(filterDate) : moment()); 
-    setShowCalendarModal(true); 
-}}>
+                <TouchableOpacity style={styles.dropdownSelector} activeOpacity={0.7} onPress={() => setShowCalendarModal(true)}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                         <View style={[styles.iconCircle, { backgroundColor: COLORS.warningLight }]}><CalendarDays size={16} color={COLORS.warning} /></View>
                         <View>
@@ -1110,18 +1070,6 @@ const styles = StyleSheet.create({
     filterLabel: { fontSize: 9, color: COLORS.textSecondary },
     filterValue: { fontSize: 12, fontWeight: '700', color: COLORS.textPrimary, maxWidth: 90 },
 
-    // Calendar
-    calendarContainer: { backgroundColor: '#FFF', width: '90%', borderRadius: 20, padding: 20, alignSelf: 'center', shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 10, elevation: 5 },
-    calendarHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
-    calendarTitle: { fontSize: 16, fontWeight: '700', color: COLORS.textPrimary },
-    calendarYear: { fontSize: 16, fontWeight: '400', color: COLORS.textSecondary },
-    weekRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 },
-    weekText: { width: '13%', textAlign: 'center', fontSize: 12, fontWeight: '600', color: COLORS.textSecondary },
-    daysGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-start' },
-    dayCell: { width: '14.28%', height: 40, justifyContent: 'center', alignItems: 'center', marginBottom: 5 },
-    dayCellSelected: { backgroundColor: COLORS.primary, borderRadius: 10 },
-    dayCellToday: { borderWidth: 1, borderColor: COLORS.primary, borderRadius: 10 },
-    dayText: { fontSize: 14, color: COLORS.textPrimary },
 
     // Picker
     pickerModalContent: { backgroundColor: '#FFF', width: '85%', borderRadius: 20, padding: 20, alignSelf: 'center' },

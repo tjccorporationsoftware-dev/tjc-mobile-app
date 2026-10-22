@@ -1,7 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import DateTimePicker, {
-    DateTimePickerChangeEvent,
-} from "@react-native-community/datetimepicker";
+import { CalendarPickerModal } from "../../components/DateTimeField";
 import { BlurView } from "expo-blur";
 import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect } from "expo-router";
@@ -490,11 +488,8 @@ export default function ImmigrationFormScreen() {
     });
   };
 
-  const handleDateChange = (
-    event: DateTimePickerChangeEvent,
-    selectedDate: Date,
-  ) => {
-    setShowDatePicker(Platform.OS === "ios");
+  // ปฏิทินแบบ ManagerSales ปิดตัวเองหลังเลือกวันทุกแพลตฟอร์ม (เดิม iOS ค้าง spinner ไว้)
+  const handleDateChange = (selectedDate: Date) => {
     setDate(selectedDate);
   };
 
@@ -787,13 +782,10 @@ export default function ImmigrationFormScreen() {
                 <Text style={styles.inputText}>{formatDateDisplay(date)}</Text>
               </TouchableOpacity>
               {showDatePicker && (
-                <DateTimePicker
+                <CalendarPickerModal
                   value={date}
-                  mode="date"
-                  display="default"
-                  onValueChange={handleDateChange}
-                  onDismiss={() => setShowDatePicker(false)}
-                  themeVariant={isDark ? "dark" : "light"}
+                  onChange={handleDateChange}
+                  onClose={() => setShowDatePicker(false)}
                 />
               )}
             </View>

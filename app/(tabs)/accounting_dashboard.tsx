@@ -2,7 +2,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from 'expo-router';
 // ปรับ path เหล่านี้ให้ตรงกับตำแหน่งไฟล์จริงในโปรเจกต์ ถ้าไม่ได้วางไว้โฟลเดอร์เดียวกัน
-import React, { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -16,7 +16,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
@@ -26,6 +26,7 @@ import { useAuth } from '../_layout';
 import { API_MODULES } from '../../constants/config';
 // 🌟 ปุ่มเลือกวันที่ + รูปแบบวันที่/เวลาสั้น "d/m/yy" มาตรฐานเดียวกันทั้งแอป
 import { DateField, formatShortThaiDate, formatShortThaiDateTime } from '../../components/DateTimeField';
+import ListPager, { pageCount } from '../../components/ListPager';
 import { apiMobileGet, apiMobilePost } from '../../service/api_mobile';
 
 import ProjectAccountingScreen from './projectaccounting';
@@ -35,8 +36,8 @@ import ProjectFollowupScreen from './projectfollowup';
  * แดชบอร์ดบัญชีลูกหนี้ (mobile) — เชื่อม accounting_API_mobile.php ตัวจริง
  * ตามสเปกใน mobile_api/docs/README_accounting.md
  *
- * action ที่ใช้จริง: get_dashboard (การ์ด KPI รวม + แยกบริษัท), get_list (รายการ),
- * get_detail (popup "ดูข้อมูล" — ดึงตอนเปิดเท่านั้น ไม่ฝังมากับ get_list), save_debt_owner
+ * action ที่ใช้จริง: get_dashboard (การ์ด KPI รวม + แยกบริษัท), get_list (รายการ — วนขอจนครบ total),
+ * get_detail (popup "ดูข้อมูล" — ดึงตอนเปิดเท่านั้น ไม่ฝังมากับ get_list), get_payment_items, save_debt_owner
  *
  * ตัด "ทำเครื่องหมายจ่ายแล้ว" (mark_paid) ออก — ไม่มี action นี้ใน accounting_API_mobile.php
  * (สถานะ "ชำระเรียบร้อย" เป็นผลคำนวณอัตโนมัติจากยอดจ่าย ไม่ใช่ปุ่มกดบันทึกเอง)
@@ -45,13 +46,14 @@ import ProjectFollowupScreen from './projectfollowup';
  * (ไม่มี action export ฝั่งเซิร์ฟเวอร์เช่นกัน — เทียบเท่าเจตนาของปุ่ม "Export ตามตัวกรอง" บนเว็บ แต่
  * ตัดรูปแบบไฟล์ Excel หลายชีท/สรุปแยกกลุ่ม/จัดสีของเว็บออก เพราะหนักเกินไปสำหรับมือถือ)
  *
- * ปุ่ม "ติดตาม"/"ลงบัญชี" ยังอยู่ครบเพราะพาไปหน้าจอจริงอื่น (ProjectFollowupScreen / ProjectAccountingScreen)
+ * ปุ่ม "ติดตาม"/"ลงบัญชี" พาไปหน้าจอจริงในตัว (ProjectFollowupScreen / ProjectAccountingScreen) — "ลงบัญชี"
+ * โชว์เฉพาะคนที่มีสิทธิ์ acc_do_accounting (can_do_accounting) เหมือนเว็บ และกลับจากสองหน้านั้นแล้ว
+ * โหลดตัวเลข/สถานะใหม่แบบเงียบ ๆ ทุกครั้ง
  */
 
 const ACCOUNTING_API_URL = `${API_MODULES}/accounting_API_mobile.php`;
 
 type FollowState = 'not_started' | 'following' | 'closed';
-type PayState = 'none' | 'paid';
 
 // ตรงกับ kpi_all ของ get_dashboard (README_accounting.md ข้อ 4.2)
 type Summary = {
@@ -162,19 +164,24 @@ type PaymentItem = {
   receiptDate: string;
   receiptNo: string;
   callStatus: string;
+  remark: string;
   createdBy: string;
   createdAtThai: string;
 };
 
 function mapPaymentItem(r: any): PaymentItem {
+  // วันที่เงินเข้า: ยึด payment_received_date ก่อน ว่างค่อยใช้ receipt_date (accounting_dashboard.php:3071-3072
+  // — ลอจิกเดียวกับการ์ดเงินเข้าวันนี้)
+  const received = r.payment_received_date || r.receipt_date;
   return {
     id: Number(r.id ?? 0),
     name: String(r.payment_name ?? ''),
     amount: Number(r.payment_amount ?? 0),
     netAmount: Number(r.net_amount ?? 0),
-    receiptDate: r.payment_received_date ? formatShortThaiDate(r.payment_received_date) : '-',
+    receiptDate: received ? formatShortThaiDate(received) : '-',
     receiptNo: String(r.receipt_no ?? ''),
     callStatus: String(r.call_status ?? ''),
+    remark: String(r.remark ?? '').trim(),
     createdBy: String(r.created_by ?? ''),
     createdAtThai: r.created_at ? formatShortThaiDateTime(r.created_at) : String(r.created_at_thai ?? ''),
   };
@@ -215,11 +222,13 @@ type Project = {
   closedBy: string;
   closedAt?: string;
   initialBudget: number;
-  paidAmount: number;
+  paidAmount: number; // ยอดจ่าย = total_gross_amount (ยอดโอนดิบ) — คอลัมน์ "ยอดจ่าย" ของเว็บ
+  netReceived: number; // ยอดรับสุทธิ = total_received_amount (หลังหักภาษี/ค่าธรรมเนียม/ค่าปรับ)
   outstanding: number;
-  followState: FollowState;
+  followState: FollowState; // ใช้กำหนดสีป้าย + กล่องกรองบนการ์ดสรุป
+  followLabel: string; // ข้อความที่เว็บโชว์จริง: "ปิดติดตามแล้ว" / ชื่อสถานะติดตามจริง / "ยังไม่เคยติดตาม"
   followDate?: string;
-  payState: PayState;
+  payLabel: string; // ข้อความที่เว็บโชว์จริง: ชื่อสถานะจ่ายเงินของงวดล่าสุด / "ยังไม่มีสถานะจ่ายเงิน"
   payDate?: string;
   note?: string;
   // ค่าดิบสำหรับตัวกรองสถานะแบบเว็บ (กติกาเดียวกับ get_list ?state=)
@@ -227,6 +236,13 @@ type Project = {
   payStatusRaw: string; // latest_pay_status_raw
   paymentStateRaw: string; // payment_state: paid_full / paid_partial / unpaid
   hasToday: boolean; // มีเงินเข้าวันนี้
+};
+
+// ข้อความสำรองของป้ายสถานะติดตาม (เผื่อเซิร์ฟเวอร์ไม่ส่ง latest_follow_status มา)
+const FOLLOW_STATE_LABEL: Record<FollowState, string> = {
+  not_started: 'ยังไม่เคยติดตาม',
+  following: 'กำลังติดตาม',
+  closed: 'ปิดติดตามแล้ว',
 };
 
 function mapProject(raw: any): Project {
@@ -248,11 +264,15 @@ function mapProject(raw: any): Project {
     // field "_thai" ของเซิร์ฟเวอร์ที่เป็นชื่อเดือนเต็ม ("4 สิงหาคม 2569 13:50 น.")
     closedAt: raw.closed_at ? formatShortThaiDateTime(raw.closed_at) : undefined,
     initialBudget: Number(raw.project_budget ?? 0),
-    paidAmount: Number(raw.total_received_amount ?? 0),
+    // 🐛 [แก้บั๊ก] "ยอดจ่าย" ของเว็บคือยอดดิบ (total_gross_amount) ไม่ใช่ยอดสุทธิ — เดิมเอายอดสุทธิมาโชว์
+    //    ในช่องยอดจ่าย (เช่น 1032: งบ 78,890 จ่าย 78,890 แต่แอปโชว์ 78,152.71) ยอดสุทธิแยกเป็นอีกช่องแบบเว็บ
+    paidAmount: Number(raw.total_gross_amount ?? 0),
+    netReceived: Number(raw.total_received_amount ?? 0),
     outstanding: Number(raw.outstanding_amount ?? 0),
     followState,
+    followLabel: String(raw.latest_follow_status ?? '').trim() || FOLLOW_STATE_LABEL[followState],
     followDate: raw.latest_follow_at ? formatShortThaiDateTime(raw.latest_follow_at) : undefined,
-    payState: raw.payment_state === 'paid_full' ? 'paid' : 'none',
+    payLabel: String(raw.latest_pay_status ?? '').trim() || 'ยังไม่มีสถานะจ่ายเงิน',
     payDate: raw.latest_pay_at ? formatShortThaiDateTime(raw.latest_pay_at) : undefined,
     note: raw.display_remark && raw.display_remark !== '-' ? String(raw.display_remark) : undefined,
     followStatusRaw: String(raw.latest_follow_status_raw ?? '').trim(),
@@ -311,13 +331,17 @@ const FOLLOW_BOXES: {
   icon: keyof typeof Ionicons.glyphMap;
   color: string;
   bg: string;
-  match: (p: Project) => boolean;
+  countKey: keyof FollowCounts; // คีย์ใน follow_counts ที่ server นับให้ (get_list)
 }[] = [
-  { value: 'fs:', label: 'ยังไม่เคยติดตาม', icon: 'remove-circle', color: '#64748b', bg: '#f1f5f9', match: (p) => p.followState === 'not_started' },
-  { value: '__following__', label: 'กำลังติดตาม', icon: 'time', color: '#d97706', bg: '#fef3c7', match: (p) => p.followState === 'following' },
-  { value: 'fs:__closed__', label: 'ปิดติดตามแล้ว', icon: 'checkmark-circle', color: '#059669', bg: '#d1fae5', match: (p) => p.followState === 'closed' },
-  { value: 'paid_full', label: 'จ่ายเงินครบแล้ว', icon: 'wallet', color: '#059669', bg: '#d1fae5', match: (p) => p.payState === 'paid' },
+  { value: 'fs:', label: 'ยังไม่เคยติดตาม', icon: 'remove-circle', color: '#64748b', bg: '#f1f5f9', countKey: 'not_started' },
+  { value: '__following__', label: 'กำลังติดตาม', icon: 'time', color: '#d97706', bg: '#fef3c7', countKey: 'following' },
+  { value: 'fs:__closed__', label: 'ปิดติดตามแล้ว', icon: 'checkmark-circle', color: '#059669', bg: '#d1fae5', countKey: 'closed' },
+  { value: 'paid_full', label: 'จ่ายเงินครบแล้ว', icon: 'wallet', color: '#059669', bg: '#d1fae5', countKey: 'paid_full' },
 ];
+
+// ตัวเลขกล่อง "สถานะติดตาม" — server นับจากงานทั้งปีที่ผ่านตัวกรองช่วงวันที่ (ไม่ขึ้นกับสถานะ/บริษัท/คำค้น)
+type FollowCounts = { not_started: number; following: number; closed: number; paid_full: number };
+const EMPTY_FOLLOW_COUNTS: FollowCounts = { not_started: 0, following: 0, closed: 0, paid_full: 0 };
 
 // การ์ดตัวเลข 7 ใบ — สีขอบซ้าย/ตัวเลขตรงกับเว็บ (ฟ้า/ส้ม/แดง/ฟ้าอมเขียว/เขียว/เขียวหัวเป็ด/ม่วง)
 // สีตามกติกาทั้งแอป: เขียว = เสร็จ/เงินเข้า, ส้ม = รอ/ค้าง, แดง = คงค้าง/มีปัญหา, เทา = ข้อมูลทั่วไป
@@ -333,30 +357,37 @@ const SUMMARY_TILES: { key: keyof Summary; label: string; icon: keyof typeof Ion
 
 /* ---------- ป้ายสถานะ ---------- */
 
-function FollowChip({ state }: { state: FollowState }) {
+// สถานะติดตาม — สีตามกลุ่ม (ยังไม่เคยติดตาม / กำลังตาม / ปิดแล้ว) แต่ข้อความเป็นชื่อสถานะจริงแบบเว็บ
+// (accounting_dashboard.php:2145-2156 — เช่น "ยังไม่โทร", "ทำเอกสารไปรับเช็ค" ไม่ใช่ "กำลังติดตาม" เหมาทุกตัว)
+function FollowChip({ item }: { item: Project }) {
   const config = {
-    not_started: { label: 'ยังไม่เคยติดตาม', color: '#93a2b3', bg: '#f6f8fa', border: '#dfe6ee', icon: 'remove-outline' as const },
-    following: { label: 'กำลังติดตาม', color: '#c47f04', bg: '#fff6de', border: '#f2cf74', icon: 'time-outline' as const },
-    closed: { label: 'ปิดติดตามแล้ว', color: '#0e8f60', bg: '#e5f8ee', border: '#a9e2c4', icon: 'checkmark-circle-outline' as const },
-  }[state];
+    not_started: { color: '#93a2b3', bg: '#f6f8fa', border: '#dfe6ee', icon: 'remove-outline' as const },
+    following: { color: '#c47f04', bg: '#fff6de', border: '#f2cf74', icon: 'time-outline' as const },
+    closed: { color: '#0e8f60', bg: '#e5f8ee', border: '#a9e2c4', icon: 'checkmark-circle-outline' as const },
+  }[item.followState];
 
   return (
     <View style={[styles.chip, { backgroundColor: config.bg, borderColor: config.border }]}>
       <Ionicons name={config.icon} size={14} color={config.color} />
-      <Text style={[styles.chipText, { color: config.color }]}>{config.label}</Text>
+      <Text style={[styles.chipText, { color: config.color }]}>{item.followLabel}</Text>
     </View>
   );
 }
 
-function PayChip({ state }: { state: PayState }) {
-  const config = state === 'paid'
-    ? { label: 'จ่ายเงินครบแล้ว (ปิดยอด)', color: '#0e8f60', bg: '#e5f8ee', border: '#a9e2c4', icon: 'checkmark-circle' as const }
-    : { label: 'ยังไม่มีสถานะจ่ายเงิน', color: '#93a2b3', bg: '#f6f8fa', border: '#dfe6ee', icon: 'remove-outline' as const };
+// สถานะจ่ายเงิน = ชื่อสถานะของงวดล่าสุดในกลุ่ม "จ่ายเงิน" แบบเว็บ (accounting_dashboard.php:2164-2174)
+// มีสถานะ = เขียว (ทุกสถานะในกลุ่มนี้คือเงินเข้าแล้ว) / ไม่มี = เทา — ไม่ดูแค่ payment_state='paid_full' แบบเดิม
+// ⚠ แดง = ป้ายบอกว่าจ่ายแล้ว แต่ทั้งงานยังไม่ได้ลงยอดเงินสักงวด (เว็บเตือนแบบเดียวกัน)
+function PayChip({ item }: { item: Project }) {
+  const hasStatus = item.payStatusRaw !== '';
+  const config = hasStatus
+    ? { color: '#0e8f60', bg: '#e5f8ee', border: '#a9e2c4', icon: 'checkmark-circle' as const }
+    : { color: '#93a2b3', bg: '#f6f8fa', border: '#dfe6ee', icon: 'remove-outline' as const };
 
   return (
     <View style={[styles.chip, { backgroundColor: config.bg, borderColor: config.border }]}>
       <Ionicons name={config.icon} size={14} color={config.color} />
-      <Text style={[styles.chipText, { color: config.color }]}>{config.label}</Text>
+      <Text style={[styles.chipText, { color: config.color }]}>{item.payLabel}</Text>
+      {hasStatus && item.paidAmount <= 0 && <Ionicons name="warning" size={13} color="#dc2626" />}
     </View>
   );
 }
@@ -377,14 +408,14 @@ function StatusPair({ item, onViewFollowHistory, onViewPaymentTerms, style }: { 
     <View style={[styles.statusRow, style]}>
       <Pressable onPress={onViewFollowHistory} style={({ pressed }) => [styles.statusCol, pressed && styles.pressed]}>
         <Text style={styles.microLabel}>สถานะติดตาม</Text>
-        <FollowChip state={item.followState} />
+        <FollowChip item={item} />
         {item.followState === 'closed'
           ? <Text style={styles.flagText}>⚑ เก็บเงินครบแล้ว</Text>
           : <DateHint date={item.followDate} />}
       </Pressable>
       <Pressable onPress={onViewPaymentTerms} style={({ pressed }) => [styles.statusCol, pressed && styles.pressed]}>
         <Text style={styles.microLabel}>สถานะจ่ายเงิน</Text>
-        <PayChip state={item.payState} />
+        <PayChip item={item} />
         <DateHint date={item.payDate} />
       </Pressable>
     </View>
@@ -398,6 +429,7 @@ function StatusPair({ item, onViewFollowHistory, onViewPaymentTerms, style }: { 
 function ProjectCard({
   item,
   busy,
+  canRecord,
   onOpen,
   onFollow,
   onRecord,
@@ -406,6 +438,7 @@ function ProjectCard({
 }: {
   item: Project;
   busy: boolean;
+  canRecord: boolean;
   onOpen: () => void;
   onFollow: () => void;
   onRecord: () => void;
@@ -440,30 +473,34 @@ function ProjectCard({
       <View style={styles.cardActionZone}>
         <View style={styles.statusCompactRow}>
           <Pressable onPress={onViewFollowHistory} style={({ pressed }) => [styles.statusCompactCol, pressed && styles.pressed]} accessibilityLabel="ดูประวัติการติดตาม">
-            <FollowChip state={item.followState} />
+            <FollowChip item={item} />
           </Pressable>
           <Pressable onPress={onViewPaymentTerms} style={({ pressed }) => [styles.statusCompactCol, pressed && styles.pressed]} accessibilityLabel="ดูงวดชำระเงิน">
-            <PayChip state={item.payState} />
+            <PayChip item={item} />
           </Pressable>
         </View>
-        <QuickActions busy={busy} onFollow={onFollow} onRecord={onRecord} style={{ marginTop: 8 }} />
+        <QuickActions busy={busy} canRecord={canRecord} onFollow={onFollow} onRecord={onRecord} style={{ marginTop: 8 }} />
       </View>
     </View>
   );
 }
 
 // ปุ่มลัด ติดตาม / ลงบัญชี — 2 ช่องกว้างเท่ากันในแถวเดียว ใช้ทั้งในการ์ดและหน้ารายละเอียด
-function QuickActions({ busy, onFollow, onRecord, style }: { busy: boolean; onFollow: () => void; onRecord: () => void; style?: object }) {
+// "ลงบัญชี" โชว์เฉพาะคนที่มีสิทธิ์ acc_do_accounting — เว็บซ่อนปุ่มนี้เหมือนกัน (accounting_dashboard.php:2299)
+// ไม่งั้นกรอกฟอร์มจนจบแล้วค่อยโดนตีกลับตอนบันทึก
+function QuickActions({ busy, canRecord, onFollow, onRecord, style }: { busy: boolean; canRecord: boolean; onFollow: () => void; onRecord: () => void; style?: object }) {
   return (
     <View style={[styles.quickActionRow, style]}>
       <Pressable onPress={onFollow} disabled={busy} style={({ pressed }) => [styles.quickActionBtn, pressed && styles.pressed, busy && styles.disabled]}>
         <Ionicons name="headset" size={16} color="#4f46e5" />
         <Text style={styles.quickActionBtnText}>ติดตาม</Text>
       </Pressable>
-      <Pressable onPress={onRecord} disabled={busy} style={({ pressed }) => [styles.quickActionBtn, pressed && styles.pressed, busy && styles.disabled]}>
-        {busy ? <ActivityIndicator size="small" color="#4f46e5" /> : <Ionicons name="create" size={16} color="#4f46e5" />}
-        <Text style={styles.quickActionBtnText}>ลงบัญชี</Text>
-      </Pressable>
+      {canRecord && (
+        <Pressable onPress={onRecord} disabled={busy} style={({ pressed }) => [styles.quickActionBtn, pressed && styles.pressed, busy && styles.disabled]}>
+          {busy ? <ActivityIndicator size="small" color="#4f46e5" /> : <Ionicons name="create" size={16} color="#4f46e5" />}
+          <Text style={styles.quickActionBtnText}>ลงบัญชี</Text>
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -473,6 +510,7 @@ function QuickActions({ busy, onFollow, onRecord, style }: { busy: boolean; onFo
 function ProjectDetailBody({
   item,
   busy,
+  canRecord,
   onFollow,
   onRecord,
   onOwnerPress,
@@ -484,6 +522,7 @@ function ProjectDetailBody({
 }: {
   item: Project;
   busy: boolean;
+  canRecord: boolean;
   onFollow: () => void;
   onRecord: () => void;
   onOwnerPress: () => void;
@@ -517,10 +556,12 @@ function ProjectDetailBody({
         <View style={styles.closedBlock}>
           <Text style={styles.microLabel}>ปิดจบโดย</Text>
           <Text style={styles.closedBy}>{item.closedBy}</Text>
-          <Text style={styles.closedAt}>{item.closedAt ?? 'ยังไม่ปิดจบ'}</Text>
+          {/* งานในลิสต์นี้ปิดจบแล้วทุกงาน — ไม่มีวันที่ปิดจบ (ข้อมูลเก่า) โชว์ "-" แบบเว็บ ไม่ใช่ "ยังไม่ปิดจบ" */}
+          <Text style={styles.closedAt}>{item.closedAt ?? '-'}</Text>
         </View>
       </View>
 
+      {/* 4 ช่องเงินชุดเดียวกับคอลัมน์ตารางเว็บ (accounting_dashboard.php:1995-1999) — วาง 2x2 ตัวเลขหลักล้านจะได้ไม่ล้นช่อง */}
       <View style={styles.moneyGrid}>
         <View style={styles.moneyCell}>
           <Text style={styles.microLabel}>งบตั้งต้น</Text>
@@ -529,6 +570,10 @@ function ProjectDetailBody({
         <View style={styles.moneyCell}>
           <Text style={styles.microLabel}>ยอดจ่าย</Text>
           <Text style={styles.moneyValue}>{num(item.paidAmount)}</Text>
+        </View>
+        <View style={styles.moneyCell}>
+          <Text style={styles.microLabel}>ยอดรับสุทธิ</Text>
+          <Text style={styles.moneyValue}>{num(item.netReceived)}</Text>
         </View>
         <View style={styles.moneyCell}>
           <Text style={styles.microLabel}>ค้างชำระ</Text>
@@ -545,7 +590,7 @@ function ProjectDetailBody({
         </Pressable>
       ) : null}
 
-      <QuickActions busy={busy} onFollow={onFollow} onRecord={onRecord} style={{ marginTop: 12 }} />
+      <QuickActions busy={busy} canRecord={canRecord} onFollow={onFollow} onRecord={onRecord} style={{ marginTop: 12 }} />
 
       {/* ข้อมูลสัญญา/ลูกค้า/ค้ำประกัน (get_detail) — โหลดตอนเปิดหน้ารายละเอียด */}
       <View style={styles.inlineDetailBox}>
@@ -714,6 +759,10 @@ function PaymentHistoryModal({
                                 <Text style={[styles.subTablePayBadgeText, { color: payTone.color }]}>{p.callStatus || 'ยังไม่ระบุ'}</Text>
                               </View>
                             </View>
+                            {/* ชื่องวด + หมายเหตุ — เว็บโชว์ทั้งสองช่องในตารางย่อย (accounting_dashboard.php:3061-3064) */}
+                            <View style={styles.kvRow}>
+                              <KV label="ชื่องวด" width="100%" value={p.name || '-'} />
+                            </View>
                             <View style={styles.kvRow}>
                               <KV label="ยอดจ่าย" value={num(p.amount)} />
                               <KV label="ยอดรับสุทธิ" value={num(p.netAmount)} />
@@ -734,6 +783,11 @@ function PaymentHistoryModal({
                                 }
                               />
                             </View>
+                            {!!p.remark && (
+                              <View style={styles.kvRow}>
+                                <KV label="หมายเหตุ" width="100%" value={p.remark} />
+                              </View>
+                            )}
                           </View>
                         );
                       })}
@@ -810,20 +864,22 @@ const STATE_GROUP_LABELS: Record<StateOption['group'], string> = {
   pay: 'สถานะจ่ายเงิน (งวดล่าสุด)',
 };
 
-// กติกาเดียวกับ get_list ?state= ใน accounting_API_mobile.php ('__following__' = กล่อง "กำลังติดตาม" บนการ์ดสรุป)
-function matchState(p: Project, state: string): boolean {
-  if (state === 'all' || state === '') return true;
-  if (state === 'unpaid') return p.paymentStateRaw !== 'paid_full';
-  if (state === 'paid_full') return p.paymentStateRaw === 'paid_full';
-  if (state === 'has_today') return p.hasToday;
-  if (state === '__following__') return p.followState === 'following';
-  if (state.startsWith('cs:')) return p.payStatusRaw === state.slice(3);
-  if (state.startsWith('fs:')) {
-    const want = state.slice(3);
-    if (want === '__closed__') return p.followState === 'closed';
-    return p.followState !== 'closed' && p.followStatusRaw === want;
+// รายการลูกหนี้หน้าละ 30 แถว (เท่าตารางหน้าเว็บอื่น) — เลื่อนถึงท้ายค่อยโหลดหน้าถัดไป
+// เดิมโหลดงานทั้งปีทีเดียว (~1 MB) แล้ววาดการ์ดทุกใบพร้อมกัน มือถือหน่วง/ค้าง
+// ตัวกรองสถานะ/บริษัท/คำค้น/ช่วงวันที่ทั้งหมดส่งให้ get_list กรองฝั่ง server (กติกาชุดเดียวกับเว็บ)
+const LIST_PAGE_SIZE = 30;
+
+// Export ต้องได้ "ทุกแถว" ตามตัวกรอง — ขอทีละ 2000 (เพดานของ API) จนครบ total
+async function fetchAllListRows(params: Record<string, string | number | undefined>) {
+  const rows: any[] = [];
+  for (;;) {
+    const res = await apiMobileGet(ACCOUNTING_API_URL, 'get_list', { ...params, limit: 2000, offset: rows.length });
+    const page: any[] = Array.isArray(res.list) ? res.list : [];
+    rows.push(...page);
+    const total = Number(res.total ?? rows.length);
+    if (page.length === 0 || rows.length >= total) break;
   }
-  return p.paymentStateRaw === state;
+  return rows;
 }
 
 export default function AccountingDashboard({
@@ -835,10 +891,22 @@ export default function AccountingDashboard({
 }: Props) {
   const { user } = useAuth();
   const userId = user?.id;
+  // ใช้กับโมดัลรายละเอียดแบบเต็มจอ — SafeAreaView ภายใน <Modal> บน Android (edge-to-edge)
+  // วัด inset ได้ 0 ทำให้ปุ่มย้อนกลับไปซ้อนใต้แถบสถานะจนเลยขอบจอ จึงอ่านค่าจากหน้าจอหลักแล้ว pad เอง
+  const insets = useSafeAreaInsets();
 
   const [summary, setSummary] = useState<Summary>(EMPTY_SUMMARY);
   const [companies, setCompanies] = useState<CompanyBreakdown[]>([]);
+  // หน้าที่โหลดมาแล้วของรายการตามตัวกรอง (ทีละ 30) — listTotal = จำนวนทั้งหมดตามตัวกรอง, baseTotal = งานทั้งปี
   const [projectList, setProjectList] = useState<Project[]>([]);
+  const [listTotal, setListTotal] = useState(0);
+  const [baseTotal, setBaseTotal] = useState(0);
+  // หน้าที่กำลังดู (เริ่ม 1) แบบแถบแบ่งหน้าของเว็บ — บนจอมีไม่เกิน 30 งาน · เปลี่ยนตัวกรองแล้วกลับหน้า 1
+  const [page, setPage] = useState(1);
+  const [pageLoading, setPageLoading] = useState(false);
+  const [followCountsSrv, setFollowCountsSrv] = useState<FollowCounts>(EMPTY_FOLLOW_COUNTS);
+  // การ์ดสรุปโหลดเสร็จแล้วอย่างน้อย 1 รอบ — ตัวเลขการ์ดไม่ต้องกระพริบเป็น "-" ทุกครั้งที่เปลี่ยนตัวกรองรายการ
+  const [dashLoaded, setDashLoaded] = useState(false);
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
   const [yearPickerVisible, setYearPickerVisible] = useState(false);
   // ตัวเลือกปีในป็อปอัพ — เริ่มด้วยปีปัจจุบัน แล้วแทนด้วยปีที่มีข้อมูลจริงจาก get_master_data
@@ -848,6 +916,8 @@ export default function AccountingDashboard({
   const [offline, setOffline] = useState(false);
   const [busyId, setBusyId] = useState<string | number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  // สิทธิ์ "ลงบัญชีรับชำระ" (acc_do_accounting) จาก get_list — ยังไม่รู้ผล = ซ่อนปุ่มไว้ก่อน
+  const [canDoAccounting, setCanDoAccounting] = useState(false);
 
   // 🌟 modal "ดูข้อมูล" — ดึง get_detail ตอนเปิด modal เท่านั้น (ไม่ฝังกับ get_list)
   const [detailModal, setDetailModal] = useState<{ visible: boolean; project?: Project; loading: boolean; detail?: ProjectDetail }>({
@@ -883,6 +953,8 @@ export default function AccountingDashboard({
   );
 
   const [search, setSearch] = useState('');
+  // คำค้นที่ส่งให้ server จริง — รอพิมพ์หยุด 0.4 วิ ก่อนค่อยโหลดใหม่
+  const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [stateOptions, setStateOptions] = useState<StateOption[]>(STATE_FILTERS_FALLBACK);
   // ตัวกรองทั้งหมด (สถานะ/บริษัท/ช่วงวันที่) อยู่ใน bottom sheet แบบหน้าเอกสาร PO/AX
@@ -895,6 +967,7 @@ export default function AccountingDashboard({
   // 🌟 [เพิ่มใหม่] state ของส่วน "ดูข้อมูลบัญชีแยกตามบริษัท" — ตรงกับ
   // masterCompanyContainer(collapsed)/currentCompanyFilter/toggleCompanyCard ของต้นฉบับ
   const [breakdownExpanded, setBreakdownExpanded] = useState(false);
+  // ตัวกรองบริษัทเก็บเป็น company_id ('all' = ทุกบริษัท) — ส่งให้ get_list กรองฝั่ง server
   const [companyFilter, setCompanyFilter] = useState<string>('all');
   // การ์ดบริษัทที่กางดูตัวเลขอยู่ (ค่าเริ่มต้นพับทุกใบ)
   const [expandedCompanyIds, setExpandedCompanyIds] = useState<Set<string>>(new Set());
@@ -905,41 +978,115 @@ export default function AccountingDashboard({
     return formatShortThaiDate(ymd);
   }, []);
 
-  // get_dashboard — README_accounting.md ข้อ 4.2 (kpi_all + kpi_by_company)
-  const load = useCallback(async (refresh = false) => {
+  // ลำดับรอบโหลดล่าสุด — โหลดซ้อนกัน (เช่น เปลี่ยนตัวกรองระหว่างโหลดเงียบ) ให้ผลของรอบล่าสุดชนะเสมอ
+  const loadSeq = useRef(0);
+  const dashSeq = useRef(0);
+  // รายการที่โหลดอยู่ + พารามิเตอร์ของชุดนี้ — หน้าถัดไป/Export ต้องขอด้วยตัวกรองชุดเดียวกันเป๊ะ
+  const listParamsRef = useRef<Record<string, string | number | undefined>>({});
+  const pageRef = useRef(1);
+  // ScrollView หลัก + ตำแหน่งหัวรายการ — เปลี่ยนหน้าแล้วเลื่อนกลับมาที่งานแรกของหน้า (ไม่เด้งไปบนสุดของการ์ดสรุป)
+  const scrollRef = useRef<ScrollView>(null);
+  const listTopYRef = useRef(0);
+
+  // get_dashboard (README_accounting.md ข้อ 4.2 kpi_all + kpi_by_company) — การ์ดสรุป/แยกตามบริษัท
+  // โหลดใหม่ตอนเปลี่ยนปีหรือสั่งรีเฟรช ไม่ขึ้นกับตัวกรองรายการ
+  const loadDashboard = useCallback(async () => {
     if (!userId) return;
-    refresh ? setRefreshing(true) : setLoading(true);
-    setOffline(false);
+    const seq = ++dashSeq.current;
     try {
-      const [dash, list] = await Promise.all([
-        apiMobileGet(ACCOUNTING_API_URL, 'get_dashboard', { user_id: userId, year: selectedYear }),
-        apiMobileGet(ACCOUNTING_API_URL, 'get_list', {
-          user_id: userId,
-          year: selectedYear,
-          limit: 500,
-          // 🐛 [แก้บั๊ก] เดิมตัวกรองช่วงวันที่มี state/UI ครบแต่ไม่เคยถูกส่งเข้า get_list เลย —
-          // เลือกวันที่แล้วไม่มีผลอะไรกับรายการที่แสดง ทั้งที่ backend รองรับอยู่แล้ว
-          // ชื่อพารามิเตอร์ตรงกับ accounting_dashboard.php ตัวจริง: closed_start/end = ช่วงวันที่
-          // ปิดจบ, status_start/end = ช่วงวันที่กรอกสถานะล่าสุด (ไม่ใช่ "สถานะติดตาม/จ่ายเงิน"
-          // ตามป้ายเดิมของ mockup — ป้ายก็แก้ให้ตรงกับของจริงแล้วด้านล่าง)
-          closed_start: followFrom || undefined,
-          closed_end: followTo || undefined,
-          status_start: payFrom || undefined,
-          status_end: payTo || undefined,
-        }),
-      ]);
+      const dash = await apiMobileGet(ACCOUNTING_API_URL, 'get_dashboard', { user_id: userId, year: selectedYear });
+      if (seq !== dashSeq.current) return;
       setSummary(mapSummary(dash.kpi_all));
       setCompanies(Array.isArray(dash.kpi_by_company) ? dash.kpi_by_company.map(mapCompanyBreakdown) : []);
-      setProjectList(Array.isArray(list.list) ? list.list.map(mapProject) : []);
+      setDashLoaded(true);
     } catch (e) {
-      console.error('accounting_API_mobile load failed', e);
+      if (seq !== dashSeq.current) return;
+      console.error('accounting_API_mobile get_dashboard failed', e);
+      setOffline(true);
+    }
+  }, [userId, selectedYear]);
+
+  // get_list ทีละหน้า (หน้าละ 30 แบบตารางเว็บ) — server กรองสถานะ/บริษัท/คำค้น/ช่วงวันที่ และนับกล่องสถานะติดตามให้
+  // mode: 'initial' = ตัวโหลดเต็มจอ + กลับหน้า 1 (เปลี่ยนตัวกรอง) · 'refresh' = ดึงลงรีเฟรช · 'silent' = โหลดใหม่เงียบ ๆ
+  // (กลับจากหน้าติดตาม/ลงบัญชี) — สองแบบหลังอยู่หน้าเดิม · targetPage = หน้าที่จะไป (จากแถบแบ่งหน้า)
+  const loadList = useCallback(async (mode: 'initial' | 'refresh' | 'silent' = 'initial', targetPage?: number) => {
+    if (!userId) return;
+    const seq = ++loadSeq.current;
+    const pg = targetPage ?? (mode === 'initial' ? 1 : pageRef.current);
+    if (mode === 'initial') setLoading(true);
+    if (mode === 'refresh') setRefreshing(true);
+    setOffline(false);
+    const params = {
+      user_id: userId,
+      year: selectedYear,
+      state: statusFilter !== 'all' ? statusFilter : undefined,
+      company_id: companyFilter !== 'all' ? companyFilter : undefined,
+      search: searchQuery || undefined,
+      // ชื่อพารามิเตอร์ตรงกับ accounting_dashboard.php ตัวจริง: closed_start/end = ช่วงวันที่
+      // ปิดจบ, status_start/end = ช่วงวันที่กรอกสถานะจ่ายเงิน (latest_pay_at แบบเว็บ)
+      closed_start: followFrom || undefined,
+      closed_end: followTo || undefined,
+      status_start: payFrom || undefined,
+      status_end: payTo || undefined,
+    };
+    try {
+      const res = await apiMobileGet(ACCOUNTING_API_URL, 'get_list', { ...params, limit: LIST_PAGE_SIZE, offset: (pg - 1) * LIST_PAGE_SIZE });
+      if (seq !== loadSeq.current) return;
+      const total = Number(res.total ?? 0);
+      // หน้าที่ขอเกินหน้าสุดท้าย (เช่น งานหลุดตัวกรองหลังบันทึกตอนดูหน้าท้าย ๆ) -> ไปหน้าสุดท้ายที่มีจริงแทน
+      const lastPage = pageCount(total, LIST_PAGE_SIZE);
+      if (pg > lastPage && total > 0) {
+        void loadList('silent', lastPage);
+        return;
+      }
+      listParamsRef.current = params;
+      const rows: Project[] = (Array.isArray(res.list) ? res.list : []).map(mapProject);
+      setProjectList(rows);
+      setListTotal(total || rows.length);
+      pageRef.current = pg;
+      setPage(pg);
+      setBaseTotal(Number(res.base_total ?? res.total ?? rows.length));
+      const fc = res.follow_counts ?? {};
+      setFollowCountsSrv({
+        not_started: Number(fc.not_started ?? 0),
+        following: Number(fc.following ?? 0),
+        closed: Number(fc.closed ?? 0),
+        paid_full: Number(fc.paid_full ?? 0),
+      });
+      setCanDoAccounting(Number(res.can_do_accounting ?? 0) === 1);
+    } catch (e) {
+      if (seq !== loadSeq.current) return;
+      console.error('accounting_API_mobile get_list failed', e);
       setOffline(true);
     } finally {
-      refresh ? setRefreshing(false) : setLoading(false);
+      // รอบที่ถูกรอบใหม่แซงไปแล้ว ปล่อยให้รอบใหม่เป็นคนปิดตัวโหลดเอง
+      if (seq === loadSeq.current) {
+        setLoading(false);
+        setRefreshing(false);
+        setPageLoading(false);
+      }
     }
-  }, [userId, selectedYear, followFrom, followTo, payFrom, payTo]);
+  }, [userId, selectedYear, statusFilter, companyFilter, searchQuery, followFrom, followTo, payFrom, payTo]);
 
-  useEffect(() => { void load(); }, [load]);
+  // ทั้งการ์ดสรุปและรายการ — ดึงลงรีเฟรช / กลับจากหน้าติดตาม-ลงบัญชี / แตะเชื่อมต่อใหม่
+  const load = useCallback(async (mode: 'initial' | 'refresh' | 'silent' = 'initial') => {
+    await Promise.all([loadDashboard(), loadList(mode)]);
+  }, [loadDashboard, loadList]);
+
+  useEffect(() => { void loadList(); }, [loadList]);
+  useEffect(() => { void loadDashboard(); }, [loadDashboard]);
+  useEffect(() => {
+    const t = setTimeout(() => setSearchQuery(search.trim()), 400);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  // แถบแบ่งหน้า -> เปลี่ยนหน้า: เลื่อนกลับไปหัวรายการ แล้วโหลดหน้านั้น
+  function goToPage(p: number) {
+    if (p === pageRef.current) return;
+    setPageLoading(true);
+    scrollRef.current?.scrollTo({ y: Math.max(0, listTopYRef.current - 8), animated: true });
+    void loadList('silent', p);
+  }
 
   // get_master_data.users — รายชื่อพนักงานทั้งหมด สำหรับป็อปอัพเลือกผู้รับผิดชอบติดตามหนี้
   useEffect(() => {
@@ -955,7 +1102,8 @@ export default function AccountingDashboard({
             setSelectedYear((cur) => (ys.includes(cur) ? cur : ys[0]));
           }
         }
-        setDebtOwnerOptions(Array.isArray(res.users) ? res.users.map(String) : []);
+        // ชื่อซ้ำได้จากเซิร์ฟเวอร์ — เก็บชื่อละครั้ง ไม่งั้น key={name} ในป๊อปอัพเลือกผู้ติดตามหนี้ซ้ำกันจน React ขึ้น error
+        setDebtOwnerOptions(Array.isArray(res.users) ? Array.from(new Set<string>(res.users.map(String))).filter((n) => n !== '') : []);
         if (Array.isArray(res.state_filters) && res.state_filters.length > 0) {
           setStateOptions(
             res.state_filters.map((o: any) => ({
@@ -975,17 +1123,8 @@ export default function AccountingDashboard({
     return () => clearTimeout(timer);
   }, [toast]);
 
-  const projects = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    return projectList.filter((item) => {
-      const haystack = `${item.jobNo} ${item.company} ${item.customer} ${item.projectName} ${item.owner} ${item.closedBy}`.toLowerCase();
-      const matchesTerm = !term || haystack.includes(term);
-      const matchesStatus = matchState(item, statusFilter);
-      // 🌟 [เพิ่มใหม่] กรองตามบริษัทที่เลือกจากการ์ดใน "ข้อมูลแยกตามบริษัท"
-      const matchesCompany = companyFilter === 'all' || item.company === companyFilter;
-      return matchesTerm && matchesStatus && matchesCompany;
-    });
-  }, [projectList, search, statusFilter, companyFilter]);
+  // server กรองสถานะ/บริษัท/คำค้น/ช่วงวันที่ให้แล้ว (get_list) — รายการที่โหลดมาคือผลลัพธ์ตามตัวกรองโดยตรง
+  const projects = projectList;
 
   const [exporting, setExporting] = useState(false);
 
@@ -993,29 +1132,32 @@ export default function AccountingDashboard({
   // ตารางเดียว (ไม่มี action Export ฝั่งเซิร์ฟเวอร์ และไฟล์ Excel หลายชีท/จัดสีของเว็บหนักเกินไปสำหรับ
   // มือถือ — ใช้แถวที่กรองอยู่ตอนนี้ในแอปเป็นความจริงหนึ่งเดียวเหมือนเว็บ)
   async function handleExportCsv() {
-    if (projects.length === 0) {
+    if (listTotal === 0) {
       setToast('ไม่มีข้อมูลตามตัวกรองให้ export');
       return;
     }
     setExporting(true);
     try {
+      // รายการบนจอเป็นแค่หน้าที่โหลดมาแล้ว — ไฟล์ต้องมีครบทุกแถวตามตัวกรอง จึงขอทั้งชุดใหม่ตอนกด Export
+      const allRows: Project[] = (await fetchAllListRows(listParamsRef.current)).map(mapProject);
+      if (allRows.length === 0) {
+        setToast('ไม่มีข้อมูลตามตัวกรองให้ export');
+        return;
+      }
+      // คอลัมน์เงิน/สถานะชุดเดียวกับตารางเว็บ — ยอดจ่าย (ดิบ) กับ ยอดรับสุทธิ แยกคนละคอลัมน์,
+      // สถานะเป็นชื่อจริงที่หน้าจอโชว์ (ไม่ใช่แค่ "ครบ/ไม่ครบ")
       const headers = [
         'เลขหน้างาน', 'บริษัท', 'ลูกค้า', 'ชื่อโครงการ', 'ผู้รับผิดชอบติดตามหนี้',
-        'งบตั้งต้น', 'ยอดรับสุทธิ', 'ค้างชำระ', 'สถานะติดตาม', 'สถานะจ่ายเงิน',
+        'งบตั้งต้น', 'ยอดจ่าย', 'ยอดรับสุทธิ', 'ค้างชำระ', 'สถานะติดตาม', 'สถานะจ่ายเงิน',
         'วันที่ปิดจบ', 'ผู้ปิดจบ', 'หมายเหตุ',
       ];
-      const followLabel: Record<FollowState, string> = {
-        not_started: 'ยังไม่เคยติดตาม',
-        following: 'กำลังติดตาม',
-        closed: 'ปิดการติดตามแล้ว',
-      };
       const csvEscape = (v: string) => `"${v.replace(/"/g, '""')}"`;
       const lines = [headers.map(csvEscape).join(',')];
-      for (const p of projects) {
+      for (const p of allRows) {
         lines.push([
           p.jobNo, p.company, p.customer, p.projectName, p.owner,
-          String(p.initialBudget), String(p.paidAmount), String(p.outstanding),
-          followLabel[p.followState], p.payState === 'paid' ? 'จ่ายเงินครบแล้ว' : 'ยังไม่ครบ',
+          String(p.initialBudget), String(p.paidAmount), String(p.netReceived), String(p.outstanding),
+          p.followLabel, p.payLabel,
           p.closedAt ?? '', p.closedBy, p.note ?? '',
         ].map((v) => csvEscape(String(v))).join(','));
       }
@@ -1117,11 +1259,11 @@ export default function AccountingDashboard({
   };
 
   const handleRecord = (project: Project) => {
+    // ปุ่มถูกซ่อนไว้แล้วถ้าไม่มีสิทธิ์ acc_do_accounting (QuickActions) — กันซ้ำเผื่อถูกเรียกจากทางอื่น
+    if (!canDoAccounting) return;
     setBusyId(project.id);
     try {
       if (onRecordProject) return onRecordProject(project);
-      // 🌟 [เพิ่มใหม่] ตอนนี้มีสกรีนจริงแล้ว (ProjectAccountingScreen) — mockup นี้ยังไม่ได้ทำ
-      // ระบบสิทธิ์ can_do_accounting ของต้นฉบับ จึงโชว์ปุ่มนี้เสมอ
       setActiveProjectId(project.id);
       setActiveScreen('accounting');
     } finally {
@@ -1152,7 +1294,7 @@ export default function AccountingDashboard({
   if (statusFilter !== 'all') {
     activeFilterChips.push({ key: 'status', label: stateLabel(statusFilter), clear: () => setStatusFilter('all') });
   }
-  if (companyFilter !== 'all') activeFilterChips.push({ key: 'company', label: companyFilter, clear: () => setCompanyFilter('all') });
+  if (companyFilter !== 'all') activeFilterChips.push({ key: 'company', label: companyNameOf(companyFilter), clear: () => setCompanyFilter('all') });
   if (followFrom || followTo) {
     activeFilterChips.push({
       key: 'closed',
@@ -1166,7 +1308,7 @@ export default function AccountingDashboard({
   if (payFrom || payTo) {
     activeFilterChips.push({
       key: 'statusDate',
-      label: `กรอกสถานะ ${payFrom ? formatShortThaiDate(payFrom) : '...'} – ${payTo ? formatShortThaiDate(payTo) : '...'}`,
+      label: `กรอกสถานะจ่ายเงิน ${payFrom ? formatShortThaiDate(payFrom) : '...'} – ${payTo ? formatShortThaiDate(payTo) : '...'}`,
       clear: () => {
         setPayFrom('');
         setPayTo('');
@@ -1174,10 +1316,10 @@ export default function AccountingDashboard({
     });
   }
 
-  // นับจำนวนตามสถานะติดตามจากรายการของปีที่เลือก (ก่อนกรอง) — ใช้แสดงในกล่องสถานะของการ์ดสรุป
-  const followCounts = FOLLOW_BOXES.map((b) => projectList.filter(b.match).length);
+  // จำนวนตามสถานะติดตามของงานทั้งปี (ก่อนกรองสถานะ/บริษัท/คำค้น) — server นับให้ (follow_counts ของ get_list)
+  const followCounts = FOLLOW_BOXES.map((b) => followCountsSrv[b.countKey]);
   // เลือกบริษัทแล้ว -> การ์ดสรุปโชว์ตัวเลขของบริษัทนั้น (kpi_by_company) แบบ filterByCompany() บนเว็บ
-  const shownSummary = companyFilter === 'all' ? summary : companies.find((c) => c.name === companyFilter)?.summary ?? summary;
+  const shownSummary = companyFilter === 'all' ? summary : companies.find((c) => c.id === companyFilter)?.summary ?? summary;
   const detailProject = detailModal.project ? projectList.find((p) => p.id === detailModal.project!.id) ?? detailModal.project : undefined;
 
   // 🌟 [เพิ่มใหม่] ปุ่ม "ดูข้อมูลบัญชีแยกตามบริษัท" — ถ้ามี prop จากภายนอกให้ใช้ตามนั้น (เผื่อ
@@ -1188,10 +1330,15 @@ export default function AccountingDashboard({
     setBreakdownExpanded((v) => !v);
   };
 
-  // ตรงกับ filterByCompany() ของต้นฉบับ — 'all' = ภาพรวมทุกบริษัท
+  // ตรงกับ filterByCompany() ของต้นฉบับ — 'all' = ภาพรวมทุกบริษัท (ค่าอื่น = company_id)
   const handleSelectCompany = (id: string) => {
     setCompanyFilter(id);
   };
+
+  // ชื่อบริษัทของตัวกรอง (เก็บเป็น company_id) — ใช้แค่ state ประกาศเป็น function ให้เรียกได้ทุกจุดของหน้า
+  function companyNameOf(cid: string): string {
+    return companies.find((c) => c.id === cid)?.name || 'บริษัท';
+  }
 
   // ตรงกับ toggleCompanyCard() ของต้นฉบับ — ย่อ/ขยายการ์ดของบริษัทเดียว (ไม่กระทบตัวกรอง)
   const toggleCompanyCardExpand = (id: string) => {
@@ -1203,16 +1350,93 @@ export default function AccountingDashboard({
     });
   };
 
+  // กลับจากหน้าติดตาม/ลงบัญชี -> ข้อมูลอาจเปลี่ยน (บันทึกในหน้านั้น หรือหน้าติดตามที่เปิดต่อจากหน้าลงบัญชี)
+  // โหลดตัวเลข KPI/สถานะใหม่แบบเงียบ ๆ ทุกครั้ง — เดิมแค่สลับหน้ากลับ ตัวเลขเลยค้างค่าก่อนบันทึก
+  const backToDashboardAndRefresh = () => {
+    setActiveScreen('dashboard');
+    void load('silent');
+  };
+
   if (activeScreen === 'followup' && activeProjectId !== null) {
-    return <ProjectFollowupScreen id={String(activeProjectId)} onBack={() => setActiveScreen('dashboard')} onSaved={() => setActiveScreen('dashboard')} />;
+    return <ProjectFollowupScreen id={String(activeProjectId)} onBack={backToDashboardAndRefresh} onSaved={backToDashboardAndRefresh} />;
   }
   if (activeScreen === 'accounting' && activeProjectId !== null) {
-    return <ProjectAccountingScreen id={String(activeProjectId)} onBack={() => setActiveScreen('dashboard')} onSaved={() => setActiveScreen('dashboard')} />;
+    return (
+      <ProjectAccountingScreen
+        id={String(activeProjectId)}
+        onBack={backToDashboardAndRefresh}
+        onSaved={backToDashboardAndRefresh}
+        // ปุ่ม "ไปหน้าติดตามหนี้" -> สลับไปหน้าติดตามในหน้านี้เอง (ถ้า push route ออกไป หน้านี้จะถูกรีเซ็ตตอน blur
+        // แล้วกดกลับไปโผล่เมนูแรกของ drawer) — เว็บเองก็พากลับหน้าลูกหนี้หลังบันทึกติดตาม
+        onOpenFollowup={(pid) => {
+          setActiveProjectId(pid);
+          setActiveScreen('followup');
+        }}
+      />
+    );
+  }
+
+  // ป๊อปอัพประวัติติดตาม/จ่ายเงิน + เลือกผู้ติดตามหนี้ เปิดได้ทั้งจากการ์ดในลิสต์และจากโมดัลรายละเอียด — render ที่เดียวต่อครั้ง:
+  // ซ้อนในโมดัลรายละเอียดถ้าเปิดอยู่ (เงื่อนไขเดียวกับ visible ของโมดัลนั้น) ไม่งั้นที่ root
+  const popupsInDetail = detailModal.visible && !!detailProject;
+  function renderDetailPopups() {
+    return (
+      <>
+        <PaymentHistoryModal
+          visible={paymentModal.visible}
+          projectName={paymentModal.project?.projectName}
+          mode={paymentModal.mode}
+          loading={paymentModal.loading}
+          items={paymentModal.items}
+          follows={paymentModal.follows}
+          onClose={() => setPaymentModal({ visible: false, mode: 'both', loading: false, items: [], follows: [] })}
+        />
+
+        {/* Modal: เลือกผู้รับผิดชอบติดตามหนี้ — รายชื่อพนักงานทั้งหมด + ค้นหาได้ เหมือน project_dashboard.tsx */}
+        <Modal visible={debtModal.visible} transparent animationType="fade" onRequestClose={() => setDebtModal({ visible: false, search: '', saving: false })}>
+          <Pressable style={styles.pickerModalOverlay} onPress={() => setDebtModal({ visible: false, search: '', saving: false })}>
+            <Pressable style={styles.pickerModalSheet} onPress={() => {}}>
+              <Text style={styles.pickerModalTitle}>เลือกผู้รับผิดชอบติดตามหนี้</Text>
+              <Text style={{ fontSize: 11.5, color: '#8b98a8', marginBottom: 8 }} numberOfLines={1}>
+                {debtModal.project?.projectName}
+              </Text>
+              <View style={styles.debtSearchBox}>
+                <Ionicons name="search" size={14} color="#94a3b8" />
+                <TextInput
+                  style={styles.debtSearchInput}
+                  placeholder="ค้นหาชื่อผู้ติดตามหนี้..."
+                  placeholderTextColor="#94a3b8"
+                  value={debtModal.search}
+                  onChangeText={(v) => setDebtModal((s) => ({ ...s, search: v }))}
+                />
+              </View>
+              {debtModal.saving ? (
+                <ActivityIndicator color="#4f46e5" style={{ paddingVertical: 20 }} />
+              ) : (
+                <ScrollView style={{ maxHeight: 380 }}>
+                  {debtOwnerOptions
+                    .filter((name) => name.toLowerCase().includes(debtModal.search.trim().toLowerCase()))
+                    .map((name) => (
+                      <Pressable key={name} style={[styles.pickerModalOption, { justifyContent: 'flex-start', gap: 8 }]} onPress={() => assignDebtOwner(name)}>
+                        <Ionicons name="person-circle-outline" size={16} color="#4f46e5" />
+                        <Text style={styles.pickerModalOptionText}>{name}</Text>
+                      </Pressable>
+                    ))}
+                </ScrollView>
+              )}
+              <Pressable style={styles.pickerModalCloseBtn} onPress={() => setDebtModal({ visible: false, search: '', saving: false })}>
+                <Text style={styles.pickerModalCloseBtnText}>ปิด</Text>
+              </Pressable>
+            </Pressable>
+          </Pressable>
+        </Modal>
+      </>
+    );
   }
 
   return (
     <SafeAreaView style={styles.safe}>
-      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
+      <StatusBar barStyle="light-content" />
 
       {/* แถบค้นหา + ตัวกรอง + Export — วางนอก ScrollView จึงติดค้างด้านบนเสมอ (แบบหน้าเอกสาร PO/AX)
           หัวข้อ "แดชบอร์ดบัญชีลูกหนี้" เดิมซ้ำกับแถบหัวของ drawer จึงตัดออก ปุ่มย้อนกลับโชว์เฉพาะตอนเปิดจากหน้าโครงการ */}
@@ -1264,9 +1488,10 @@ export default function AccountingDashboard({
       </View>
 
       <ScrollView
+        ref={scrollRef}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.content}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor="#4f46e5" />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load('refresh')} tintColor="#4f46e5" />}
       >
         {offline ? (
           <Pressable onPress={() => load()} style={styles.offline}>
@@ -1284,7 +1509,7 @@ export default function AccountingDashboard({
               <Text style={styles.brandText}>TJC</Text>
             </View>
             <Text style={styles.summaryTitle} numberOfLines={2}>
-              {companyFilter === 'all' ? 'ภาพรวมลูกหนี้ทุกบริษัท (รวมทั้งหมด)' : `ภาพรวมลูกหนี้ ${companyFilter}`}
+              {companyFilter === 'all' ? 'ภาพรวมลูกหนี้ทุกบริษัท (รวมทั้งหมด)' : `ภาพรวมลูกหนี้ ${companyNameOf(companyFilter)}`}
             </Text>
             <Pressable style={styles.summaryYearChip} onPress={() => setYearPickerVisible(true)}>
               <Text style={styles.summaryYearChipText}>ค.ศ. {selectedYear}</Text>
@@ -1301,7 +1526,7 @@ export default function AccountingDashboard({
                   </Text>
                 </View>
                 <Text style={[styles.tileValue, { color: t.color }]} numberOfLines={1}>
-                  {loading ? '-' : t.unit ? String(shownSummary[t.key]) : num(shownSummary[t.key])}
+                  {!dashLoaded ? '-' : t.unit ? String(shownSummary[t.key]) : num(shownSummary[t.key])}
                   {!!t.unit && <Text style={styles.tileUnit}> {t.unit}</Text>}
                 </Text>
               </View>
@@ -1313,9 +1538,9 @@ export default function AccountingDashboard({
             <Text style={styles.wipLabel} numberOfLines={2}>
               งานระหว่างทำ (WIP) <Text style={styles.wipLight}>ยังไม่ปิดจบ</Text>
             </Text>
-            <Text style={styles.wipJobs}>{loading ? '-' : shownSummary.wipJobs} งาน</Text>
+            <Text style={styles.wipJobs}>{!dashLoaded ? '-' : shownSummary.wipJobs} งาน</Text>
             <Text style={styles.wipDivider}>|</Text>
-            <Text style={styles.wipValue}>{loading ? '-' : num(shownSummary.wipAmount)}</Text>
+            <Text style={styles.wipValue}>{!dashLoaded ? '-' : num(shownSummary.wipAmount)}</Text>
           </View>
 
           <Text style={styles.followTitle}>สถานะติดตาม  <Ionicons name="funnel-outline" size={10} color="#94a3b8" /> แตะเพื่อกรอง</Text>
@@ -1350,13 +1575,13 @@ export default function AccountingDashboard({
         {breakdownExpanded && (
           <View style={styles.companyList}>
             {companies.map((c) => {
-              const isActive = companyFilter === c.name;
+              const isActive = companyFilter === c.id;
               const isExpanded = expandedCompanyIds.has(c.id);
               const cs = c.summary;
               return (
                 <View key={c.id} style={[styles.companyCard, isActive && styles.companyCardActive]}>
                   <View style={styles.companyCardHead}>
-                    <Pressable style={styles.companyCardInfo} onPress={() => handleSelectCompany(isActive ? 'all' : c.name)}>
+                    <Pressable style={styles.companyCardInfo} onPress={() => handleSelectCompany(isActive ? 'all' : c.id)}>
                       <View style={styles.companyBadge}>
                         <Ionicons name="business" size={18} color="#94a3b8" />
                       </View>
@@ -1392,12 +1617,13 @@ export default function AccountingDashboard({
           </View>
         )}
 
-        <View style={styles.resultRow}>
+        <View style={styles.resultRow} onLayout={(e) => { listTopYRef.current = e.nativeEvent.layout.y; }}>
           <Text style={styles.resultText}>
-            {loading ? 'กำลังโหลด...' : `${projects.length} โครงการ`}
-            {!loading && projects.length !== projectList.length ? ` จาก ${projectList.length}` : ''}
+            {loading ? 'กำลังโหลด...' : `${listTotal} โครงการ`}
+            {!loading && listTotal !== baseTotal ? ` จาก ${baseTotal}` : ''}
+            {!loading && listTotal > LIST_PAGE_SIZE ? ` · หน้า ${page}/${pageCount(listTotal, LIST_PAGE_SIZE)}` : ''}
           </Text>
-          <Pressable onPress={() => load(true)} hitSlop={8} style={styles.resultRefresh}>
+          <Pressable onPress={() => load('refresh')} hitSlop={8} style={styles.resultRefresh}>
             <Ionicons name="sync" size={14} color="#4f46e5" />
             <Text style={styles.resultRefreshText}>รีเฟรช</Text>
           </Pressable>
@@ -1420,6 +1646,7 @@ export default function AccountingDashboard({
               key={item.id}
               item={item}
               busy={busyId === item.id}
+              canRecord={canDoAccounting}
               onOpen={() => handleView(item)}
               onFollow={() => handleFollow(item)}
               onRecord={() => handleRecord(item)}
@@ -1428,6 +1655,8 @@ export default function AccountingDashboard({
             />
           ))
         )}
+        {/* แบ่งหน้าแบบตารางเว็บ หน้าละ 30 — บนจอมีไม่เกิน 1 หน้าเสมอ (เดิมเลื่อนแล้วต่อท้ายสะสมเป็นร้อยรายการ) */}
+        {!loading && <ListPager page={page} pageSize={LIST_PAGE_SIZE} total={listTotal} loading={pageLoading} unit="โครงการ" onChange={goToPage} />}
       </ScrollView>
 
       {toast ? (
@@ -1492,7 +1721,7 @@ export default function AccountingDashboard({
                   <View style={styles.sheetChipWrap}>
                     <SheetOption label="ทุกบริษัท" active={companyFilter === 'all'} onPress={() => setCompanyFilter('all')} />
                     {companies.map((c) => (
-                      <SheetOption key={c.id} label={c.name} active={companyFilter === c.name} onPress={() => setCompanyFilter(c.name)} />
+                      <SheetOption key={c.id} label={c.name} active={companyFilter === c.id} onPress={() => setCompanyFilter(c.id)} />
                     ))}
                   </View>
                 </View>
@@ -1511,7 +1740,7 @@ export default function AccountingDashboard({
                   <DateField value={followFrom} onChange={setFollowFrom} placeholder="ตั้งแต่" style={{ flex: 1 }} />
                   <DateField value={followTo} onChange={setFollowTo} placeholder="ถึง" style={{ flex: 1 }} />
                 </View>
-                <Text style={[styles.sheetDateLabel, { marginTop: 10 }]}>วันที่กรอกสถานะล่าสุด</Text>
+                <Text style={[styles.sheetDateLabel, { marginTop: 10 }]}>วันที่กรอกสถานะจ่ายเงิน</Text>
                 <View style={styles.filterInputs}>
                   <DateField value={payFrom} onChange={setPayFrom} placeholder="ตั้งแต่" style={{ flex: 1 }} />
                   <DateField value={payTo} onChange={setPayTo} placeholder="ถึง" style={{ flex: 1 }} />
@@ -1530,16 +1759,17 @@ export default function AccountingDashboard({
         </Pressable>
       </Modal>
 
-      {/* หน้ารายละเอียดเต็มจอ — render ก่อนโมดัลประวัติ/เลือกผู้ติดตามหนี้ เพื่อให้โมดัลเหล่านั้นซ้อนอยู่ด้านบนบน Android */}
+      {/* หน้ารายละเอียดเต็มจอ — ระหว่างเปิดอยู่ ป๊อปอัพประวัติ/เลือกผู้ติดตามหนี้ไป render ซ้อนข้างในแทน (popupsInDetail) */}
       <Modal
         visible={detailModal.visible && !!detailProject}
         animationType="slide"
+        statusBarTranslucent
+        navigationBarTranslucent
         onRequestClose={() => setDetailModal({ visible: false, loading: false })}
       >
-        {/* iOS: Modal เป็นหน้าต่างแยก SafeAreaProvider ของแอปครอบไม่ถึง -> SafeAreaView ได้ระยะขอบ 0
-            หัวหน้า/ปุ่มกลับไปอยู่ใต้ notch กดไม่ได้ จึงต้องมี provider ของตัวเองใน Modal */}
-        <SafeAreaProvider>
-        <SafeAreaView style={styles.safe}>
+        <View style={[styles.safe, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+          {/* โมดัลเต็มจอหัวขาว: ไอคอนแถบสถานะสีเข้มตอนเปิด (ปิดแล้วกลับเป็นสีขาวของแถบหัวน้ำเงิน) */}
+          <StatusBar barStyle="dark-content" />
           <View style={styles.detailHeaderBar}>
             <Pressable onPress={() => setDetailModal({ visible: false, loading: false })} hitSlop={8} style={styles.detailHeaderBack}>
               <Ionicons name="chevron-back" size={22} color="#0f172a" />
@@ -1551,6 +1781,7 @@ export default function AccountingDashboard({
               <ProjectDetailBody
                 item={detailProject}
                 busy={busyId === detailProject.id}
+                canRecord={canDoAccounting}
                 onFollow={() => {
                   setDetailModal({ visible: false, loading: false });
                   handleFollow(detailProject);
@@ -1568,19 +1799,14 @@ export default function AccountingDashboard({
               />
             </ScrollView>
           )}
-        </SafeAreaView>
-        </SafeAreaProvider>
+
+          {/* ป๊อปอัพที่เปิดจากหน้านี้ (ประวัติติดตาม/จ่ายเงิน, เลือกผู้ติดตามหนี้) ต้องซ้อนอยู่ "ใน" โมดัลนี้ — วางเป็นพี่น้องที่ root
+              แล้วโมดัลรายละเอียดทับไว้ ต้องปิดหน้านี้ก่อนถึงจะเห็น */}
+          {popupsInDetail && renderDetailPopups()}
+        </View>
       </Modal>
 
-      <PaymentHistoryModal
-        visible={paymentModal.visible}
-        projectName={paymentModal.project?.projectName}
-        mode={paymentModal.mode}
-        loading={paymentModal.loading}
-        items={paymentModal.items}
-        follows={paymentModal.follows}
-        onClose={() => setPaymentModal({ visible: false, mode: 'both', loading: false, items: [], follows: [] })}
-      />
+      {!popupsInDetail && renderDetailPopups()}
 
       {/* Modal: เลือกปี — กดปุ่มปีแล้วมีลิสต์ให้เลือกตรงๆ เหมือนดรอปดาวน์บนเว็บ แทนที่จะกดแล้วปีลดลงทีละ 1 */}
       <Modal visible={yearPickerVisible} transparent animationType="fade" onRequestClose={() => setYearPickerVisible(false)}>
@@ -1609,45 +1835,6 @@ export default function AccountingDashboard({
               <Text style={styles.pickerModalCloseBtnText}>ปิด</Text>
             </Pressable>
           </View>
-        </Pressable>
-      </Modal>
-
-      {/* Modal: เลือกผู้รับผิดชอบติดตามหนี้ — รายชื่อพนักงานทั้งหมด + ค้นหาได้ เหมือน project_dashboard.tsx */}
-      <Modal visible={debtModal.visible} transparent animationType="fade" onRequestClose={() => setDebtModal({ visible: false, search: '', saving: false })}>
-        <Pressable style={styles.pickerModalOverlay} onPress={() => setDebtModal({ visible: false, search: '', saving: false })}>
-          <Pressable style={styles.pickerModalSheet} onPress={() => {}}>
-            <Text style={styles.pickerModalTitle}>เลือกผู้รับผิดชอบติดตามหนี้</Text>
-            <Text style={{ fontSize: 11.5, color: '#8b98a8', marginBottom: 8 }} numberOfLines={1}>
-              {debtModal.project?.projectName}
-            </Text>
-            <View style={styles.debtSearchBox}>
-              <Ionicons name="search" size={14} color="#94a3b8" />
-              <TextInput
-                style={styles.debtSearchInput}
-                placeholder="ค้นหาชื่อผู้ติดตามหนี้..."
-                placeholderTextColor="#94a3b8"
-                value={debtModal.search}
-                onChangeText={(v) => setDebtModal((s) => ({ ...s, search: v }))}
-              />
-            </View>
-            {debtModal.saving ? (
-              <ActivityIndicator color="#4f46e5" style={{ paddingVertical: 20 }} />
-            ) : (
-              <ScrollView style={{ maxHeight: 380 }}>
-                {debtOwnerOptions
-                  .filter((name) => name.toLowerCase().includes(debtModal.search.trim().toLowerCase()))
-                  .map((name) => (
-                    <Pressable key={name} style={[styles.pickerModalOption, { justifyContent: 'flex-start', gap: 8 }]} onPress={() => assignDebtOwner(name)}>
-                      <Ionicons name="person-circle-outline" size={16} color="#4f46e5" />
-                      <Text style={styles.pickerModalOptionText}>{name}</Text>
-                    </Pressable>
-                  ))}
-              </ScrollView>
-            )}
-            <Pressable style={styles.pickerModalCloseBtn} onPress={() => setDebtModal({ visible: false, search: '', saving: false })}>
-              <Text style={styles.pickerModalCloseBtnText}>ปิด</Text>
-            </Pressable>
-          </Pressable>
         </Pressable>
       </Modal>
     </SafeAreaView>
@@ -1834,8 +2021,8 @@ const styles = StyleSheet.create({
   closedBy: { color: '#33475d', fontSize: 11.5, fontWeight: '900', marginTop: 2 },
   closedAt: { color: '#8b98a8', fontSize: 10, marginTop: 1 },
 
-  moneyGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingTop: 12 },
-  moneyCell: { width: '25%' },
+  moneyGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingTop: 12, rowGap: 10 },
+  moneyCell: { width: '50%' },
   moneyValue: { color: '#1b2f45', fontSize: 13.5, fontWeight: '900', marginTop: 3 },
   moneyPositive: { color: '#0e8f60' },
   moneyDanger: { color: '#e8443f' },
@@ -1927,9 +2114,11 @@ const styles = StyleSheet.create({
 
 /* API ที่หน้านี้เรียกจริง — accounting_API_mobile.php (README_accounting.md), ผ่าน API_MODULES ใน
  * constants/config.ts และ apiMobileGet จาก app/service/api_mobile.ts:
- * GET get_dashboard -> kpi_all + kpi_by_company (การ์ดสรุป)
- * GET get_list       -> รายการโครงการ (การ์ดลูกหนี้)
- * GET get_detail      -> รายละเอียดโครงการเดียว ดึงตอนเปิด modal "ดูข้อมูล" เท่านั้น
+ * GET get_dashboard     -> kpi_all + kpi_by_company (การ์ดสรุป)
+ * GET get_list          -> รายการโครงการ (การ์ดลูกหนี้) วนขอจนครบ total + ธง can_do_accounting
+ * GET get_detail        -> รายละเอียดโครงการเดียว ดึงตอนเปิด modal "ดูข้อมูล" เท่านั้น
+ * GET get_payment_items -> งวดชำระ + ประวัติการติดตาม (ป็อปอัพจากป้ายสถานะ/หมายเหตุ)
+ * POST save_debt_owner  -> เปลี่ยนผู้รับผิดชอบติดตามหนี้
  * ไม่มี action mark_paid ใน API จริง จึงตัดปุ่มนั้นออก (ดูคอมเมนต์หัวไฟล์) — ส่วน Export ทำเป็น
  * CSV ตารางเดียวฝั่ง client ล้วน (ไม่มี action export ฝั่งเซิร์ฟเวอร์เช่นกัน) จากแถวที่กรองอยู่ตอนนี้
  * ในแอป (handleExportCsv) เทียบเท่าเจตนาของปุ่ม "Export ตามตัวกรอง" บนเว็บ แต่ตัดรูปแบบไฟล์ Excel

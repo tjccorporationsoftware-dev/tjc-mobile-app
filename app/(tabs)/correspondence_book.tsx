@@ -4,12 +4,11 @@
 
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import DateTimePicker from "@react-native-community/datetimepicker";
 import axios from "axios";
 import { useFocusEffect } from "expo-router";
 // 🌟 รูปแบบวันที่สั้น "d/m/yy" มาตรฐานเดียวกันทั้งแอป (แทน book_date_thai แบบเต็ม
 // "5 กันยายน 2569" ของเซิร์ฟเวอร์ และแทนการแสดง book_date/doc_date ดิบ YYYY-MM-DD ตรงๆ)
-import { formatShortThaiDate } from "../../components/DateTimeField";
+import { CalendarPickerModal, formatShortThaiDate } from "../../components/DateTimeField";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -792,16 +791,15 @@ export default function CorrespondenceBook() {
       </TouchableOpacity>
 
       {showListDate && (
-        <DateTimePicker
-          value={filterDate ? new Date(filterDate) : new Date()}
-          mode="date"
-          onValueChange={(e, d) => {
+        <CalendarPickerModal
+          value={filterDate ? new Date(filterDate) : null}
+          onChange={(d) => {
             setShowListDate(false);
             const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
             setFilterDate(iso);
             runFetch({ date: iso });
           }}
-          onDismiss={() => setShowListDate(false)}
+          onClose={() => setShowListDate(false)}
         />
       )}
 
@@ -1133,27 +1131,25 @@ export default function CorrespondenceBook() {
         </View>
 
         {showBookDate && (
-          <DateTimePicker
-            value={form.book_date ? new Date(form.book_date) : new Date()}
-            mode="date"
-            onValueChange={(e, d) => {
+          <CalendarPickerModal
+            value={form.book_date ? new Date(form.book_date) : null}
+            onChange={(d) => {
               setShowBookDate(false);
               const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
               setForm((f) => ({ ...f, book_date: iso }));
             }}
-            onDismiss={() => setShowBookDate(false)}
+            onClose={() => setShowBookDate(false)}
           />
         )}
         {showDocDate && (
-          <DateTimePicker
-            value={form.doc_date ? new Date(form.doc_date) : new Date()}
-            mode="date"
-            onValueChange={(e, d) => {
+          <CalendarPickerModal
+            value={form.doc_date ? new Date(form.doc_date) : null}
+            onChange={(d) => {
               setShowDocDate(false);
               const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
               setForm((f) => ({ ...f, doc_date: iso }));
             }}
-            onDismiss={() => setShowDocDate(false)}
+            onClose={() => setShowDocDate(false)}
           />
         )}
       </Modal>

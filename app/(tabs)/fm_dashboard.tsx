@@ -1,5 +1,4 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import DateTimePicker from "@react-native-community/datetimepicker";
 import axios from "axios";
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -17,7 +16,7 @@ import {
 } from "react-native";
 
 // Config
-import { formatShortThaiDate, formatShortThaiDateTime } from "../../components/DateTimeField";
+import { CalendarPickerModal, formatShortThaiDate, formatShortThaiDateTime } from "../../components/DateTimeField";
 import { API_BASE, IMG_BASE_URL } from "../../constants/config";
 import { useAuth } from "../_layout";
 
@@ -1167,14 +1166,13 @@ export default function FmDashboard() {
       </Modal>
 
       {showDatePicker && (
-        <DateTimePicker
+        <CalendarPickerModal
           value={date}
-          mode="date"
-          onValueChange={(e, d) => {
+          onChange={(d) => {
             setShowDatePicker(false);
             setDate(d);
           }}
-          onDismiss={() => setShowDatePicker(false)}
+          onClose={() => setShowDatePicker(false)}
         />
       )}
     </View>

@@ -22,7 +22,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { API_BASE, IMG_BASE_URL } from "../../constants/config";
 // 🌟 รูปแบบวันที่สั้น "d/m/yy" มาตรฐานเดียวกันทั้งแอป (แทน toLocaleDateString("th-TH") ที่โชว์ปี ค.ศ. 4 หลัก + ชื่อเดือนย่อ)
-import { formatShortThaiDate } from "../../components/DateTimeField";
+import { CalendarPickerModal, formatShortThaiDate } from "../../components/DateTimeField";
 import { useAuth } from "../_layout";
 
 const ShopLogo = ({ uri }: { uri: string | null }) => {
@@ -59,20 +59,6 @@ const ShopLogo = ({ uri }: { uri: string | null }) => {
 };
 
 const ACTIVE_COLOR = "#6366f1"; // สีธีม Marketing
-const TH_MONTHS_FULL = [
-  "มกราคม",
-  "กุมภาพันธ์",
-  "มีนาคม",
-  "เมษายน",
-  "พฤษภาคม",
-  "มิถุนายน",
-  "กรกฎาคม",
-  "สิงหาคม",
-  "กันยายน",
-  "ตุลาคม",
-  "พฤศจิกายน",
-  "ธันวาคม",
-];
 
 export default function HistoryMarketing() {
   const router = useRouter();
@@ -92,8 +78,6 @@ export default function HistoryMarketing() {
   // Date Picker UI
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [dateMode, setDateMode] = useState<"start" | "end">("start");
-  const [pickerDate, setPickerDate] = useState(new Date());
-  const [pickerView, setPickerView] = useState<"day" | "month" | "year">("day");
 
   // Modal Detail
   const [modalVisible, setModalVisible] = useState(false);
@@ -634,61 +618,17 @@ export default function HistoryMarketing() {
     </Animated.View>
   );
 
-  // --- Date Picker Components ---
+  // --- Date Picker (ปฏิทินแบบหน้า ManagerSales — CalendarPickerModal ตัวกลาง) ---
   const openCustomDatePicker = (mode: "start" | "end") => {
     setDateMode(mode);
-    setPickerDate((mode === "start" ? startDate : endDate) || new Date());
-    setPickerView("day");
     setShowDatePicker(true);
   };
 
-  const handleDateSelect = (day: number) => {
-    const newDate = new Date(
-      pickerDate.getFullYear(),
-      pickerDate.getMonth(),
-      day,
-    );
+  // เก็บเป็นวันล้วน (เที่ยงคืน) เหมือนเดิม — ปฏิทินปิดตัวเองหลังเลือก
+  const handleDateSelect = (d: Date) => {
+    const newDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
     if (dateMode === "start") setStartDate(newDate);
     else setEndDate(newDate);
-    setShowDatePicker(false);
-  };
-
-  const changeMonth = (offset: number) => {
-    setPickerDate(
-      new Date(pickerDate.getFullYear(), pickerDate.getMonth() + offset, 1),
-    );
-  };
-
-  const renderCalendar = () => {
-    const year = pickerDate.getFullYear();
-    const month = pickerDate.getMonth();
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    const firstDay = new Date(year, month, 1).getDay();
-    const days = [];
-    for (let i = 0; i < firstDay; i++)
-      days.push(<View key={`empty-${i}`} style={styles.calDayEmpty} />);
-    for (let i = 1; i <= daysInMonth; i++) {
-      const currentCheck = dateMode === "start" ? startDate : endDate;
-      const isSelected =
-        currentCheck &&
-        currentCheck.getDate() === i &&
-        currentCheck.getMonth() === month &&
-        currentCheck.getFullYear() === year;
-      days.push(
-        <TouchableOpacity
-          key={i}
-          onPress={() => handleDateSelect(i)}
-          style={[styles.calDay, isSelected && styles.calDaySelected]}
-        >
-          <Text
-            style={[styles.calDayText, isSelected && styles.calDayTextSelected]}
-          >
-            {i}
-          </Text>
-        </TouchableOpacity>,
-      );
-    }
-    return <View style={styles.calGrid}>{days}</View>;
   };
 
   return (
@@ -1003,33 +943,13 @@ export default function HistoryMarketing() {
         </View>
       </ScrollView>
 
-      {/* Date Picker Modal */}
+      {/* ปฏิทินเลือกวันที่ — แบบหน้า ManagerSales (CalendarPickerModal ตัวกลาง) */}
       {showDatePicker && (
-        <Modal transparent animationType="fade">
-          <View style={styles.modalOverlay}>
-            <View style={styles.datePickerContent}>
-              <View style={styles.calHeader}>
-                <TouchableOpacity onPress={() => changeMonth(-1)}>
-                  <Ionicons name="chevron-back" size={24} color="#fff" />
-                </TouchableOpacity>
-                <Text style={styles.calTitle}>
-                  {TH_MONTHS_FULL[pickerDate.getMonth()]}{" "}
-                  {pickerDate.getFullYear()}
-                </Text>
-                <TouchableOpacity onPress={() => changeMonth(1)}>
-                  <Ionicons name="chevron-forward" size={24} color="#fff" />
-                </TouchableOpacity>
-              </View>
-              <View style={{ padding: 15 }}>{renderCalendar()}</View>
-              <TouchableOpacity
-                onPress={() => setShowDatePicker(false)}
-                style={styles.closeBtn}
-              >
-                <Text style={{ color: "#666" }}>ปิด</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </Modal>
+        <CalendarPickerModal
+          value={dateMode === "start" ? startDate : endDate}
+          onChange={handleDateSelect}
+          onClose={() => setShowDatePicker(false)}
+        />
       )}
 
       {/* Detail Modal */}
@@ -1270,39 +1190,6 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     backgroundColor: "rgba(0,0,0,0.5)",
-  },
-  datePickerContent: {
-    backgroundColor: "white",
-    margin: 20,
-    borderRadius: 15,
-    overflow: "hidden",
-    width: 320,
-    alignSelf: "center",
-  },
-  calHeader: {
-    backgroundColor: ACTIVE_COLOR,
-    padding: 15,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  calTitle: { color: "#fff", fontSize: 16, fontWeight: "bold" },
-  calGrid: { flexDirection: "row", flexWrap: "wrap" },
-  calDay: {
-    width: "14.28%",
-    height: 40,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  calDayText: { color: "#333" },
-  calDaySelected: { backgroundColor: ACTIVE_COLOR, borderRadius: 20 },
-  calDayTextSelected: { color: "#fff", fontWeight: "bold" },
-  calDayEmpty: { width: "14.28%", height: 40 },
-  closeBtn: {
-    padding: 15,
-    alignItems: "center",
-    borderTopWidth: 1,
-    borderColor: "#eee",
   },
 
   // Detail Modal

@@ -650,7 +650,7 @@ export default function CostCheckScreen({ id, onBack }: CostCheckScreenProps) {
   if (!projectId) {
     return (
       <SafeAreaView style={styles.safe}>
-        <StatusBar barStyle="dark-content" backgroundColor="#eef2f6" />
+        <StatusBar barStyle="light-content" />
         <View style={styles.pickerWrap}>
           <View style={styles.pickerCard}>
             <Ionicons name="calculator-outline" size={30} color="#0e9fb4" />
@@ -687,7 +687,7 @@ export default function CostCheckScreen({ id, onBack }: CostCheckScreenProps) {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <StatusBar barStyle="dark-content" backgroundColor="#eef2f6" />
+      <StatusBar barStyle="light-content" />
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.content}
