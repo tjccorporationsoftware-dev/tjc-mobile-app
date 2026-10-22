@@ -40,6 +40,7 @@ import {
 import { Calendar, LocaleConfig } from "react-native-calendars";
 
 import {
+  CalendarPickerModal,
   formatShortThaiDate,
   formatShortThaiDateTime,
 } from "../../components/DateTimeField";
@@ -974,30 +975,33 @@ export default function CarBookingScreen() {
     return `${baseUrl}/uploads/cars/${cleanPath}`;
   };
 
-  const showPicker = (
-    target: "start" | "end",
-    mode: "date" | "time",
-    carId?: number,
-  ) => {
+  // ค่าปัจจุบันของช่องที่กำลังเลือก — ช่วงเวลารวม หรือของรถคันนั้นในโหมด group
+  const pickerValue = (target: "start" | "end", carId?: number | null) => {
     const entry = carId != null ? carEntries[carId] : null;
-    const currentDate = entry
+    return entry
       ? target === "start"
         ? entry.startDate
         : entry.endDate
       : target === "start"
         ? startDate
         : endDate;
+  };
 
-    if (Platform.OS === "android") {
+  const showPicker = (
+    target: "start" | "end",
+    mode: "date" | "time",
+    carId?: number,
+  ) => {
+    // วันที่ใช้ปฏิทินแบบ ManagerSales (CalendarPickerModal) ทุกแพลตฟอร์ม · เวลายังใช้ตัวเลือกของเครื่อง
+    if (mode === "time" && Platform.OS === "android") {
       DateTimePickerAndroid.open({
-        value: currentDate,
+        value: pickerValue(target, carId),
         onChange: (event, date) => {
           if (event.type === "set" && date)
             handleDateChange(target, date, mode, carId);
         },
         mode: mode,
         is24Hour: true,
-        minimumDate: mode === "date" ? new Date() : undefined,
       });
     } else setPickerConfig({ target, mode, carId: carId ?? null });
   };
@@ -3665,7 +3669,15 @@ export default function CarBookingScreen() {
             {bookingMode === "group" && renderGroupFooter()}
           </View>
         </ScrollView>
-        {Platform.OS === "ios" && pickerConfig && (
+        {pickerConfig?.mode === "date" && (
+          <CalendarPickerModal
+            value={pickerValue(pickerConfig.target, pickerConfig.carId)}
+            minimumDate={new Date()}
+            onChange={(d) => handleDateChange(pickerConfig.target, d, "date", pickerConfig.carId)}
+            onClose={() => setPickerConfig(null)}
+          />
+        )}
+        {Platform.OS === "ios" && pickerConfig?.mode === "time" && (
           <Modal transparent animationType="fade">
             <View style={themeStyles.modalOverlay}>
               <View style={[themeStyles.modalContent, { padding: 0 }]}>
@@ -3686,15 +3698,7 @@ export default function CarBookingScreen() {
                   </TouchableOpacity>
                 </View>
                 <DateTimePicker
-                  value={
-                    pickerConfig.carId != null && carEntries[pickerConfig.carId]
-                      ? pickerConfig.target === "start"
-                        ? carEntries[pickerConfig.carId].startDate
-                        : carEntries[pickerConfig.carId].endDate
-                      : pickerConfig.target === "start"
-                        ? startDate
-                        : endDate
-                  }
+                  value={pickerValue(pickerConfig.target, pickerConfig.carId)}
                   mode={pickerConfig.mode}
                   display="spinner"
                   onValueChange={(e, d) =>

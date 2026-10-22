@@ -20,7 +20,7 @@ const PROD_HOST = "https://tjcgroup.tjc.co.th";
  *  แก้ IP ให้ตรงกับเครื่องที่รัน XAMPP (ดูด้วย ipconfig)
  *  ห้ามใช้ localhost เพราะมือถือจะวิ่งกลับเข้าหาตัวเอง
  *  มือถือกับคอมต้องอยู่ Wi-Fi วงเดียวกัน */
-const DEV_HOST = "http://10.150.76.28/tjc-api";
+const DEV_HOST = "http://192.168.103.58/tjc-api-server";
 
 // ───────────────────────────────────────────────────────────────
 

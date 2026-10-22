@@ -1,5 +1,4 @@
 import { Ionicons } from "@expo/vector-icons";
-import DateTimePicker from "@react-native-community/datetimepicker";
 import axios from "axios";
 import React, { useEffect, useRef, useState } from "react";
 import {
@@ -17,7 +16,7 @@ import {
 import MapView, { Callout, Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { API_BASE, IMG_BASE_URL } from "../../constants/config";
-import { formatShortThaiDate } from "../../components/DateTimeField";
+import { CalendarPickerModal, formatShortThaiDate } from "../../components/DateTimeField";
 
 const COLOR_PRIMARY = "#4e54c8";
 
@@ -44,7 +43,6 @@ export default function MapDashboardScreen() {
 
   const [showPicker, setShowPicker] = useState(false);
   const [pickerMode, setPickerMode] = useState<"start" | "end">("start");
-  const [tempDate, setTempDate] = useState(new Date());
 
   // --- Helpers ---
   const formatDateForAPI = (date: Date | null) => {
@@ -173,25 +171,13 @@ export default function MapDashboardScreen() {
 
   const openDatePicker = (mode: "start" | "end") => {
     setPickerMode(mode);
-    // ถ้าเป็น null ให้เริ่มที่วันนี้
-    setTempDate((mode === "start" ? startDate : endDate) || new Date());
     setShowPicker(true);
   };
 
-  const onDateChange = (event: any, selectedDate: Date) => {
-    if (Platform.OS === "android") {
-      setShowPicker(false);
-      if (pickerMode === "start") setStartDate(selectedDate);
-      else setEndDate(selectedDate);
-    } else {
-      setTempDate(selectedDate);
-    }
-  };
-
-  const confirmDateIOS = () => {
-    setShowPicker(false);
-    if (pickerMode === "start") setStartDate(tempDate);
-    else setEndDate(tempDate);
+  // ปฏิทินแบบ ManagerSales ทุกแพลตฟอร์ม — แตะวันแล้วบันทึกเลยและปิดตัวเอง (ไม่มีปุ่ม "ตกลง" แยกแบบ iOS เดิม)
+  const onDateChange = (selectedDate: Date) => {
+    if (pickerMode === "start") setStartDate(selectedDate);
+    else setEndDate(selectedDate);
   };
 
   return (
@@ -529,46 +515,13 @@ export default function MapDashboardScreen() {
         </View>
       )}
 
-      {showPicker &&
-        (Platform.OS === "ios" ? (
-          <Modal transparent animationType="fade">
-            <View style={styles.centeredOverlay}>
-              <View style={styles.iosPickerContainer}>
-                <View style={styles.pickerHeader}>
-                  <Text style={{ fontWeight: "bold", color: "#333" }}>
-                    {pickerMode === "start"
-                      ? "เลือกวันเริ่มต้น"
-                      : "เลือกวันสิ้นสุด"}
-                  </Text>
-                </View>
-                <DateTimePicker
-                  value={tempDate}
-                  mode="date"
-                  display="inline"
-                  locale="th-TH@calendar=gregorian"
-                  onValueChange={onDateChange}
-                  themeVariant="light"
-                />
-                <TouchableOpacity
-                  onPress={confirmDateIOS}
-                  style={styles.pickerConfirmBtn}
-                >
-                  <Text style={{ color: COLOR_PRIMARY, fontWeight: "bold" }}>
-                    ตกลง
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </Modal>
-        ) : (
-          <DateTimePicker
-            value={(pickerMode === "start" ? startDate : endDate) || new Date()}
-            mode="date"
-            display="default"
-            onValueChange={onDateChange}
-            onDismiss={() => setShowPicker(false)}
-          />
-        ))}
+      {showPicker && (
+        <CalendarPickerModal
+          value={pickerMode === "start" ? startDate : endDate}
+          onChange={onDateChange}
+          onClose={() => setShowPicker(false)}
+        />
+      )}
     </View>
   );
 }
@@ -830,31 +783,4 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
 
-  centeredOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.3)",
-    justifyContent: "flex-end",
-    alignItems: "center",
-    paddingBottom: 20,
-  },
-  iosPickerContainer: {
-    backgroundColor: "white",
-    width: "90%",
-    borderRadius: 15,
-    overflow: "hidden",
-  },
-  pickerHeader: {
-    padding: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: "#eee",
-    alignItems: "center",
-    backgroundColor: "#f9f9f9",
-  },
-  pickerConfirmBtn: {
-    padding: 15,
-    alignItems: "center",
-    borderTopWidth: 1,
-    borderColor: "#eee",
-    backgroundColor: "white",
-  },
 });

@@ -1,5 +1,4 @@
 import { FontAwesome5, Ionicons } from "@expo/vector-icons";
-import DateTimePicker from "@react-native-community/datetimepicker";
 import axios from "axios";
 import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect, useRouter } from "expo-router";
@@ -24,7 +23,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { API_BASE } from "../../constants/config";
-import { formatShortThaiDate, formatShortThaiDateTime } from "../../components/DateTimeField";
+import { CalendarPickerModal, formatShortThaiDate, formatShortThaiDateTime } from "../../components/DateTimeField";
 
 const NEWS_IMG_BASE =
   API_BASE.replace("/api_mobile.php", "") + "/uploads/news/";
@@ -147,8 +146,8 @@ export default function NewsScreen() {
 
   const handleSearch = () => fetchNews();
 
-  const onDateChange = (event: any, date: Date) => {
-    if (Platform.OS === "android") setShowDatePicker(false);
+  // ปฏิทินแบบ ManagerSales ทุกแพลตฟอร์ม — แตะวันแล้วกรองเลยและปิดตัวเอง
+  const onDateChange = (date: Date) => {
     setSelectedDate(date);
   };
 
@@ -279,7 +278,7 @@ export default function NewsScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
-      <StatusBar barStyle="dark-content" backgroundColor="#f0f4f8" />
+      <StatusBar barStyle="light-content" />
 
       {/* Header with Gradient Text Concept (using color since RN text gradient needs lib) */}
       <View style={styles.header}>
@@ -352,50 +351,15 @@ export default function NewsScreen() {
         </ScrollView>
       </View>
 
-      {/* Date Picker Modal for iOS / Default for Android */}
-      {showDatePicker &&
-        (Platform.OS === "ios" ? (
-          <Modal
-            transparent
-            animationType="fade"
-            visible={showDatePicker}
-            onRequestClose={() => setShowDatePicker(false)}
-          >
-            <View style={styles.iosDatePickerOverlay}>
-              <View style={styles.iosDatePickerContainer}>
-                <View style={styles.iosPickerHeader}>
-                  <TouchableOpacity onPress={() => setShowDatePicker(false)}>
-                    <Text style={styles.iosCancelText}>ยกเลิก</Text>
-                  </TouchableOpacity>
-                  <Text style={{ fontWeight: "bold", fontSize: 16 }}>
-                    เลือกวันที่
-                  </Text>
-                  <TouchableOpacity onPress={() => setShowDatePicker(false)}>
-                    <Text style={styles.iosDoneText}>ตกลง</Text>
-                  </TouchableOpacity>
-                </View>
-                <DateTimePicker
-                  value={selectedDate || new Date()}
-                  mode="date"
-                  display="inline"
-                  locale="th-TH@calendar=gregorian"
-                  onValueChange={onDateChange}
-                  maximumDate={new Date()}
-                  style={{ height: 300 }}
-                />
-              </View>
-            </View>
-          </Modal>
-        ) : (
-          <DateTimePicker
-            value={selectedDate || new Date()}
-            mode="date"
-            display="default"
-            onValueChange={onDateChange}
-            onDismiss={() => setShowDatePicker(false)}
-            maximumDate={new Date()}
-          />
-        ))}
+      {/* ปฏิทินเลือกวันที่ (แบบหน้า ManagerSales) — เลือกได้ถึงวันนี้ */}
+      {showDatePicker && (
+        <CalendarPickerModal
+          value={selectedDate}
+          onChange={onDateChange}
+          onClose={() => setShowDatePicker(false)}
+          maximumDate={new Date()}
+        />
+      )}
 
       {/* News Grid */}
       {loading ? (
@@ -841,26 +805,4 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   emptySubText: { color: "#94a3b8", fontSize: 14, marginTop: 5 },
-
-  // iOS Picker
-  iosDatePickerOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.3)",
-    justifyContent: "flex-end",
-  },
-  iosDatePickerContainer: {
-    backgroundColor: "white",
-    paddingBottom: 20,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-  },
-  iosPickerHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    padding: 15,
-    borderBottomWidth: 1,
-    borderColor: "#f1f5f9",
-  },
-  iosDoneText: { color: "#2563eb", fontWeight: "bold", fontSize: 16 },
-  iosCancelText: { color: "#64748b", fontSize: 16 },
 });

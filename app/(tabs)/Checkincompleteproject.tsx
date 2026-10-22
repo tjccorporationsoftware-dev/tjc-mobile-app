@@ -16,7 +16,7 @@
  *    ตรงกับฟังก์ชัน severity()/sevColor()/sevLabel() ของจริง
  *  - แถบความคืบหน้า = min(100, round(total/12*100)) — MAX_PTS=12 ตามต้นฉบับ
  *  - ค้นหา + กรองตามระดับ + เรียงลำดับ (มากสุดก่อน/น้อยสุดก่อน/รหัสใหม่สุดก่อน) ตรงกับ renderList()
- *  - แตะการ์ดเพื่อขยาย/ยุบดูรายละเอียดฟิลด์ที่ขาดแยกตามหมวด + ปุ่ม "ไปเติมข้อมูล" ไปหน้าแก้ไขโครงการ
+ *  - แตะการ์ดเพื่อขยาย/ยุบดูรายละเอียดฟิลด์ที่ขาดแยกตามหมวด (ดูอย่างเดียว — เติมข้อมูลที่หน้าเว็บ)
  *  - รหัสโครงการที่แสดง = ตัดจาก project_code ด้วย split('-')[1] แบบเดียวกับ PHP
  *
  * ต้องติดตั้ง (ถ้ายังไม่มี): npx expo install @expo/vector-icons expo-router
@@ -24,7 +24,6 @@
  */
 
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -63,10 +62,9 @@ interface IncompleteProject {
   missing: MissingData;
 }
 
+// หน้านี้ไว้ดูอย่างเดียวว่าโครงการไหนข้อมูลขาด — การเติม/แก้ไขข้อมูลโครงการทำที่หน้าเว็บ (ไม่มีหน้าแก้ไขในแอป)
 export interface CheckIncompleteProjectsScreenProps {
   onBack?: () => void;
-  /** ไปหน้าแก้ไขโครงการ — ถ้าไม่ส่งมา (ใช้แบบ route เดี่ยว) จะ router.push('/createproject') แทน */
-  onEditProject?: (projectId: string) => void;
 }
 
 // ====================================================================
@@ -141,8 +139,7 @@ function categoriesOf(p: IncompleteProject): { key: CatKey; items: string[] }[] 
 // Main screen
 // ====================================================================
 
-export default function CheckIncompleteProjectsScreen({ onBack, onEditProject }: CheckIncompleteProjectsScreenProps) {
-  const router = useRouter();
+export default function CheckIncompleteProjectsScreen({ onBack }: CheckIncompleteProjectsScreenProps) {
   const { user } = useAuth();
   const userId = user?.id;
 
@@ -236,11 +233,6 @@ export default function CheckIncompleteProjectsScreen({ onBack, onEditProject }:
       setExpandedIds(new Set(filtered.map((p) => p.id)));
       setAllExpanded(true);
     }
-  }
-
-  function goEditProject(p: IncompleteProject) {
-    if (onEditProject) return onEditProject(String(p.id));
-    router.push({ pathname: '/createproject', params: { edit_id: String(p.id) } });
   }
 
   function renderHeader() {
@@ -403,10 +395,6 @@ export default function CheckIncompleteProjectsScreen({ onBack, onEditProject }:
                   );
                 })}
               </View>
-              <TouchableOpacity style={styles.editBtn} onPress={() => goEditProject(p)}>
-                <Ionicons name="create-outline" size={14} color="#fff" />
-                <Text style={styles.editBtnText}>ไปเติมข้อมูล</Text>
-              </TouchableOpacity>
             </View>
           </View>
         )}
@@ -417,7 +405,7 @@ export default function CheckIncompleteProjectsScreen({ onBack, onEditProject }:
   if (loading && projects.length === 0) {
     return (
       <SafeAreaView style={styles.safeArea}>
-        <StatusBar barStyle="dark-content" />
+        <StatusBar barStyle="light-content" />
         <View style={styles.emptyBox}>
           <ActivityIndicator size="large" color="#dc2626" />
           <Text style={styles.emptyText}>กำลังโหลดข้อมูล...</Text>
@@ -428,7 +416,7 @@ export default function CheckIncompleteProjectsScreen({ onBack, onEditProject }:
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="dark-content" />
+      <StatusBar barStyle="light-content" />
       <FlatList
         data={filtered}
         keyExtractor={(p) => String(p.id)}

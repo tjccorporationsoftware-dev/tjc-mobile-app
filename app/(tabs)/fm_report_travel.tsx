@@ -573,7 +573,7 @@ export default function TravelAllowanceScreen({ onBack }: TravelAllowanceScreenP
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
+      <StatusBar barStyle="light-content" />
 
       {/* แถบค้นหา + ตัวกรอง + แผนที่ — อยู่นอก FlatList จึงติดด้านบนเสมอ (แบบหน้าเอกสาร PO/AX) */}
       <View style={styles.topBar}>

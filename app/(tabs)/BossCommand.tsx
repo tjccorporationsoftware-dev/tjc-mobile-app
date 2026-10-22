@@ -15,7 +15,7 @@ import { BlurView } from 'expo-blur';
 
 // ✅ Import Config
 import { API_BASE, IMG_BASE_URL } from '../../constants/config';
-import { formatShortThaiDate } from '../../components/DateTimeField';
+import { CalendarPickerModal, formatShortThaiDate } from '../../components/DateTimeField';
 
 const { width } = Dimensions.get('window');
 
@@ -204,8 +204,8 @@ export default function BossCommand() {
     emp.label.toLowerCase().includes(searchText.toLowerCase())
   );
 
-  const onChangeDate = (event: any, selectedDate: Date) => {
-    setShowDatePicker(Platform.OS === 'ios');
+  // ปฏิทินแบบ ManagerSales ปิดตัวเองหลังเลือกวัน และคงเวลาเดิมใน date ไว้ให้
+  const onChangeDate = (selectedDate: Date) => {
     setDate(selectedDate);
   };
 
@@ -472,7 +472,7 @@ export default function BossCommand() {
                 </TouchableOpacity>
             </View>
 
-            {showDatePicker && (<DateTimePicker value={date} mode="date" display="spinner" onValueChange={onChangeDate} onDismiss={() => setShowDatePicker(false)} themeVariant={isDark ? "dark" : "light"} />)}
+            {showDatePicker && (<CalendarPickerModal value={date} onChange={onChangeDate} onClose={() => setShowDatePicker(false)} />)}
             {showTimePicker && (<DateTimePicker value={date} mode="time" is24Hour={true} display="spinner" onValueChange={onChangeTime} onDismiss={() => setShowTimePicker(false)} themeVariant={isDark ? "dark" : "light"} />)}
           </View>
 
