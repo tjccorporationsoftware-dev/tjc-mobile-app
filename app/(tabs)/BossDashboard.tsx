@@ -19,6 +19,7 @@ import {
 import { CalendarPickerModal, dateToYmd, ymdToDate } from '../../components/DateTimeField';
 
 // ✅ Config
+import axios from 'axios';
 import { API_BASE } from '../../constants/config';
 const API_URL = `${API_BASE}/api_tasks.php`;
 
@@ -482,15 +483,12 @@ const handleReadTask = async (taskId: string) => {
             });
         }
 
-        const response = await fetch(API_URL, {
-            method: 'POST',
-            body: formData,
-            headers: { 
-                'Accept': 'application/json',
-                // ไม่ต้องใส่ Content-Type: multipart/form-data เพราะ fetch จะจัดการให้เองเมื่อใช้ FormData
-            },
+        // ส่งด้วย axios (XHR) — fetch ของ Expo SDK 57 (expo/fetch) ไม่รองรับไฟล์แบบ { uri, name, type } ใน FormData
+        const { data: json } = await axios.post(API_URL, formData, {
+            headers: { Accept: 'application/json', 'Content-Type': 'multipart/form-data' },
+            validateStatus: () => true, // อ่าน body ทุกสถานะแบบ fetch เดิม
         });
-        const json = await response.json();
+        if (!json || typeof json !== 'object') throw new Error('เซิร์ฟเวอร์ตอบกลับผิดรูปแบบ');
 
         if (json.success) {
             // ส่งสัญญาณแจ้งเตือนบอส

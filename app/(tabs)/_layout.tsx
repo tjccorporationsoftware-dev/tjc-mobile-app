@@ -68,7 +68,7 @@ const MENU_GROUPS: {
     title: "แดชบอร์ดโครงการ",
     icon: "briefcase",
     colors: ["#1d4ed8", "#38bdf8"], // น้ำเงิน ไล่ไปฟ้า
-    items: ["project_dashboard"],
+    items: ["project_dashboard", "CostCheckScreen"],
   },
   {
     id: "accounting_group",
@@ -944,6 +944,16 @@ export default function DrawerLayout() {
           "project_dashboard.php", // TODO: ปรับชื่อไฟล์สิทธิ์ให้ตรงกับ backend จริง
         )}
       />
+      {/* ตรวจสอบต้นทุน (cost_check.php) — เมนูเดียวกับเว็บใต้หมวดโครงการ · เปิดจากเมนู = เลือกหน้างานก่อน
+          (ปุ่ม "วิเคราะห์ต้นทุน" ในแดชบอร์ดโครงการยังเปิดหน้านี้พร้อมเลขหน้างานได้เหมือนเดิม) */}
+      <Drawer.Screen
+        name="CostCheckScreen"
+        options={getDrawerOptions(
+          "ตรวจสอบต้นทุน",
+          "calculator",
+          "cost_check.php",
+        )}
+      />
       {/* sub-screen ของแดชบอร์ดโครงการ — เปิดจากปุ่มลัดในหน้านั้นเอง ไม่โชว์ในเมนู */}
       <Drawer.Screen name="Estimatedashboard" options={{ drawerItemStyle: { display: "none" } }} />
       <Drawer.Screen name="checkcost" options={{ drawerItemStyle: { display: "none" } }} />
@@ -960,7 +970,6 @@ export default function DrawerLayout() {
       />
       <Drawer.Screen name="projectfollowup" options={{ drawerItemStyle: { display: "none" } }} />
       <Drawer.Screen name="projectaccounting" options={{ drawerItemStyle: { display: "none" } }} />
-      <Drawer.Screen name="CostCheckScreen" options={{ drawerItemStyle: { display: "none" } }} />
       {/* 10. หมวดเอกสารโครงการ */}
       <Drawer.Screen
         name="document_dashboard"
@@ -973,6 +982,12 @@ export default function DrawerLayout() {
       <Drawer.Screen name="submitdocument" options={{ drawerItemStyle: { display: "none" } }} />
 
       {/* หน้าที่ซ่อน */}
+      {/* ภาพรวมฝ่ายขาย (เปิดจาก "ภาพรวม (Manager)") มีหัวไล่สี + ปุ่มย้อนกลับของตัวเอง
+          — ปิดหัวของ drawer ไม่ให้ซ้อนสองชั้น (เดิมไม่ได้ลงทะเบียน จึงได้หัว "ManagerSales" อัตโนมัติ) */}
+      <Drawer.Screen
+        name="ManagerSales"
+        options={{ headerShown: false, drawerItemStyle: { display: "none" } }}
+      />
       <Drawer.Screen
         name="AdminDashboard"
         options={{ drawerItemStyle: { display: "none" } }}

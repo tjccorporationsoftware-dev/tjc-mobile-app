@@ -1726,38 +1726,84 @@ export default function CostCheckScreen({ id, onBack }: CostCheckScreenProps) {
       ) : null}
 
       {/* การ์ดสรุป */}
+      {/* แถวบน: งบโครงการเต็มความกว้าง (Factor F เป็นชิปมุมขวา) · ล่าง 2 แถว แถวละ 2 ใบสูงเท่ากัน — ไม่มีช่องว่างเหลือ */}
       {s && p ? (
-        <View style={styles.sumGrid}>
-          <SumCard icon="document-text" label="ยอดงบโครงการ" value={`฿${fmt(s.project_budget)}`} />
-          {s.has_factor_f ? <SumCard icon="calculator" label="ค่าใช้จ่าย Factor F" value={fmt(s.factor_f, 4)} /> : null}
-          <SumCard icon="clipboard" label="ราคากลาง(รวม)" value={`฿${fmt(s.grand_total_standard)}`} />
-          <SumCard icon="locate" label="รวมทุนเดิม" value={`฿${fmt(s.net_grand_total_plan)}`}>
-            {s.total_discount_value > 0 ? (
-              <>
-                <SumSub label="จากทุนเดิม" value={`฿${fmt(s.grand_total_plan)}`} />
-                <SumSub label="ลดโครงการไป" value={`-฿${fmt(s.total_discount_value)}`} color="#dc2626" />
-              </>
-            ) : null}
-          </SumCard>
-          <SumCard icon="cart" label="ซื้อจริง (ทุนใหม่รวม)" value={`฿${fmt(s.grand_total_actual_full)}`}>
-            <SumSub label="เฉพาะสินค้า" value={`฿${fmt(s.grand_total_actual_product)}`} />
-            <SumSub label="คิดเป็นของงบโครงการ" value={s.actual_budget_pct === null ? '- %' : `${fmt(s.actual_budget_pct)}%`} color={s.actual_over_budget ? '#dc2626' : undefined} />
-            {s.actual_budget_pct_bar !== null ? (
-              <View style={styles.meter}>
-                <View style={[styles.meterFill, { width: `${s.actual_budget_pct_bar}%`, backgroundColor: s.actual_over_budget ? '#dc2626' : '#6366f1' }]} />
-              </View>
-            ) : null}
-          </SumCard>
+        <View style={styles.sumWrap}>
           <SumCard
-            icon={s.is_save ? 'trending-down' : 'trending-up'}
-            color={s.is_save ? '#16a34a' : '#dc2626'}
-            ink={s.is_save ? '#16a34a' : '#dc2626'}
-            label="ส่วนต่าง"
-            pill={s.diff_text}
-            value={`${s.is_save ? '+' : '-'}฿${fmt(Math.abs(s.grand_diff))}`}
+            icon="wallet"
+            label="ยอดงบโครงการ"
+            right={
+              s.has_factor_f ? (
+                <View style={styles.sumChip}>
+                  <Text style={styles.sumChipLabel}>Factor F</Text>
+                  <Text style={styles.sumChipVal}>{fmt(s.factor_f, 4)}</Text>
+                </View>
+              ) : null
+            }
           >
-            <SumSub label="ทุน" value={`${fmt(s.grand_diff_percent)}%`} />
+            <Money v={s.project_budget} size={24} />
           </SumCard>
+
+          <View style={styles.sumRow}>
+            <SumCard half icon="clipboard" label="ราคากลาง (รวม)">
+              <Money v={s.grand_total_standard} />
+            </SumCard>
+            <SumCard
+              half
+              icon="locate"
+              label="รวมทุนเดิม"
+              footer={
+                s.total_discount_value > 0 ? (
+                  <>
+                    <SumSub label="จากทุนเดิม" value={`฿${fmt(s.grand_total_plan)}`} />
+                    <SumSub label="ลดโครงการ" value={`-฿${fmt(s.total_discount_value)}`} color="#dc2626" />
+                  </>
+                ) : null
+              }
+            >
+              <Money v={s.net_grand_total_plan} />
+            </SumCard>
+          </View>
+
+          <View style={styles.sumRow}>
+            <SumCard
+              half
+              icon="cart"
+              label="ซื้อจริง (ทุนใหม่รวม)"
+              footer={
+                <>
+                  <SumSub label="เฉพาะสินค้า" value={`฿${fmt(s.grand_total_actual_product)}`} />
+                  <SumSub label="ของงบโครงการ" value={s.actual_budget_pct === null ? '- %' : `${fmt(s.actual_budget_pct)}%`} color={s.actual_over_budget ? '#dc2626' : undefined} />
+                  {s.actual_budget_pct_bar !== null ? (
+                    <View style={styles.meter}>
+                      <View style={[styles.meterFill, { width: `${s.actual_budget_pct_bar}%`, backgroundColor: s.actual_over_budget ? '#dc2626' : '#6366f1' }]} />
+                    </View>
+                  ) : null}
+                </>
+              }
+            >
+              <Money v={s.grand_total_actual_full} />
+            </SumCard>
+            <SumCard
+              half
+              icon={s.is_save ? 'trending-down' : 'trending-up'}
+              color={s.is_save ? '#16a34a' : '#dc2626'}
+              tint={s.is_save ? { bg: '#f0fdf4', border: '#bbf7d0' } : { bg: '#fef2f2', border: '#fecaca' }}
+              label="ส่วนต่าง"
+              footer={
+                <>
+                  {s.diff_text ? (
+                    <View style={[styles.sumPill, { backgroundColor: s.is_save ? '#dcfce7' : '#fee2e2' }]}>
+                      <Text style={[styles.sumPillText, { color: s.is_save ? '#15803d' : '#b91c1c' }]} numberOfLines={1}>{s.diff_text}</Text>
+                    </View>
+                  ) : null}
+                  <SumSub label="ทุนคิดเป็น" value={`${fmt(s.grand_diff_percent)}%`} />
+                </>
+              }
+            >
+              <Money v={s.grand_diff} sign={s.is_save ? '+' : '-'} color={s.is_save ? '#15803d' : '#b91c1c'} />
+            </SumCard>
+          </View>
         </View>
       ) : null}
 
@@ -2688,23 +2734,56 @@ export default function CostCheckScreen({ id, onBack }: CostCheckScreenProps) {
 // การ์ดสรุป / ปุ่มเครื่องมือ / แถวรวมท้ายตาราง
 // ====================================================================
 
-/** การ์ดสรุปโทนกลาง (ไอคอนคราม ตัวเลขสีเข้ม) — ส่ง color/ink เฉพาะการ์ดที่สีมีความหมาย เช่น ส่วนต่าง กำไร/ขาดทุน */
-function SumCard({ icon, color = '#6366f1', ink = '#0f172a', label, value, pill, children }: { icon: keyof typeof Ionicons.glyphMap; color?: string; ink?: string; label: string; value: string; pill?: string; children?: React.ReactNode }) {
+/**
+ * จำนวนเงินในการ์ดสรุป — ขนาดตัวเลขเท่ากันทุกใบ ฿ และทศนิยมตัวเล็กลง (ช่วยให้เลขหลักล้านพอดีครึ่งจอ)
+ * ย่อตัวอักษรเฉพาะตอนล้นจริง ๆ (minimumFontScale) ไม่ย่อทุกใบเหมือนเดิม
+ */
+function Money({ v, size = 18, color = '#0f172a', sign }: { v: number; size?: number; color?: string; sign?: '+' | '-' }) {
+  const [int, dec] = fmt(Math.abs(v)).split('.');
+  const lead = sign ?? (v < 0 ? '-' : '');
+  const small = Math.round(size * 0.62);
   return (
-    <View style={styles.sumCard}>
+    <Text style={[styles.money, { fontSize: size, lineHeight: Math.round(size * 1.3), color }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+      {lead ? `${lead} ` : ''}
+      <Text style={{ fontSize: small, fontWeight: '800' }}>฿</Text>
+      {int}
+      <Text style={{ fontSize: small, fontWeight: '800' }}>.{dec}</Text>
+    </Text>
+  );
+}
+
+/** การ์ดสรุปโทนกลาง (ไอคอนคราม ตัวเลขสีเข้ม) — ส่ง color/tint เฉพาะการ์ดที่สีมีความหมาย เช่น ส่วนต่าง กำไร/ขาดทุน */
+function SumCard({
+  icon,
+  color = '#6366f1',
+  tint,
+  label,
+  right,
+  half,
+  footer,
+  children,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  color?: string;
+  tint?: { bg: string; border: string };
+  label: string;
+  right?: React.ReactNode;
+  half?: boolean;
+  footer?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <View style={[styles.sumCard, half && styles.sumCardHalf, tint && { backgroundColor: tint.bg, borderColor: tint.border }]}>
       <View style={styles.sumHead}>
         <View style={[styles.sumIcon, { backgroundColor: `${color}1a` }]}>
-          <Ionicons name={icon} size={14} color={color} />
+          <Ionicons name={icon} size={15} color={color} />
         </View>
         <Text style={styles.sumLabel} numberOfLines={2}>{label}</Text>
+        {right}
       </View>
-      {pill ? (
-        <View style={[styles.sumPill, { backgroundColor: `${color}1f` }]}>
-          <Text style={[styles.sumPillText, { color }]}>{pill}</Text>
-        </View>
-      ) : null}
-      <Text style={[styles.sumValue, { color: ink }]} numberOfLines={1} adjustsFontSizeToFit>{value}</Text>
       {children}
+      {/* ท้ายการ์ดชิดล่างเสมอ — การ์ดคู่ในแถวเดียวกันสูงเท่ากัน ตัวเลขหลักอยู่ระดับเดียวกัน */}
+      {footer ? <View style={[styles.sumFoot, tint && { borderTopColor: tint.border }]}>{footer}</View> : null}
     </View>
   );
 }
@@ -2712,8 +2791,8 @@ function SumCard({ icon, color = '#6366f1', ink = '#0f172a', label, value, pill,
 function SumSub({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
     <View style={styles.sumSub}>
-      <Text style={styles.sumSubLabel}>{label}</Text>
-      <Text style={[styles.sumSubVal, color ? { color } : null]}>{value}</Text>
+      <Text style={styles.sumSubLabel} numberOfLines={1}>{label}</Text>
+      <Text style={[styles.sumSubVal, color ? { color } : null]} numberOfLines={1}>{value}</Text>
     </View>
   );
 }
@@ -2799,18 +2878,39 @@ const styles = StyleSheet.create({
   errorText: { flex: 1, color: '#b91c1c', fontSize: 12.5, fontWeight: '700' },
 
   // การ์ดสรุป
-  sumGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', paddingHorizontal: 12, rowGap: 8, marginTop: 4 },
-  sumCard: { width: '48.8%', backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#e2e8f0', padding: 11, gap: 3 },
-  sumHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  sumIcon: { width: 24, height: 24, borderRadius: 7, alignItems: 'center', justifyContent: 'center' },
-  sumLabel: { flex: 1, fontSize: 11.5, fontWeight: '700', color: '#64748b' },
-  sumValue: { fontSize: 16, fontWeight: '900', marginTop: 2 },
+  sumWrap: { paddingHorizontal: 12, gap: 8, marginTop: 4 },
+  sumRow: { flexDirection: 'row', gap: 8 }, // ลูกยืดสูงเท่ากันเอง (alignItems: stretch)
+  sumCard: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingHorizontal: 12,
+    paddingTop: 11,
+    paddingBottom: 12,
+    gap: 6,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
+  sumCardHalf: { flex: 1 },
+  // หัวการ์ดสูงคงที่ 2 บรรทัด — ป้ายยาว/สั้นในแถวเดียวกัน ตัวเลขยังอยู่ระดับเดียวกัน
+  sumHead: { flexDirection: 'row', alignItems: 'center', gap: 7, minHeight: 30 },
+  sumIcon: { width: 26, height: 26, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  sumLabel: { flex: 1, fontSize: 12, lineHeight: 15, fontWeight: '700', color: '#64748b' },
+  money: { fontWeight: '900', fontVariant: ['tabular-nums'], letterSpacing: -0.2 },
+  sumChip: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#f1f5f9', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 999, paddingHorizontal: 9, paddingVertical: 3 },
+  sumChipLabel: { fontSize: 10.5, fontWeight: '700', color: '#64748b' },
+  sumChipVal: { fontSize: 11.5, fontWeight: '900', color: '#334155', fontVariant: ['tabular-nums'] },
+  sumFoot: { marginTop: 'auto', borderTopWidth: 1, borderTopColor: '#f1f5f9', paddingTop: 7, gap: 4 },
   sumPill: { alignSelf: 'flex-start', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
   sumPillText: { fontSize: 10.5, fontWeight: '800' },
-  sumSub: { flexDirection: 'row', justifyContent: 'space-between', gap: 4 },
-  sumSubLabel: { fontSize: 10.5, color: '#94a3b8', flexShrink: 1 },
-  sumSubVal: { fontSize: 10.5, fontWeight: '800', color: '#475569' },
-  meter: { height: 6, backgroundColor: '#f1f5f9', borderRadius: 3, overflow: 'hidden', marginTop: 3 },
+  sumSub: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', gap: 6 },
+  sumSubLabel: { fontSize: 11, color: '#94a3b8', flexShrink: 1 },
+  sumSubVal: { fontSize: 11.5, fontWeight: '800', color: '#334155', fontVariant: ['tabular-nums'] },
+  meter: { height: 6, backgroundColor: '#e2e8f0', borderRadius: 3, overflow: 'hidden', marginTop: 2 },
   meterFill: { height: 6, borderRadius: 3 },
 
   panel: { marginHorizontal: 12, marginTop: 10, backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#e2e8f0', padding: 12, gap: 8 },

@@ -36,6 +36,7 @@
     "expo-sharing": "~57.0.19",
     "expo-splash-screen": "~57.0.9",
     "expo-status-bar": "~57.0.1",
+    "expo-updates": "~57.0.26",
     "expo-web-browser": "~57.0.3",
     "lucide-react": "^0.562.0",
     "lucide-react-native": "^0.563.0",

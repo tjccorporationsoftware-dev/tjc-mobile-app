@@ -40,6 +40,7 @@ import {
 } from "react-native";
 
 // Import Config
+import axios from "axios";
 import { API_BASE, IMG_BASE_URL } from "../../constants/config";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
@@ -521,7 +522,9 @@ export default function ImmigrationFormScreen() {
     });
   };
 
-  const formatDateForApi = (d: Date): string => d.toISOString().split("T")[0];
+  // YYYY-MM-DD ตามเวลาเครื่อง — เดิมใช้ toISOString() ซึ่งเป็นเวลา UTC บันทึกก่อน 07:00 น. จึงได้วันที่ของเมื่อวาน
+  const formatDateForApi = (d: Date): string =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   // แสดงผลย่อ "5/9/69" (d/m/yy พ.ศ. 2 หลัก) แทน ค.ศ. เต็ม ให้ตรงกับรูปแบบเดียวกันทั้งแอป
   const formatDateDisplay = (d: Date): string => {
     // DD/MM/YYYY ปี ค.ศ. — รูปแบบเดียวทั้งแอป
@@ -607,40 +610,45 @@ export default function ImmigrationFormScreen() {
       formData.append("created_by", assignerName);
 
       images.forEach((img, index) => {
-        const uriParts = img.uri.split(".");
-        const fileType = uriParts[uriParts.length - 1];
-        // @ts-ignore
+        // นามสกุลจากไฟล์จริง (uri) ก่อน — iOS fileName อาจเป็น IMG_xxxx.HEIC ทั้งที่ไฟล์ที่ได้เป็น .jpg
+        // และ Immigration_save.php รับเฉพาะ jpg/jpeg/png/gif ตามนามสกุลชื่อไฟล์ (นอกนั้นทิ้งเงียบ ๆ)
+        const ext = (img.uri.split("?")[0].split(".").pop() || img.fileName?.split(".").pop() || "jpg").toLowerCase();
+        // @ts-ignore: ไฟล์แบบ React Native { uri, name, type }
         formData.append("image_upload[]", {
           uri: img.uri,
-          name: `photo_${index}.${fileType}`,
-          type: `image/${fileType}`,
+          name: `photo_${index}.${ext}`,
+          type: `image/${ext === "jpg" ? "jpeg" : ext}`,
         });
       });
 
-      const response = await fetch(
+      // ส่งด้วย axios (XHR) — fetch ของ Expo SDK 57 (expo/fetch) ไม่รองรับไฟล์แบบ { uri, name, type }
+      // ใน FormData จะโยน "Unsupported FormDataPart implementation" ทันทีที่แนบรูป
+      const res = await axios.post(
         `${API_BASE}/Immigration_save.php?action=get_immigration_history`,
-        {
-          method: "POST",
-          body: formData,
-          headers: { "Content-Type": "multipart/form-data" },
-        },
+        formData,
+        { headers: { "Content-Type": "multipart/form-data" } },
       );
-
-      if (response.ok) {
-        showAlert({
-          type: "success",
-          title: "บันทึกสำเร็จ!",
-          message: "ข้อมูลของคุณถูกส่งเข้าระบบเรียบร้อยแล้ว",
-          showCancel: false,
-          confirmText: "ตกลง",
-          onConfirm: () => {
-            closeAlert();
-            resetForm();
-          },
-        });
-      } else {
-        throw new Error("Server response was not ok");
+      // Immigration_save.php เป็นตัวรับฟอร์มเว็บ: สำเร็จจะ redirect ไปหน้าเว็บ (ได้ HTML กลับมา)
+      // พลาดจะ echo "Error execution/preparation: ..." เป็นข้อความธรรมดา — ดักทั้งแบบข้อความและ JSON
+      const result = res.data;
+      if (typeof result === "string" && /^\s*Error (execution|preparation)/.test(result)) {
+        throw new Error(result.trim().slice(0, 200));
       }
+      if (result && typeof result === "object" && (result.success === false || result.status === "error")) {
+        throw new Error(result.message || "บันทึกไม่สำเร็จ");
+      }
+
+      showAlert({
+        type: "success",
+        title: "บันทึกสำเร็จ!",
+        message: "ข้อมูลของคุณถูกส่งเข้าระบบเรียบร้อยแล้ว",
+        showCancel: false,
+        confirmText: "ตกลง",
+        onConfirm: () => {
+          closeAlert();
+          resetForm();
+        },
+      });
     } catch (error: any) {
       console.error(error);
       showAlert({
