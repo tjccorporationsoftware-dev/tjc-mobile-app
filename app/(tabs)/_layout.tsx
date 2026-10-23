@@ -75,7 +75,7 @@ const MENU_GROUPS: {
     title: "หมวดบัญชี-การเงิน (โครงการ)",
     icon: "cash",
     colors: ["#0ea5e9", "#7dd3fc"], // ฟ้า
-    items: ["accounting_dashboard"],
+    items: ["accounting_dashboard", "installment_plans", "nas_accounting_dashboard", "wip_dashboard"],
   },
   {
     id: "document_group",
@@ -83,6 +83,20 @@ const MENU_GROUPS: {
     icon: "document-text",
     colors: ["#a855f7", "#6b21a8"], // ม่วง ไล่ไปม่วงเข้ม
     items: ["document_dashboard"],
+  },
+  {
+    id: "lg_group",
+    title: "หมวดหนังสือค้ำประกัน",
+    icon: "shield-checkmark",
+    colors: ["#4338ca", "#818cf8"], // คราม
+    items: ["lg_dashboard", "lg_import_dashboard", "guarantee_tracking"],
+  },
+  {
+    id: "cash_guarantee_group",
+    title: "หมวดเงินสดค้ำ",
+    icon: "cash",
+    colors: ["#4338ca", "#818cf8"], // คราม (ชุดเดียวกับหมวดหนังสือค้ำ)
+    items: ["lg_cash_dashboard", "guarantee_tracking_cash"],
   },
   {
     id: "Company Executive",
@@ -971,6 +985,40 @@ export default function DrawerLayout() {
         )}
       />
       <Drawer.Screen name="submitdocument" options={{ drawerItemStyle: { display: "none" } }} />
+
+      {/* หมวดหนังสือค้ำประกัน — ดูข้อมูลอย่างเดียว (สิทธิ์ใช้ชื่อไฟล์หน้าเว็บเดียวกัน) */}
+      <Drawer.Screen
+        name="lg_dashboard"
+        options={getDrawerOptions("Dashboard ขออนุมัติหนังสือค้ำ", "shield-checkmark", "lg_dashboard.php")}
+      />
+      <Drawer.Screen
+        name="lg_import_dashboard"
+        options={getDrawerOptions("แดชบอร์ดหนังสือค้ำประกัน (ชุดนำเข้า)", "layers", "lg_import_dashboard.php")}
+      />
+      <Drawer.Screen
+        name="guarantee_tracking"
+        options={getDrawerOptions("ติดตามหนังสือค้ำประกัน (LG)", "list-circle", "guarantee_tracking.php")}
+      />
+      <Drawer.Screen
+        name="lg_cash_dashboard"
+        options={getDrawerOptions("Dashboard ค้ำเงินสด", "cash", "lg_cash_dashboard.php")}
+      />
+      <Drawer.Screen
+        name="guarantee_tracking_cash"
+        options={getDrawerOptions("ติดตามค้ำเงินสด", "list-circle-outline", "guarantee_tracking_cash.php")}
+      />
+      <Drawer.Screen
+        name="installment_plans"
+        options={getDrawerOptions("แผนชำระรายงวด", "calendar-number", "installment_plans.php")}
+      />
+      <Drawer.Screen
+        name="nas_accounting_dashboard"
+        options={getDrawerOptions("บัญชีลูกหนี้ แนส", "wallet", "nas_accounting_dashboard.php")}
+      />
+      <Drawer.Screen
+        name="wip_dashboard"
+        options={getDrawerOptions("Dashboard แนชเก่า", "construct", "wip_dashboard.php")}
+      />
 
       {/* หน้าที่ซ่อน */}
       <Drawer.Screen

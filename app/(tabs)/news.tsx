@@ -127,8 +127,10 @@ export default function NewsScreen() {
             // บันทึกความสูงลง state
             setImageHeights((prev) => ({ ...prev, [img]: calculatedHeight }));
           },
-          (error) => {
-            console.error(`Couldn't get size for image: ${img}`, error);
+          () => {
+            // ไฟล์รูปไม่มีบนเซิร์ฟเวอร์ (เช่นเครื่อง dev ที่ไม่มีโฟลเดอร์ uploads/news) — ใช้ความสูงเริ่มต้น 200 ต่อไป
+            // ไม่ใช้ console.error เพราะจะเด้งจอแดงตอน dev ทั้งที่หน้าข่าวยังใช้งานได้ปกติ
+            console.log(`[news] ไม่พบรูป ${NEWS_IMG_BASE + img}`);
           },
         );
       });
