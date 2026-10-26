@@ -1,5 +1,5 @@
 import { useAuth } from "../_layout";
-import { DeviceEventEmitter, ActivityIndicator, Dimensions, Image, Modal, Platform, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, useColorScheme, View } from 'react-native';
+import { DeviceEventEmitter, ActivityIndicator, Dimensions, Image, Linking, Modal, Platform, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, useColorScheme, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CalendarPickerModal } from '../../components/DateTimeField';
 import { useFocusEffect } from "expo-router/react-navigation";
@@ -7,7 +7,7 @@ import axios from 'axios';
 import { BlurView } from 'expo-blur';
 import * as ImagePicker from 'expo-image-picker';
 import {
-    AlertTriangle, Building2, Calendar, CalendarClock, CalendarDays, Check, CheckCircle2, ChevronDown, Clock, FilePlus, HardHat, HelpCircle, History, ImageOff, Layers, LayoutGrid, Loader2, Lock, MapPin, Play, PlayCircle, Trash2, UploadCloud, User, UserCheck, Wallet, X, ArrowRight, RotateCcw,
+    AlertTriangle, Building2, Calendar, CalendarClock, CalendarDays, Check, CheckCircle2, ChevronDown, Clock, FilePlus, HardHat, HelpCircle, History, ImageOff, Layers, LayoutGrid, Loader2, Lock, MapPin, Phone, Play, PlayCircle, Trash2, UploadCloud, User, UserCheck, Wallet, X, ArrowRight, RotateCcw,
 } from 'lucide-react-native';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -117,7 +117,14 @@ const alertStyles = StyleSheet.create({
 
 // --- Types & Constants ---
 interface HistoryLog { old_date: string; new_date: string; reason: string; requested_by?: string; moved_at?: string; }
-interface Report { id: string; assigner_name: string; company: string; work_date: string; requested_due_date?: string; location: string; activity: string; details: string; status: 'pending' | 'processing' | 'approved' | 'cancelled' | 'postponed'; extension_status?: 'pending' | 'approved' | 'rejected'; extension_reason?: string; cost: string; final_cost: string | null; created_at: string; started_at: string | null; completed_at: string | null; image_path: string; completion_image: string; completed_by?: string | null; completed_by_name?: string | null; accepted_by?: string | null; accepted_by_name?: string | null; history_log?: HistoryLog[]; assigned_time?: string; started_time?: string; completed_time?: string; }
+// เบอร์ 10 หลักจัดรูปเป็น 081-234-5678 ให้อ่านง่าย (เหมือนหน้าเว็บ)
+const formatPhone = (p?: string) => {
+    const s = (p || '').trim();
+    return /^\d{10}$/.test(s) ? `${s.slice(0, 3)}-${s.slice(3, 6)}-${s.slice(6)}` : s;
+};
+const callPhone = (p?: string) => { const d = (p || '').replace(/[^\d+]/g, ''); if (d) Linking.openURL(`tel:${d}`); };
+
+interface Report { id: string; assigner_name: string; assigner_phone?: string; company: string; work_date: string; requested_due_date?: string; location: string; activity: string; details: string; status: 'pending' | 'processing' | 'approved' | 'cancelled' | 'postponed'; extension_status?: 'pending' | 'approved' | 'rejected'; extension_reason?: string; cost: string; final_cost: string | null; created_at: string; started_at: string | null; completed_at: string | null; image_path: string; completion_image: string; completed_by?: string | null; completed_by_name?: string | null; accepted_by?: string | null; accepted_by_name?: string | null; history_log?: HistoryLog[]; assigned_time?: string; started_time?: string; completed_time?: string; }
 
 const getCompanyTheme = (companyName: string, isDark: boolean) => {
     // อ้างอิงสีจากหน้าเว็บเป๊ะๆ
@@ -631,6 +638,12 @@ export default function DashboardScreen() {
                                                 <View style={[styles.avatarCircleGrand, { backgroundColor: gradientAvatar.bg }]}><Text style={[styles.avatarTextGrand, { color: gradientAvatar.text }]}>{item.assigner_name.charAt(0).toUpperCase()}</Text></View>
                                                 <View style={{ flex: 1 }}>
                                                     <Text style={styles.reportNameGrand} numberOfLines={1}>{item.assigner_name}</Text>
+                                                    {!!item.assigner_phone && (
+                                                        <TouchableOpacity style={styles.assignerPhoneRow} onPress={() => callPhone(item.assigner_phone)} hitSlop={{ top: 6, bottom: 6 }}>
+                                                            <Phone size={13} color="#3B82F6" />
+                                                            <Text style={styles.assignerPhoneText}>{formatPhone(item.assigner_phone)}</Text>
+                                                        </TouchableOpacity>
+                                                    )}
                                                     <Text style={styles.reportCompanyGrand}>{item.company ? item.company.replace(/,\s*/g, ', ') : '-'}</Text>
                                                 </View>
                                             </View>
@@ -714,6 +727,12 @@ export default function DashboardScreen() {
                                         <View style={{ flex: 1 }}>
                                             <Text style={styles.grandUserLabel}>ผู้มอบงาน</Text>
                                             <Text style={styles.grandUserName}>{selectedReport.assigner_name}</Text>
+                                            {!!selectedReport.assigner_phone && (
+                                                <TouchableOpacity style={[styles.assignerPhoneRow, { marginTop: 6 }]} onPress={() => callPhone(selectedReport.assigner_phone)}>
+                                                    <Phone size={15} color="#3B82F6" />
+                                                    <Text style={[styles.assignerPhoneText, { fontSize: 15 }]}>{formatPhone(selectedReport.assigner_phone)}</Text>
+                                                </TouchableOpacity>
+                                            )}
                                             <View style={styles.grandCompanyTag}><Text style={styles.grandCompanyTagText}>{selectedReport.company ? selectedReport.company.replace(/,\s*/g, ', ') : '-'}</Text></View>
                                         </View>
                                     </View>
@@ -1188,6 +1207,8 @@ const getStyles = (isDark: boolean) => {
         avatarCircleGrand: { width: 52, height: 52, borderRadius: 20, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 8 },
         avatarTextGrand: { fontWeight: '900', fontSize: 22 },
         reportNameGrand: { fontSize: 18, fontWeight: '900', color: theme.text },
+        assignerPhoneRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 3, alignSelf: 'flex-start' },
+        assignerPhoneText: { fontSize: 13, fontWeight: '800', color: theme.textSecondary, letterSpacing: 0.5 },
         reportCompanyGrand: { fontSize: 11, color: theme.textSecondary, marginTop: 6, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 1 },
         reportBodyGrand: { marginBottom: 20, borderLeftWidth: 2, borderLeftColor: theme.borderSolid, paddingLeft: 16, marginLeft: 24 },
         reportActivityGrand: { fontSize: 16, fontWeight: '700', color: theme.text, lineHeight: 24, marginBottom: 12 },

@@ -11,6 +11,10 @@
  * update_return_tax, get_submit_master_data, submit_doc,
  * submit_request, accept_request)
  *
+ * 26 ต.ค. 69 ตามเว็บ: ยกเลิกอนุมัติ (cancel_approve · เฉพาะคนที่กดอนุมัติ can_cancel_approve ต่อแถว)
+ *    · สิทธิ์รับใบกำกับรายฝ่าย (can_receive_tax_wh/_buyer/_acc) · ตัวกรอง "ตีกลับใบกำกับภาษี" (status=returned_tax)
+ *    · เลขที่ตีกลับใบกำกับ TR6910-00001 (return_tax_no · ค้นหาได้ในช่องค้นหา) · AC ตีกลับใบกำกับรายกล่อง (ac_item_return_tax)
+ *
  * "แจ้ง" (submit_request) แสดงเฉพาะผู้ไม่มีสิทธิ์ can_edit_document — พอร์ตตรรกะการแสดงปุ่ม
  * จาก DocumentDashboard.php เป๊ะ (มีสิทธิ์แก้ไข = เห็นปุ่มแก้ไข/ยกเลิกตรง, ไม่มีสิทธิ์ = เห็นปุ่มแจ้งแทน)
  * ปุ่ม "รับทราบ" (accept_request) ในริบบิ้นคำขอ โชว์ให้คนมีสิทธิ์ can_edit_document เท่านั้น
@@ -81,7 +85,7 @@ const DOCUMENT_API_URL = `${API_MODULES}/document_API_mobile.php`;
 // AC = เคลียร์เงินทดรอง (หลายกล่องร้านค้า) — แอปแสดงได้แต่แก้ไขไม่ได้ (ทำที่หน้าเว็บ)
 type DocType = 'PO' | 'AX' | 'AC';
 type DeptKey = 'warehouse' | 'purchase' | 'accounting';
-type StageFilter = 'all' | 'pending_approve' | 'approved' | 'pending_finance' | 'finance_received' | 'returned' | 'cancelled';
+type StageFilter = 'all' | 'pending_approve' | 'approved' | 'pending_finance' | 'finance_received' | 'returned' | 'returned_tax' | 'cancelled';
 // ชื่อแผนกฝั่ง API (คีย์ของ tax_pairs / tax_recv_defaults ใน get_list)
 type TaxDeptApiKey = 'wh' | 'buyer' | 'acc';
 // คู่ "ไฟล์ ↔ เลขที่ใบกำกับ" ตามลำดับจริงในคอลัมน์ (ไฟล์ว่าง = มีแต่เลขที่)
@@ -124,6 +128,9 @@ interface DocListItem {
   cancel_return_at?: string;
   cancel_return_tax_by?: string;
   cancel_return_tax_at?: string;
+  // เลขที่ตีกลับใบกำกับล่าสุด TR6910-00001 (ยกเลิกแล้วยังเก็บเลขไว้) · ยกเลิกอนุมัติได้เฉพาะคนที่กดอนุมัติ
+  return_tax_no?: string;
+  can_cancel_approve?: number | boolean;
 }
 // แถวไฟล์ที่ถูกลบ (get_file_trash)
 interface TrashRow {
@@ -174,6 +181,15 @@ interface AcItem {
   tax_note: string;
   receipts: Partial<Record<TaxDeptApiKey, AcReceipt>>;
   can_receive_tax: boolean;
+  // ตีกลับใบกำกับรายกล่อง (ac_item_return_tax) — return_tax_no = เลขล่าสุดของกล่อง (ยกเลิกแล้วยังเก็บไว้)
+  return_tax_by?: string;
+  return_tax_at?: string;
+  return_tax_remark?: string;
+  return_tax_no?: string;
+  cancel_return_tax_by?: string;
+  cancel_return_tax_at?: string;
+  is_tax_returned?: number | boolean;
+  can_return_tax?: number | boolean;
 }
 
 interface DocListItem {
@@ -281,6 +297,10 @@ interface Perms {
   can_save_refund: boolean;
   can_receive_warehouse: boolean;
   can_receive_tax: boolean;
+  // รับ/แก้ไขใบกำกับรายแผนก = รหัสเดียวกับยกเลิกการรับของแผนกนั้น (คุมทั้งช่องแบบเว็บ 23 ต.ค. 69)
+  can_receive_tax_wh: boolean;
+  can_receive_tax_buyer: boolean;
+  can_receive_tax_acc: boolean;
   // ปุ่ม "ยกเลิกการรับ" แยกสิทธิ์รายแผนก (btn_cancel_receive_wh / _buyer / _acc) — 1 ปุ่ม = 1 รหัส
   can_cancel_receive_wh: boolean;
   can_cancel_receive_buyer: boolean;
@@ -302,6 +322,9 @@ const DEFAULT_PERMS: Perms = {
   can_save_refund: false,
   can_receive_warehouse: false,
   can_receive_tax: false,
+  can_receive_tax_wh: false,
+  can_receive_tax_buyer: false,
+  can_receive_tax_acc: false,
   can_cancel_receive_wh: false,
   can_cancel_receive_buyer: false,
   can_cancel_receive_acc: false,
@@ -539,11 +562,11 @@ function docTypeLabel(d: DocListItem): { text: string; tone: DocTypeTone } {
 const CREDIT_OPTIONS = [15, 30, 45, 60, 90];
 const DEPT_META: Record<
   DeptKey,
-  { label: string; color: string; icon: keyof typeof Ionicons.glyphMap; step: string; apiKey: TaxDeptApiKey; cancelPerm: keyof Perms }
+  { label: string; color: string; icon: keyof typeof Ionicons.glyphMap; step: string; apiKey: TaxDeptApiKey; cancelPerm: keyof Perms; recvPerm: keyof Perms }
 > = {
-  warehouse: { label: 'คลัง', color: '#d97706', icon: 'cube-outline', step: 'wh_tax', apiKey: 'wh', cancelPerm: 'can_cancel_receive_wh' },
-  purchase: { label: 'จัดซื้อ', color: '#2563eb', icon: 'cart-outline', step: 'buyer_tax', apiKey: 'buyer', cancelPerm: 'can_cancel_receive_buyer' },
-  accounting: { label: 'บัญชี', color: '#9333ea', icon: 'calculator-outline', step: 'acc_tax', apiKey: 'acc', cancelPerm: 'can_cancel_receive_acc' },
+  warehouse: { label: 'คลัง', color: '#d97706', icon: 'cube-outline', step: 'wh_tax', apiKey: 'wh', cancelPerm: 'can_cancel_receive_wh', recvPerm: 'can_receive_tax_wh' },
+  purchase: { label: 'จัดซื้อ', color: '#2563eb', icon: 'cart-outline', step: 'buyer_tax', apiKey: 'buyer', cancelPerm: 'can_cancel_receive_buyer', recvPerm: 'can_receive_tax_buyer' },
+  accounting: { label: 'บัญชี', color: '#9333ea', icon: 'calculator-outline', step: 'acc_tax', apiKey: 'acc', cancelPerm: 'can_cancel_receive_acc', recvPerm: 'can_receive_tax_acc' },
 };
 const TAX_SRC_LABEL: Record<TaxDeptApiKey, string> = { wh: 'คลัง', buyer: 'จัดซื้อ', acc: 'บัญชี' };
 
@@ -719,6 +742,10 @@ async function fetchHistory(userId: string | number, dId: number) {
 
 async function apiApprove(userId: string | number, dId: number) {
   return apiMobilePost(DOCUMENT_API_URL, 'approve_document', { user_id: userId, doc_id: dId });
+}
+// ยกเลิกอนุมัติ — เฉพาะคนที่กดอนุมัติ (เซิร์ฟเวอร์เช็คชื่อ) · หมายเหตุไม่บังคับ ≤ 500 · กลับเป็น "รออนุมัติ"
+async function apiCancelApprove(userId: string | number, dId: number, cancel_remark: string) {
+  return apiMobilePost(DOCUMENT_API_URL, 'cancel_approve', { user_id: userId, doc_id: dId, cancel_remark });
 }
 async function apiSaveNote(userId: string | number, dId: number, doc_note: string) {
   return apiMobilePost(DOCUMENT_API_URL, 'save_note', { user_id: userId, doc_id: dId, doc_note });
@@ -896,6 +923,14 @@ async function apiAcItemReceive(userId: string | number, dId: number, itemId: nu
 async function apiAcItemCancelReceive(userId: string | number, dId: number, itemId: number, key: TaxDeptApiKey) {
   return apiMobilePost(DOCUMENT_API_URL, 'ac_item_cancel_receive', { user_id: userId, doc_id: dId, ac_item_id: itemId, dept: key });
 }
+// ตีกลับใบกำกับรายกล่อง / ยกเลิก (สิทธิ์ return_doc) — ตีกลับต้องมีสาเหตุ · ได้เลข TR ของกล่องนั้นกลับมา (return_tax_no)
+async function apiAcItemReturnTax(userId: string | number, dId: number, itemId: number, isReturning: boolean, remark: string) {
+  return apiMobilePost(DOCUMENT_API_URL, 'ac_item_return_tax', { user_id: userId, doc_id: dId, ac_item_id: itemId, is_returning: isReturning ? 1 : 0, return_remark: remark });
+}
+// กล่องร้านค้า AC ที่ถูกตีกลับใบกำกับค้างอยู่ — การ์ดในลิสต์/หน้ารายละเอียดสรุป "ตีกลับ N รายการ" แบบช่องตารางเว็บ
+function acReturnedItems(d: DocListItem): AcItem[] {
+  return (d.ac_items ?? []).filter((it) => truthy(it.is_tax_returned));
+}
 
 // ====================================================================
 // Main screen
@@ -948,6 +983,8 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
   const [voidPanelOpen, setVoidPanelOpen] = useState(false);
 
   const [approveModal, setApproveModal] = useState<{ visible: boolean; doc?: DocListItem; saving?: boolean }>({ visible: false });
+  // ยกเลิกอนุมัติ (เฉพาะคนที่กดอนุมัติ · หมายเหตุไม่บังคับ) — ปุ่มโผล่ตาม can_cancel_approve ของแถว
+  const [cancelApproveModal, setCancelApproveModal] = useState<{ visible: boolean; doc?: DocListItem; remark: string; saving?: boolean }>({ visible: false, remark: '' });
   // keepSlip/keepFull = สลิปเดิมที่ยังเก็บไว้ (undefined = ยังไม่ได้กดลบ ใช้ของเอกสาร) — กดลบได้แบบเว็บ ลงถังขยะตอนบันทึก
   const [financeModal, setFinanceModal] = useState<{ visible: boolean; doc?: DocListItem; slip: PickedFile[]; full: PickedFile[]; saving?: boolean; keepSlip?: string[]; keepFull?: string[] }>({ visible: false, slip: [], full: [] });
   // ดูรูปที่แนบไว้ (สลิป/พิสูจน์) ในแอปตรงๆ — แทนที่จะเด้งออกไปเบราว์เซอร์นอกด้วย Linking.openURL
@@ -1130,8 +1167,8 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
 
   // "แก้ไขข้อมูล" ของแผนกที่ลงรับแล้ว — เปิดป๊อปอัพรับใบกำกับเดิมพร้อมไฟล์ของแผนกนั้น + ไฟล์ของแผนกอื่นที่ยังไม่ถูกปฏิเสธ (:4310-4529)
   async function openDeptEdit(d: DocListItem, key: DeptKey) {
-    if (!perms.can_receive_tax) {
-      Alert.alert('ไม่มีสิทธิ์', 'คุณไม่มีสิทธิ์รับใบกำกับภาษี');
+    if (!perms[DEPT_META[key].recvPerm]) {
+      Alert.alert('ไม่มีสิทธิ์', `คุณไม่มีสิทธิ์แก้ไขใบกำกับของ${DEPT_META[key].label}`);
       return;
     }
     setDeptDetailModal({ visible: false });
@@ -1365,6 +1402,10 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
       can_save_refund: truthy(res?.can_save_refund),
       can_receive_warehouse: truthy(res?.can_receive_warehouse),
       can_receive_tax: truthy(res?.can_receive_tax),
+      // API รุ่นก่อน (ยังไม่มีคีย์รายแผนก) — ใช้ can_receive_tax เดิมทุกแผนก
+      can_receive_tax_wh: truthy(res?.can_receive_tax_wh ?? res?.can_receive_tax),
+      can_receive_tax_buyer: truthy(res?.can_receive_tax_buyer ?? res?.can_receive_tax),
+      can_receive_tax_acc: truthy(res?.can_receive_tax_acc ?? res?.can_receive_tax),
       can_cancel_receive_wh: truthy(res?.can_cancel_receive_wh),
       can_cancel_receive_buyer: truthy(res?.can_cancel_receive_buyer),
       can_cancel_receive_acc: truthy(res?.can_cancel_receive_acc),
@@ -1547,12 +1588,28 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
       const res = await apiApprove(user.id, docId(doc));
       setApproveModal({ visible: false });
       // ใส่ผู้อนุมัติจากคำตอบเซิร์ฟเวอร์ทันที แล้วค่อยดึงใบนี้ใหม่ — ปุ่ม "อนุมัติ" หายเลย กันกดซ้ำระหว่างรอ
-      // (เว็บเองไม่กันอนุมัติซ้ำ action 'approve' เขียนทับชื่อ/เวลาเสมอ จึงต้องกันที่หน้าจอ)
+      // (เซิร์ฟเวอร์กันอนุมัติทับแล้ว: มีคนอนุมัติไปก่อน = error already_approved ไม่เขียนทับชื่อ)
       patchDoc(docId(doc), { approver_name: String(res.approver_name ?? user.fullname ?? ''), approved_at: String(res.approved_at ?? ''), is_approved: 1 });
       refreshAfterAction(docId(doc));
     } catch (e: any) {
       Alert.alert('อนุมัติไม่สำเร็จ', e?.message ?? 'เกิดข้อผิดพลาด');
       setApproveModal((s) => ({ ...s, saving: false }));
+      refreshAfterAction(docId(doc)); // อาจมีคนอนุมัติไปก่อนแล้ว — ดึงสถานะล่าสุดมาโชว์
+    }
+  }
+
+  async function confirmCancelApprove() {
+    const doc = cancelApproveModal.doc;
+    if (!doc || !user) return;
+    setCancelApproveModal((s) => ({ ...s, saving: true }));
+    try {
+      await apiCancelApprove(user.id, docId(doc), cancelApproveModal.remark.trim());
+      setCancelApproveModal({ visible: false, remark: '' });
+      refreshAfterAction(docId(doc));
+      Alert.alert('ยกเลิกอนุมัติแล้ว', 'เอกสารกลับเป็นรออนุมัติ');
+    } catch (e: any) {
+      Alert.alert('ยกเลิกไม่สำเร็จ', e?.message ?? 'เกิดข้อผิดพลาด');
+      setCancelApproveModal((s) => ({ ...s, saving: false }));
     }
   }
 
@@ -1648,9 +1705,11 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
     }
     setReturnTaxModal((s) => ({ ...s, saving: true }));
     try {
-      await apiUpdateReturnTax(user.id, docId(doc), !isReturned, returnTaxModal.text.trim());
+      const res = await apiUpdateReturnTax(user.id, docId(doc), !isReturned, returnTaxModal.text.trim());
       setReturnTaxModal({ visible: false, text: '' });
       refreshAfterAction(docId(doc));
+      // ตีกลับ = ระบบออกเลขที่ TR6910-00001 ให้ — บอกเลขทันทีแบบ toast บนเว็บ
+      if (!isReturned) Alert.alert('ตีกลับใบกำกับแล้ว', res?.return_tax_no ? `เลขที่ ${res.return_tax_no}` : 'บันทึกเรียบร้อย');
     } catch (e: any) {
       Alert.alert('บันทึกไม่สำเร็จ', e?.message ?? 'เกิดข้อผิดพลาด');
       setReturnTaxModal((s) => ({ ...s, saving: false }));
@@ -1775,10 +1834,33 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
   const [acPreviewUrl, setAcPreviewUrl] = useState('');
   // รายชื่อร้านค้าทุกกล่องของเอกสาร AC (ชิป "N รายการร้านค้า" บนการ์ด) — openSupplierPopup() บนเว็บ
   const [acShops, setAcShops] = useState<{ visible: boolean; doc?: DocListItem; q: string }>({ visible: false, q: '' });
+  // ตีกลับใบกำกับรายกล่อง / ยกเลิก (acItemReturnTax บนเว็บ) — เปิดจากกล่องร้านค้าในหน้ารายละเอียด
+  const [acReturnModal, setAcReturnModal] = useState<{ visible: boolean; doc?: DocListItem; item?: AcItem; text: string; saving?: boolean }>({ visible: false, text: '' });
+
+  async function confirmAcReturnTax() {
+    const { doc, item, text } = acReturnModal;
+    if (!doc || !item || !user) return;
+    const returning = !truthy(item.is_tax_returned);
+    if (returning && !text.trim()) {
+      Alert.alert('กรุณาระบุสาเหตุ', 'ต้องกรอกสาเหตุที่ตีกลับใบกำกับก่อนยืนยัน');
+      return;
+    }
+    setAcReturnModal((s) => ({ ...s, saving: true }));
+    try {
+      const res = await apiAcItemReturnTax(user.id, docId(doc), item.id, returning, text.trim());
+      setAcReturnModal({ visible: false, text: '' });
+      refreshAfterAction(docId(doc));
+      if (returning) Alert.alert('ตีกลับใบกำกับแล้ว', `รายการที่ ${item.line_no}: ${item.supplier_name}${res?.return_tax_no ? `\nเลขที่ ${res.return_tax_no}` : ''}`);
+    } catch (e: any) {
+      Alert.alert('บันทึกไม่สำเร็จ', e?.message ?? 'เกิดข้อผิดพลาด');
+      setAcReturnModal((s) => ({ ...s, saving: false }));
+    }
+  }
 
   async function openAcReceive(d: DocListItem, it: AcItem, key: TaxDeptApiKey) {
-    if (!perms.can_receive_tax) {
-      Alert.alert('ไม่มีสิทธิ์', 'คุณไม่มีสิทธิ์รับใบกำกับภาษี');
+    const meta = DEPT_META[AC_RECV_DEPTS.find((x) => x.key === key)?.dept ?? 'warehouse'];
+    if (!perms[meta.recvPerm]) {
+      Alert.alert('ไม่มีสิทธิ์', `คุณไม่มีสิทธิ์รับใบกำกับของ${meta.label}`);
       return;
     }
     // คู่เลขที่/ไฟล์ของกล่องต้องเป็นชุดล่าสุด — ตัวที่ไม่ได้ส่งกลับ เซิร์ฟเวอร์นับว่าถูกเอาออก
@@ -2009,6 +2091,7 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
   if (docTypeFilter !== 'all') activeFilterChips.push({ key: 'type', label: docTypeFilter, clear: () => setDocTypeFilter('all') });
   if (specialFilter !== 'none') activeFilterChips.push({ key: 'special', label: SPECIAL_LABEL[specialFilter], clear: () => setSpecialFilter('none') });
   if (stageFilter === 'returned') activeFilterChips.push({ key: 'returned', label: 'ตีกลับ (แก้ไข)', clear: () => setStageFilter('all') });
+  if (stageFilter === 'returned_tax') activeFilterChips.push({ key: 'returned_tax', label: 'ตีกลับใบกำกับภาษี', clear: () => setStageFilter('all') });
   if (stageFilter === 'cancelled') activeFilterChips.push({ key: 'cancelled', label: 'ยกเลิกแล้ว', clear: () => setStageFilter('all') });
   selectedCompanies.forEach((cid) => {
     const name = kpiCompanies.find((c) => c.id === cid)?.name ?? `บริษัท #${cid}`;
@@ -2039,7 +2122,7 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
           )}
           <View style={styles.topBarSearch}>
             <Ionicons name="search" size={16} color="#94a3b8" />
-            <TextInput style={styles.searchInput} placeholder="ค้นหาเลขเอกสาร/ซัพพลายเออร์..." placeholderTextColor="#94a3b8" value={search} onChangeText={setSearch} />
+            <TextInput style={styles.searchInput} placeholder="ค้นหาเลขเอกสาร/ซัพพลายเออร์/เลข TR..." placeholderTextColor="#94a3b8" value={search} onChangeText={setSearch} />
             {search.length > 0 && (
               <TouchableOpacity onPress={() => setSearch('')}>
                 <Ionicons name="close-circle" size={16} color="#cbd5e1" />
@@ -2148,6 +2231,15 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
                     count={kpis?.count_returned}
                     active={stageFilter === 'returned'}
                     onPress={() => setStageFilter((f) => (f === 'returned' ? 'all' : 'returned'))}
+                  />
+                  {/* ปุ่ม "ตีกลับใบกำกับภาษี" ข้างตีกลับ (แก้ไข) แบบเว็บ — status ตัวเดียวกัน กดปุ่มหนึ่งปิดอีกปุ่ม · นับรวมกล่อง AC */}
+                  <SheetOption
+                    label="ตีกลับใบกำกับภาษี"
+                    icon="receipt-outline"
+                    activeColor="#dc2626"
+                    count={kpis?.count_returned_tax}
+                    active={stageFilter === 'returned_tax'}
+                    onPress={() => setStageFilter((f) => (f === 'returned_tax' ? 'all' : 'returned_tax'))}
                   />
                 </View>
               </SheetGroup>
@@ -2527,6 +2619,12 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
                 );
               })}
             </View>
+            {truthy(it.is_tax_returned) && (
+              <View style={rtStyles.chip}>
+                <Ionicons name="arrow-undo" size={11} color="#b91c1c" />
+                <Text style={rtStyles.chipText} numberOfLines={1}>ตีกลับใบกำกับ{it.return_tax_no ? ` ${it.return_tax_no}` : ''}</Text>
+              </View>
+            )}
           </View>
         ))}
       </View>
@@ -2627,16 +2725,19 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
                     {AC_RECV_DEPTS.map(({ key, dept }) => {
                       const meta = DEPT_META[dept];
                       const r = it.receipts?.[key];
+                      // สิทธิ์ของช่องนั้นคุมทั้งช่อง (รับ/ดูรายละเอียดที่แก้ไขได้/ยกเลิก) แบบเว็บ — ไม่มีสิทธิ์ = ปุ่มล็อก
+                      const can = perms[meta.recvPerm];
                       if (!r) {
-                        return (
-                          <TouchableOpacity
-                            key={key}
-                            style={[acStyles.recvBtn, { backgroundColor: meta.color }]}
-                            onPress={() => (perms.can_receive_tax ? openAcReceive(d, it, key) : Alert.alert('ไม่มีสิทธิ์', 'คุณไม่มีสิทธิ์รับใบกำกับภาษี'))}
-                          >
+                        return can ? (
+                          <TouchableOpacity key={key} style={[acStyles.recvBtn, { backgroundColor: meta.color }]} onPress={() => openAcReceive(d, it, key)}>
                             <Ionicons name={meta.icon} size={13} color="#fff" />
                             <Text style={acStyles.recvBtnText}>{meta.label} (รับใบกำกับ)</Text>
                           </TouchableOpacity>
+                        ) : (
+                          <View key={key} style={[acStyles.recvBtn, rtStyles.lockedBtn]}>
+                            <Ionicons name="lock-closed" size={12} color="#94a3b8" />
+                            <Text style={rtStyles.lockedBtnText}>{meta.label} (รับใบกำกับ)</Text>
+                          </View>
                         );
                       }
                       return (
@@ -2652,22 +2753,58 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
                               {r.note}
                             </Text>
                           )}
-                          <View style={styles.deptReceivedBtnRow}>
-                            <TouchableOpacity style={styles.outlineBtnGreen} onPress={() => openAcReceive(d, it, key)}>
-                              <Ionicons name="search" size={11} color="#059669" />
-                              <Text style={styles.outlineBtnGreenText}>ดูรายละเอียด</Text>
-                            </TouchableOpacity>
-                            {perms[meta.cancelPerm] && (
-                              <TouchableOpacity style={styles.outlineBtnNeutral} onPress={() => askAcCancelReceive(d, it, key, dept)}>
-                                <Ionicons name="close-circle-outline" size={11} color="#64748b" />
-                                <Text style={styles.outlineBtnNeutralText}>ยกเลิกการรับ</Text>
+                          {/* "ดูรายละเอียด" เปิดป๊อปอัปรับใบกำกับ (แก้ไขได้) — เว็บซ่อนพร้อมปุ่มยกเลิกเมื่อไม่มีสิทธิ์ของช่องนั้น */}
+                          {can && (
+                            <View style={styles.deptReceivedBtnRow}>
+                              <TouchableOpacity style={styles.outlineBtnGreen} onPress={() => openAcReceive(d, it, key)}>
+                                <Ionicons name="search" size={11} color="#059669" />
+                                <Text style={styles.outlineBtnGreenText}>ดูรายละเอียด</Text>
                               </TouchableOpacity>
-                            )}
-                          </View>
+                              {perms[meta.cancelPerm] && (
+                                <TouchableOpacity style={styles.outlineBtnNeutral} onPress={() => askAcCancelReceive(d, it, key, dept)}>
+                                  <Ionicons name="close-circle-outline" size={11} color="#64748b" />
+                                  <Text style={styles.outlineBtnNeutralText}>ยกเลิกการรับ</Text>
+                                </TouchableOpacity>
+                              )}
+                            </View>
+                          )}
                         </View>
                       );
                     })}
                   </View>
+                )}
+
+                {/* ตีกลับใบกำกับรายกล่อง (กล่องใบกำกับ 7%/รอใบกำกับ) — เลข TR กล่องละเลข · สิทธิ์ return_doc · บัญชีลงรับกล่อง = ปลดเอง */}
+                {truthy(it.is_tax_returned) ? (
+                  <View style={rtStyles.box}>
+                    <View style={rtStyles.boxHead}>
+                      <Ionicons name="arrow-undo" size={12} color="#b91c1c" />
+                      <Text style={rtStyles.boxTitle}>ตีกลับใบกำกับ</Text>
+                      {!!it.return_tax_no && <Text style={rtStyles.boxNo}>{it.return_tax_no}</Text>}
+                    </View>
+                    <Text style={rtStyles.boxLine}>โดย {it.return_tax_by || '-'} · {formatShortThaiDateTime(it.return_tax_at)}</Text>
+                    <Text style={rtStyles.boxRemark}>สาเหตุ: {it.return_tax_remark || '- ไม่ระบุ -'}</Text>
+                    {truthy(it.can_return_tax) && perms.can_return_document && (
+                      <TouchableOpacity style={[styles.outlineBtnNeutral, { alignSelf: 'flex-start', marginTop: 6 }]} onPress={() => setAcReturnModal({ visible: true, doc: d, item: it, text: '' })}>
+                        <Ionicons name="close-circle-outline" size={11} color="#64748b" />
+                        <Text style={styles.outlineBtnNeutralText}>ยกเลิกการตีกลับ</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                ) : (
+                  <>
+                    {!!it.cancel_return_tax_by && (
+                      <Text style={nonacStyles.histLine}>
+                        {it.return_tax_no ? `${it.return_tax_no} · ` : ''}ยกเลิกการตีกลับใบกำกับโดย {it.cancel_return_tax_by} ({formatShortThaiDateTime(it.cancel_return_tax_at)})
+                      </Text>
+                    )}
+                    {truthy(it.can_return_tax) && perms.can_return_document && (
+                      <TouchableOpacity style={[nonacStyles.outlineRed, { alignSelf: 'flex-start', marginTop: 8 }]} onPress={() => setAcReturnModal({ visible: true, doc: d, item: it, text: '' })}>
+                        <Ionicons name="arrow-undo" size={12} color="#dc2626" />
+                        <Text style={nonacStyles.outlineRedText}>ตีกลับใบกำกับ</Text>
+                      </TouchableOpacity>
+                    )}
+                  </>
                 )}
               </View>
             </View>
@@ -2911,6 +3048,21 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
             <Text style={acStyles.shopChipText}>{d.ac_items_count} รายการร้านค้า</Text>
           </TouchableOpacity>
         )}
+        {/* ตีกลับใบกำกับค้างอยู่ — เลข TR ของใบ หรือจำนวนกล่อง AC ที่ถูกตีกลับ (ช่อง "ตีกลับใบกำกับภาษี" บนเว็บ) */}
+        {(() => {
+          const rtBoxes = acReturnedItems(d);
+          const label = truthy(d.is_tax_returned)
+            ? `ตีกลับใบกำกับ${d.return_tax_no ? ` ${d.return_tax_no}` : ''}`
+            : rtBoxes.length > 0
+              ? `ตีกลับใบกำกับ ${rtBoxes.length} รายการ`
+              : '';
+          return label ? (
+            <View style={rtStyles.chip}>
+              <Ionicons name="arrow-undo" size={11} color="#b91c1c" />
+              <Text style={rtStyles.chipText} numberOfLines={1}>{label}</Text>
+            </View>
+          ) : null;
+        })()}
         <Text style={styles.dateText}>{formatShortThaiDateTime(d.created_at)}</Text>
 
         <View style={styles.cardSummaryBottomRow}>
@@ -2973,7 +3125,8 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
         onPress: () => (perms.can_return_document ? setReturnModal({ visible: true, doc: d, text: d.return_remark ?? '' }) : Alert.alert('ไม่มีสิทธิ์', 'คุณไม่มีสิทธิ์ตีกลับเอกสาร')),
       });
     }
-    if (!isTaxReturned) {
+    // AC: ใบกำกับอยู่รายกล่องร้านค้า → ตีกลับทีละกล่องในส่วนรายการเคลียร์เงินทดรอง (เว็บไม่มีปุ่มตีกลับทั้งใบ)
+    if (!isTaxReturned && !isAc) {
       menuItems.push({
         key: 'returnTax',
         label: 'ตีกลับใบกำกับภาษี',
@@ -3277,8 +3430,15 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
                   {renderSectionTitle('git-commit-outline', 'สถานะเอกสาร')}
                   {renderStatusBoxes(d)}
                   {/* ส่วนเสริมนอก AC: ยกเลิกการรับของการเงิน (เฉพาะคนที่กดรับ) + ประวัติยกเลิกการรับ (มีเมื่อเคยยกเลิก) — :4050-4061, :4158-4164 */}
-                  {(truthy(d.can_cancel_finance_receive) || Number(d.fin_cancel_count ?? 0) > 0) && (
+                  {(truthy(d.can_cancel_approve) || truthy(d.can_cancel_finance_receive) || Number(d.fin_cancel_count ?? 0) > 0) && (
                     <View style={nonacStyles.btnRow}>
+                      {/* ยกเลิกอนุมัติ — เฉพาะคนที่กดอนุมัติ ไม่มีรหัสสิทธิ์ ไม่ยกเว้น admin (แบบปุ่มเล็กในช่องอนุมัติบนเว็บ) */}
+                      {truthy(d.can_cancel_approve) && (
+                        <TouchableOpacity style={nonacStyles.outlineRed} onPress={() => setCancelApproveModal({ visible: true, doc: d, remark: '' })}>
+                          <Ionicons name="arrow-undo" size={12} color="#dc2626" />
+                          <Text style={nonacStyles.outlineRedText}>ยกเลิกอนุมัติ</Text>
+                        </TouchableOpacity>
+                      )}
                       {truthy(d.can_cancel_finance_receive) && (
                         <TouchableOpacity style={nonacStyles.outlineRed} onPress={() => setFinCancelModal({ visible: true, doc: d, remark: '' })}>
                           <Ionicons name="arrow-undo" size={12} color="#dc2626" />
@@ -3387,19 +3547,21 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
                           return (
                             <View key={key} style={styles.actionRow}>
                               <Text style={styles.actionRowLabel}>{meta.label} (รับใบกำกับ)</Text>
-                              <ActionPill
-                                icon={meta.icon}
-                                label={`${meta.label}รับเอกสาร`}
-                                bg={meta.color}
-                                onPress={() => {
-                                  if (!perms.can_receive_tax) {
-                                    Alert.alert('ไม่มีสิทธิ์', 'คุณไม่มีสิทธิ์รับใบกำกับภาษี');
-                                    return;
-                                  }
+                              {/* สิทธิ์รายแผนก (btn_cancel_receive_*) คุมทั้งช่องแบบเว็บ — ไม่มีสิทธิ์ = ป้ายล็อกแทนปุ่ม */}
+                              {perms[meta.recvPerm] ? (
+                                <ActionPill
+                                  icon={meta.icon}
+                                  label={`${meta.label}รับเอกสาร`}
+                                  bg={meta.color}
                                   // ไฟล์ใบกำกับที่แผนกก่อนหน้าบันทึกไว้ถูกดึงมาเป็นช่องรอให้อัตโนมัติ (ไม่ต้องแนบซ้ำ กดเอาออกได้)
-                                  openDeptReceive(d, key);
-                                }}
-                              />
+                                  onPress={() => openDeptReceive(d, key)}
+                                />
+                              ) : (
+                                <View style={rtStyles.lockedPill}>
+                                  <Ionicons name="lock-closed" size={12} color="#94a3b8" />
+                                  <Text style={rtStyles.lockedBtnText}>ไม่มีสิทธิ์</Text>
+                                </View>
+                              )}
                             </View>
                           );
                         }
@@ -3445,6 +3607,7 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
                     <View style={styles.actionRow}>
                       <View style={{ flex: 1 }}>
                         <Text style={styles.actionRowLabel}>ตีกลับใบกำกับภาษี</Text>
+                        {!!d.return_tax_no && <Text style={rtStyles.no}>เลขที่ {d.return_tax_no}</Text>}
                         <Text style={styles.actionRowSub} numberOfLines={2}>
                           ตีกลับแล้ว — {d.return_tax_remark ?? ''}
                         </Text>
@@ -3461,7 +3624,9 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
                   )}
                   {/* ส่วนเสริมนอก AC: ประวัติยกเลิกการตีกลับใบกำกับ (:4619-4627) */}
                   {!isTaxReturned && !!d.cancel_return_tax_by && (
-                    <Text style={nonacStyles.histLine}>ยกเลิกการตีกลับใบกำกับโดย {d.cancel_return_tax_by} ({formatShortThaiDateTime(d.cancel_return_tax_at)})</Text>
+                    <Text style={nonacStyles.histLine}>
+                      {d.return_tax_no ? `${d.return_tax_no} · ` : ''}ยกเลิกการตีกลับใบกำกับโดย {d.cancel_return_tax_by} ({formatShortThaiDateTime(d.cancel_return_tax_at)})
+                    </Text>
                   )}
                 </View>
 
@@ -3759,6 +3924,62 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
           </TouchableOpacity>
         </ModalShell>
 
+        {/* Modal: ตีกลับใบกำกับรายกล่อง (AC) / ยกเลิก — ตีกลับต้องมีสาเหตุ ได้เลข TR ของกล่องนั้น */}
+        <ModalShell
+          visible={acReturnModal.visible}
+          title={truthy(acReturnModal.item?.is_tax_returned) ? '↩️ ยกเลิกการตีกลับใบกำกับ' : '⚠️ ตีกลับใบกำกับ (รายกล่อง)'}
+          color="#ef4444"
+          onClose={() => setAcReturnModal({ visible: false, text: '' })}
+        >
+          {!!acReturnModal.item && (
+            <Text style={styles.hintText}>
+              รายการที่ {acReturnModal.item.line_no}: {acReturnModal.item.supplier_name || '-'}
+              {truthy(acReturnModal.item.is_tax_returned) && acReturnModal.item.return_tax_no ? ` · ${acReturnModal.item.return_tax_no}` : ''}
+            </Text>
+          )}
+          {!truthy(acReturnModal.item?.is_tax_returned) && (
+            <>
+              <FieldLabel text="สาเหตุที่ตีกลับ" required />
+              <TextInput
+                style={[styles.input, styles.textarea]}
+                placeholder="ระบุสาเหตุ..."
+                placeholderTextColor="#94a3b8"
+                multiline
+                value={acReturnModal.text}
+                onChangeText={(v) => setAcReturnModal((s) => ({ ...s, text: v }))}
+              />
+            </>
+          )}
+          <TouchableOpacity style={[styles.modalSaveBtn, { backgroundColor: '#ef4444', opacity: acReturnModal.saving ? 0.6 : 1 }]} onPress={confirmAcReturnTax} disabled={acReturnModal.saving}>
+            <Text style={styles.modalSaveBtnText}>
+              {acReturnModal.saving ? 'กำลังบันทึก...' : truthy(acReturnModal.item?.is_tax_returned) ? 'ยืนยันยกเลิกการตีกลับ' : 'ยืนยันตีกลับ'}
+            </Text>
+          </TouchableOpacity>
+        </ModalShell>
+
+        {/* Modal: ยกเลิกอนุมัติ (เฉพาะคนที่กดอนุมัติ · หมายเหตุไม่บังคับ ≤ 500) */}
+        <ModalShell visible={cancelApproveModal.visible} title="↩️ ยกเลิกอนุมัติ" color="#dc2626" onClose={() => setCancelApproveModal({ visible: false, remark: '' })}>
+          {!!cancelApproveModal.doc && (
+            <Text style={styles.hintText}>
+              เอกสาร {cancelApproveModal.doc.doc_type} {cancelApproveModal.doc.doc_number} · อนุมัติเมื่อ {formatShortThaiDateTime(cancelApproveModal.doc.approved_at)}
+            </Text>
+          )}
+          <Text style={styles.hintText}>ยกเลิกแล้วเอกสารกลับเป็น "รออนุมัติ"</Text>
+          <FieldLabel text="หมายเหตุ (ถ้ามี)" />
+          <TextInput
+            style={[styles.input, styles.textarea]}
+            placeholder="ระบุเหตุผล..."
+            placeholderTextColor="#94a3b8"
+            multiline
+            maxLength={500}
+            value={cancelApproveModal.remark}
+            onChangeText={(v) => setCancelApproveModal((s) => ({ ...s, remark: v }))}
+          />
+          <TouchableOpacity style={[styles.modalSaveBtn, { backgroundColor: '#dc2626', opacity: cancelApproveModal.saving ? 0.6 : 1 }]} onPress={confirmCancelApprove} disabled={cancelApproveModal.saving}>
+            <Text style={styles.modalSaveBtnText}>{cancelApproveModal.saving ? 'กำลังบันทึก...' : 'ยืนยันยกเลิกอนุมัติ'}</Text>
+          </TouchableOpacity>
+        </ModalShell>
+
         {/* Modal: เครดิต */}
         <ModalShell visible={creditModal.visible} title="📅 ระบุเครดิต (Credit Term)" color="#4f46e5" onClose={() => setCreditModal({ visible: false })}>
           <FieldLabel text="เลือกเครดิต (วัน)" />
@@ -3939,8 +4160,8 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
                   </View>
                 )}
 
-                {/* ส่วนเสริมนอก AC: "แก้ไขข้อมูล" แบบปุ่มท้ายป๊อปอัพเว็บ (เอกสารที่ยกเลิกไม่มีปุ่มนี้) */}
-                {!ddCancelled && (
+                {/* ส่วนเสริมนอก AC: "แก้ไขข้อมูล" แบบปุ่มท้ายป๊อปอัพเว็บ (เอกสารที่ยกเลิกไม่มีปุ่มนี้) · เฉพาะคนมีสิทธิ์ของแผนกนี้ */}
+                {!ddCancelled && perms[DEPT_META[ddDept].recvPerm] && (
                   <TouchableOpacity
                     style={[styles.modalSaveBtn, { backgroundColor: DEPT_META[ddDept].color }]}
                     onPress={() => openDeptEdit(ddDoc, ddDept)}
@@ -4371,6 +4592,22 @@ const nonacStyles = StyleSheet.create({
   finHistWho: { flex: 1, fontSize: 12.5, fontWeight: '700', color: '#0f172a' },
   finHistWhen: { fontSize: 11.5, color: '#64748b' },
   finHistRemark: { fontSize: 13, color: '#334155', marginTop: 6 },
+});
+
+// ── 26 ต.ค. 69 — ตีกลับใบกำกับ (เลข TR / รายกล่อง AC) + ปุ่มล็อกตามสิทธิ์รายแผนก ──
+const rtStyles = StyleSheet.create({
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', backgroundColor: '#fef2f2', borderWidth: 1, borderColor: '#fecaca', borderRadius: 12, paddingVertical: 2, paddingHorizontal: 8, marginTop: 4 },
+  chipText: { color: '#b91c1c', fontSize: 11, fontWeight: '700' },
+  no: { color: '#b91c1c', fontSize: 12.5, fontWeight: '800', letterSpacing: 0.3, marginTop: 2 },
+  box: { backgroundColor: '#fef2f2', borderWidth: 1, borderColor: '#fecaca', borderRadius: 8, padding: 8, marginTop: 8 },
+  boxHead: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  boxTitle: { flex: 1, color: '#b91c1c', fontSize: 12, fontWeight: '800' },
+  boxNo: { color: '#b91c1c', fontSize: 12, fontWeight: '800', letterSpacing: 0.3 },
+  boxLine: { color: '#7f1d1d', fontSize: 11.5, marginTop: 3 },
+  boxRemark: { color: '#dc2626', fontSize: 12, marginTop: 2 },
+  lockedBtn: { backgroundColor: '#f1f5f9', borderWidth: 1, borderColor: '#e2e8f0' },
+  lockedBtnText: { color: '#94a3b8', fontSize: 12, fontWeight: '700' },
+  lockedPill: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#f1f5f9', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 16, paddingVertical: 6, paddingHorizontal: 10 },
 });
 
 // ปุ่มพื้นทึบไฮไลต์สี ให้หน้าตาตรงกับปุ่ม action บนตารางของเว็บ (ตีกลับ/คืนเงิน/ระบุเครดิต ฯลฯ)
