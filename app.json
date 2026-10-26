@@ -4,7 +4,7 @@
     "slug": "TJC-ROUP",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/LOGO TJCV.002.png",
+    "icon": "./assets/images/icon-tjc.png",
     "scheme": "tjcmobileapp",
     "userInterfaceStyle": "automatic",
     "ios": {
@@ -17,7 +17,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/LOGO TJCV.002.png",
+        "foregroundImage": "./assets/images/adaptive-icon-tjc.png",
         "backgroundColor": "#ffffff"
       },
       "package": "com.tjcgroup.tjcmobileapp"
