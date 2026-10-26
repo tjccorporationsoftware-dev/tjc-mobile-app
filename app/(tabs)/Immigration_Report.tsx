@@ -16,6 +16,7 @@ import {
     ImagePlus,
     ListChecks,
     MapPin,
+    Phone,
     Save,
     User,
     X
@@ -26,6 +27,7 @@ import {
     Dimensions,
     Image,
     KeyboardAvoidingView,
+    Linking,
     Modal,
     Platform,
     SafeAreaView,
@@ -309,6 +311,8 @@ export default function ImmigrationFormScreen() {
   const [date, setDate] = useState<Date>(new Date());
   const [showDatePicker, setShowDatePicker] = useState<boolean>(false);
   const [assignerName, setAssignerName] = useState<string>("");
+  // เบอร์โทรผู้มอบหมาย จาก users.phone (null = ยังโหลดไม่เสร็จ/โหลดไม่ได้ → ไม่ขึ้นข้อความ "ไม่มีเบอร์")
+  const [assignerPhone, setAssignerPhone] = useState<string | null>(null);
   const [location, setLocation] = useState<string>("");
   const [activity, setActivity] = useState<string>("");
   const [details, setDetails] = useState<string>("");
@@ -470,6 +474,15 @@ export default function ImmigrationFormScreen() {
             const nameToShow =
               user.fullname || user.name || user.full_name || "";
             if (nameToShow) setAssignerName(nameToShow);
+            // ข้อมูลตอน login ไม่มีเบอร์ → ดึงสดจากโปรไฟล์ (ตัวเดียวกับหน้าโปรไฟล์)
+            if (user.username) {
+              try {
+                const res = await axios.get(
+                  `${API_BASE}/api_mobile.php?action=get_user_profile&username=${encodeURIComponent(user.username)}`,
+                );
+                if (res.data && res.data.username) setAssignerPhone(String(res.data.phone || "").trim());
+              } catch {}
+            }
           }
         } catch (error) {
           console.log("❌ Error fetching user data:", error);
@@ -825,6 +838,25 @@ export default function ImmigrationFormScreen() {
                   }
                 />
               </View>
+              {assignerPhone ? (
+                <TouchableOpacity
+                  style={styles.assignerPhoneRow}
+                  onPress={() => Linking.openURL(`tel:${assignerPhone.replace(/[^\d+]/g, "")}`)}
+                >
+                  <Phone color="#3B82F6" size={14} />
+                  <Text style={styles.assignerPhoneLabel}>เบอร์โทร</Text>
+                  <Text style={styles.assignerPhoneText}>
+                    {/^\d{10}$/.test(assignerPhone)
+                      ? `${assignerPhone.slice(0, 3)}-${assignerPhone.slice(3, 6)}-${assignerPhone.slice(6)}`
+                      : assignerPhone}
+                  </Text>
+                </TouchableOpacity>
+              ) : assignerPhone === "" ? (
+                <View style={styles.assignerPhoneRow}>
+                  <Phone color="#F59E0B" size={14} />
+                  <Text style={[styles.assignerPhoneLabel, { color: "#D97706" }]}>ไม่มีเบอร์โทรในระบบ</Text>
+                </View>
+              ) : null}
             </View>
 
             {/* [NEW] สถานที่ปฏิบัติงาน + Autocomplete */}
@@ -1233,6 +1265,9 @@ const getStyles = (isDark: boolean) => {
       paddingHorizontal: 12,
     },
     inputIcon: { marginRight: 8 },
+    assignerPhoneRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 8, paddingLeft: 4, alignSelf: "flex-start" },
+    assignerPhoneLabel: { fontSize: 12, fontWeight: "600", color: theme.textSecondary },
+    assignerPhoneText: { fontSize: 13, fontWeight: "bold", color: theme.text, letterSpacing: 0.5 },
     textInput: { flex: 1, fontSize: 14, color: theme.text, height: "100%" },
     inputText: { fontSize: 14, color: theme.text },
     textArea: {

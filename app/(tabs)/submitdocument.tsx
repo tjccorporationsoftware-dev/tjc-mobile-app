@@ -171,8 +171,11 @@ interface SubmitMasterData {
   bank_rules: Record<string, number>;
   suppliers: string[];
   accounts_history: AccountHistoryEntry[];
+  // ฝ่ายที่ลงรับใบกำกับ 7% ได้ = สิทธิ์ของช่องนั้นในแดชบอร์ด (btn_cancel_receive_* แบบ tax_dept_can() ของเว็บ)
+  taxDeptCan: Record<RecvDept, boolean>;
 }
-const EMPTY_MASTER: SubmitMasterData = { companies: [], banks: [], bank_rules: {}, suppliers: [], accounts_history: [] };
+// ก่อนโหลดเสร็จ / API รุ่นก่อน (ไม่มีคีย์สิทธิ์) = ไม่ล็อก — ด่านจริงอยู่ฝั่งเซิร์ฟเวอร์ (submit_doc + receive_tax_*)
+const EMPTY_MASTER: SubmitMasterData = { companies: [], banks: [], bank_rules: {}, suppliers: [], accounts_history: [], taxDeptCan: { wh: true, buyer: true, acc: true } };
 
 const CREDIT_PRESETS = [15, 30, 45, 60, 90];
 const ATTACHMENT_OPTIONS: { value: AttachmentType; icon: keyof typeof Ionicons.glyphMap; color: string }[] = [
@@ -458,6 +461,11 @@ export default function SubmitDocumentScreen({ docId, onBack, onSaved }: SubmitD
           bank_rules: res.bank_rules ?? {},
           suppliers: res.suppliers ?? [],
           accounts_history: res.accounts_history ?? [],
+          taxDeptCan: {
+            wh: res.can_receive_tax_wh !== false,
+            buyer: res.can_receive_tax_buyer !== false,
+            acc: res.can_receive_tax_acc !== false,
+          },
         })
       )
       .catch((e) => console.error('load get_submit_master_data failed', e));
@@ -554,6 +562,10 @@ export default function SubmitDocumentScreen({ docId, onBack, onSaved }: SubmitD
   const taxReceiverShown = taxSavedCur?.receiver || currentUserLabel;
   // บัญชีลงรับ (รอบนี้หรือเคยลงรับไว้แล้ว) = สถานะ "ใบกำกับ 7%" · คลัง/จัดซื้อ = ยัง "รอใบกำกับ 7%"
   const taxAccDone = taxDept === 'acc' || !!loaded?.accReceived;
+  // ฝ่ายที่ไม่มีสิทธิ์เลือกไม่ได้ — ยกเว้นฝ่ายที่ลงรับไว้แล้ว (โหมดแก้ไข) เลือกได้แต่ดูอย่างเดียว (toggleTaxDeptPanel() ของเว็บ)
+  const taxDeptOff = (key: RecvDept) => !master.taxDeptCan[key] && !loaded?.taxSaved[key];
+  const taxLocked = taxDept !== '' && !master.taxDeptCan[taxDept];
+  const taxNoDeptCan = !master.taxDeptCan.wh && !master.taxDeptCan.buyer && !master.taxDeptCan.acc;
 
   function selectTaxDept(dept: RecvDept) {
     setForm((f) => {
@@ -580,16 +592,18 @@ export default function SubmitDocumentScreen({ docId, onBack, onSaved }: SubmitD
   // ไม่เปลี่ยน = ไม่เรียก — เดิมเรียกทุกครั้งที่บันทึก ผู้ลงรับ/เวลากลายเป็นคนแก้ล่าสุด และหมายเหตุต่อท้าย doc_note ซ้ำ
   function buildTaxPayload() {
     const dept = taxDept as RecvDept;
-    const invoiceNumbers = uniqTrim(visibleInvRows.map((r) => r.value));
+    // ฝ่ายที่ดูอย่างเดียว (taxLocked) ไม่นับแถว/ไฟล์ใหม่ที่ซ่อนอยู่ — ใบกำกับเท่าเดิม = ไม่ยิง receive_tax_*
+    const invoiceNumbers = uniqTrim(visibleInvRows.filter((r) => !taxLocked || r.dept !== '').map((r) => r.value));
     const keptFiles = visibleExistingFiles.map((f) => f.name);
     const note = taxNoteShown.trim();
+    const newFiles = taxLocked ? 0 : form.taxFiles.length;
     const changed =
       !taxSavedCur ||
-      form.taxFiles.length > 0 ||
+      newFiles > 0 ||
       !sameList(invoiceNumbers, taxSavedCur.invoiceNumbers) ||
       !sameList(keptFiles, taxSavedCur.files) ||
       note !== taxSavedCur.note.trim();
-    return { dept, invoiceNumbers, keptFiles, note, changed, fileCount: keptFiles.length + form.taxFiles.length };
+    return { dept, invoiceNumbers, keptFiles, note, changed, fileCount: keptFiles.length + newFiles };
   }
 
   function handleSave() {
@@ -613,6 +627,10 @@ export default function SubmitDocumentScreen({ docId, onBack, onSaved }: SubmitD
     // ใบกำกับ 7% บังคับฝ่าย + ไฟล์อย่างน้อย 1 ไฟล์ (ไฟล์เดิมที่ยังเก็บไว้ก็นับ) — เลขที่ไม่บังคับ
     if (showTaxReceiveBox) {
       if (!form.taxRecvDept) return Alert.alert('ต้องแนบไฟล์ใบกำกับภาษี', 'เลือกฝ่ายที่ลงรับใบกำกับ แล้วแนบไฟล์อย่างน้อย 1 ไฟล์');
+      // ฝ่ายที่ไม่มีสิทธิ์ผ่านได้เฉพาะตอนใบกำกับเท่าเดิม (เว็บ :787-792 · เซิร์ฟเวอร์กันซ้ำ)
+      if (taxLocked && (!loaded?.taxSaved[form.taxRecvDept] || buildTaxPayload().changed)) {
+        return Alert.alert('ไม่มีสิทธิ์ลงรับใบกำกับ', 'เลือกฝ่ายที่มีสิทธิ์ หรือเลือก "รอใบกำกับ 7%" แทน');
+      }
       if (buildTaxPayload().fileCount === 0) return Alert.alert('ต้องแนบไฟล์ใบกำกับภาษี', 'แนบไฟล์ใบกำกับอย่างน้อย 1 ไฟล์ก่อนบันทึก');
     }
     if (!form.supplierName.trim()) return Alert.alert('กรุณาระบุชื่อร้านค้า', 'ต้องเลือกหรือพิมพ์ชื่อซัพพลายเออร์ก่อนบันทึก');
@@ -928,16 +946,27 @@ export default function SubmitDocumentScreen({ docId, onBack, onSaved }: SubmitD
                 <View style={styles.rowGap}>
                   {TAX_DEPTS.map((d) => {
                     const active = form.taxRecvDept === d.key;
+                    const off = taxDeptOff(d.key);
                     return (
-                      <TouchableOpacity key={d.key} style={[styles.deptCard, active && { borderColor: d.color, backgroundColor: d.color + '12' }]} onPress={() => selectTaxDept(d.key)}>
-                        <Ionicons name={d.icon} size={16} color={active ? d.color : '#94a3b8'} />
+                      <TouchableOpacity
+                        key={d.key}
+                        disabled={off}
+                        style={[styles.deptCard, active && { borderColor: d.color, backgroundColor: d.color + '12' }, off && { opacity: 0.45 }]}
+                        onPress={() => selectTaxDept(d.key)}
+                      >
+                        <Ionicons name={off ? 'lock-closed' : d.icon} size={16} color={active ? d.color : '#94a3b8'} />
                         <Text style={[styles.deptCardText, active && { color: d.color }]}>{d.label}</Text>
                       </TouchableOpacity>
                     );
                   })}
                 </View>
+                {taxNoDeptCan && taxDept === '' && (
+                  <Text style={[styles.taxStatusHint, { color: '#64748b' }]}>🔒 คุณไม่มีสิทธิ์ลงรับใบกำกับ — เลือก "รอใบกำกับ 7%" แทน</Text>
+                )}
+                {taxLocked && <Text style={[styles.taxStatusHint, { color: '#64748b' }]}>🔒 ไม่มีสิทธิ์แก้ใบกำกับฝ่ายนี้ ดูได้อย่างเดียว</Text>}
 
-                {/* เลือกฝ่ายแล้วถึงจะโผล่ช่องกรอก (tax_recv_panel ของเว็บ) — ข้อมูลเดิมที่เห็นเป็นของฝ่ายที่เลือกเท่านั้น */}
+                {/* เลือกฝ่ายแล้วถึงจะโผล่ช่องกรอก (tax_recv_panel ของเว็บ) — ข้อมูลเดิมที่เห็นเป็นของฝ่ายที่เลือกเท่านั้น
+                    ฝ่ายที่ไม่มีสิทธิ์ (taxLocked) = ดูอย่างเดียว: เลขที่/หมายเหตุแก้ไม่ได้ · ไม่มีปุ่มลบ/เพิ่มแถว/แนบไฟล์ */}
                 {taxDept !== '' && (
                   <>
                     <Text style={[styles.taxStatusHint, { color: taxAccDone ? '#059669' : '#d97706' }]}>
@@ -947,20 +976,29 @@ export default function SubmitDocumentScreen({ docId, onBack, onSaved }: SubmitD
                     </Text>
 
                     <FieldLabel text="เลขที่ใบกำกับภาษี" />
-                    {visibleInvRows.map((r) => (
+                    {visibleInvRows.filter((r) => !taxLocked || r.dept !== '').map((r) => (
                       <View key={r.idx} style={styles.taxInvRow}>
-                        <TextInput style={[styles.input, { flex: 1 }]} placeholder="ระบุเลขที่..." placeholderTextColor="#94a3b8" value={r.value} onChangeText={(t) => updateTaxInvoiceRow(r.idx, t)} />
-                        {visibleInvRows.length > 1 && (
+                        <TextInput
+                          style={[styles.input, { flex: 1 }, taxLocked && { color: '#64748b' }]}
+                          placeholder="ระบุเลขที่..."
+                          placeholderTextColor="#94a3b8"
+                          value={r.value}
+                          editable={!taxLocked}
+                          onChangeText={(t) => updateTaxInvoiceRow(r.idx, t)}
+                        />
+                        {!taxLocked && visibleInvRows.length > 1 && (
                           <TouchableOpacity onPress={() => removeTaxInvoiceRow(r.idx)} style={styles.taxInvRemoveBtn}>
                             <Ionicons name="close" size={14} color="#ef4444" />
                           </TouchableOpacity>
                         )}
                       </View>
                     ))}
-                    <TouchableOpacity style={styles.addTaxInvBtn} onPress={addTaxInvoiceRow}>
-                      <Ionicons name="add" size={13} color="#059669" />
-                      <Text style={styles.addTaxInvBtnText}>เพิ่มเลขที่ใบกำกับ</Text>
-                    </TouchableOpacity>
+                    {!taxLocked && (
+                      <TouchableOpacity style={styles.addTaxInvBtn} onPress={addTaxInvoiceRow}>
+                        <Ionicons name="add" size={13} color="#059669" />
+                        <Text style={styles.addTaxInvBtnText}>เพิ่มเลขที่ใบกำกับ</Text>
+                      </TouchableOpacity>
+                    )}
 
                     {visibleExistingFiles.length > 0 && (
                       <>
@@ -976,26 +1014,30 @@ export default function SubmitDocumentScreen({ docId, onBack, onSaved }: SubmitD
                               <Text style={[styles.taxFileChipText, { color: '#059669' }]} numberOfLines={1}>
                                 ไฟล์ {i + 1}
                               </Text>
-                              <TouchableOpacity onPress={() => removeExistingTaxFile(file)}>
-                                <Ionicons name="close" size={12} color="#ef4444" />
-                              </TouchableOpacity>
+                              {!taxLocked && (
+                                <TouchableOpacity onPress={() => removeExistingTaxFile(file)}>
+                                  <Ionicons name="close" size={12} color="#ef4444" />
+                                </TouchableOpacity>
+                              )}
                             </TouchableOpacity>
                           ))}
                         </View>
                       </>
                     )}
 
-                    <TouchableOpacity
-                      style={styles.attachFileBtn}
-                      onPress={async () => {
-                        const f = await pickTaxFile();
-                        if (f) setForm((s) => ({ ...s, taxFiles: [...s.taxFiles, f] }));
-                      }}
-                    >
-                      <Ionicons name="attach-outline" size={13} color="#64748b" />
-                      <Text style={styles.attachFileBtnText}>แนบไฟล์ใบกำกับเพิ่มเติม ({form.taxFiles.length})</Text>
-                    </TouchableOpacity>
-                    {form.taxFiles.length > 0 && (
+                    {!taxLocked && (
+                      <TouchableOpacity
+                        style={styles.attachFileBtn}
+                        onPress={async () => {
+                          const f = await pickTaxFile();
+                          if (f) setForm((s) => ({ ...s, taxFiles: [...s.taxFiles, f] }));
+                        }}
+                      >
+                        <Ionicons name="attach-outline" size={13} color="#64748b" />
+                        <Text style={styles.attachFileBtnText}>แนบไฟล์ใบกำกับเพิ่มเติม ({form.taxFiles.length})</Text>
+                      </TouchableOpacity>
+                    )}
+                    {!taxLocked && form.taxFiles.length > 0 && (
                       <View style={styles.taxFileChipsRow}>
                         {form.taxFiles.map((f, i) => (
                           <View key={i} style={styles.taxFileChip}>
@@ -1018,6 +1060,7 @@ export default function SubmitDocumentScreen({ docId, onBack, onSaved }: SubmitD
                       placeholderTextColor="#94a3b8"
                       multiline
                       value={taxNoteShown}
+                      editable={!taxLocked}
                       onChangeText={(v) => setForm((f) => ({ ...f, taxNote: v, taxNoteEdited: true }))}
                     />
 
