@@ -20,7 +20,9 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import Constants from 'expo-constants';
 import { BioIcon, bioLabelOf, useAppLock } from '../../components/AppLock';
+import { appVersionLabel } from '../../components/AutoUpdate';
 import { API_BASE } from '../../constants/config';
 import { useAuth } from '../_layout';
 
@@ -306,7 +308,7 @@ export default function ProfileScreen() {
                         <Text style={styles.logoutText}>ออกจากระบบ</Text>
                     </TouchableOpacity>
 
-                    <Text style={styles.versionText}>Application Version 1.0.0</Text>
+                    <Text style={styles.versionText}>{appVersionLabel(Constants.expoConfig?.version)}</Text>
 
                 </ScrollView>
             </View>
