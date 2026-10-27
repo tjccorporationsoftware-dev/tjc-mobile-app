@@ -4,6 +4,7 @@ import { Stack, useRouter, useSegments } from "expo-router";
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { ActivityIndicator, View } from "react-native";
 import { AppLockGate } from "../components/AppLock";
+import { AutoUpdate } from "../components/AutoUpdate";
 import { API_BASE } from "../constants/config";
 
 // ------------------------------------------------------
@@ -174,6 +175,7 @@ export default function RootLayout() {
   return (
     <AuthProvider>
       <InitialLayout />
+      <AutoUpdate />
     </AuthProvider>
   );
 }
