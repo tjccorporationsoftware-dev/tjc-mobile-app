@@ -13,12 +13,14 @@ import {
     RefreshControl,
     ScrollView,
     StyleSheet,
+    Switch,
     Text,
     TouchableOpacity,
     View
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { BioIcon, bioLabelOf, useAppLock } from '../../components/AppLock';
 import { API_BASE } from '../../constants/config';
 import { useAuth } from '../_layout';
 
@@ -28,8 +30,10 @@ const SECONDARY_COLOR = '#0ea5e9';
 
 export default function ProfileScreen() {
     const { user, signOut } = useAuth();
+    const appLock = useAppLock();
     const router = useRouter();
-    
+    const [bioSaving, setBioSaving] = useState(false);
+
     const [refreshing, setRefreshing] = useState(false);
     const [uploading, setUploading] = useState(false);
     
@@ -254,6 +258,46 @@ export default function ProfileScreen() {
                         <ProfileItem icon="id-card-outline" label="ชื่อ-นามสกุล" value={displayName} />
                         <ProfileItem icon="briefcase-outline" label="ตำแหน่งงาน" value={displayRole} isLast />
                     </View>
+
+                    {appLock && (
+                        <View style={styles.infoCard}>
+                            <Text style={styles.cardHeader}>ความปลอดภัย</Text>
+                            <TouchableOpacity
+                                style={[styles.infoItem, !appLock.bioAvailable && { borderBottomWidth: 0 }]}
+                                onPress={appLock.changePin}
+                            >
+                                <View style={styles.iconContainer}>
+                                    <Ionicons name="keypad-outline" size={22} color={PRIMARY_COLOR} />
+                                </View>
+                                <View style={styles.infoContent}>
+                                    <Text style={styles.infoLabel}>รหัส PIN 6 หลัก</Text>
+                                    <Text style={styles.infoValue}>เปลี่ยน PIN</Text>
+                                </View>
+                                <Ionicons name="chevron-forward" size={20} color="#b2bec3" />
+                            </TouchableOpacity>
+                            {appLock.bioAvailable && (
+                                <View style={[styles.infoItem, { borderBottomWidth: 0 }]}>
+                                    <View style={styles.iconContainer}>
+                                        <BioIcon kind={appLock.bioKind} size={22} color={PRIMARY_COLOR} />
+                                    </View>
+                                    <View style={styles.infoContent}>
+                                        <Text style={styles.infoLabel}>ปลดล็อกแอปด้วย</Text>
+                                        <Text style={styles.infoValue}>{bioLabelOf(appLock.bioKind)}</Text>
+                                    </View>
+                                    <Switch
+                                        value={appLock.bioEnabled}
+                                        disabled={bioSaving}
+                                        trackColor={{ true: PRIMARY_COLOR, false: '#dfe6e9' }}
+                                        onValueChange={async (on) => {
+                                            setBioSaving(true);
+                                            await appLock.setBioEnabled(on);
+                                            setBioSaving(false);
+                                        }}
+                                    />
+                                </View>
+                            )}
+                        </View>
+                    )}
 
                     <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
                         <View style={styles.logoutIconBg}>

@@ -30,6 +30,12 @@
     "plugins": [
       "expo-router",
       "expo-secure-store",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "ใช้ Face ID เพื่อปลดล็อกแอป TJC GROUP"
+        }
+      ],
       "@react-native-community/datetimepicker",
       [
         "expo-splash-screen",

@@ -3,6 +3,7 @@ import axios from "axios";
 import { Stack, useRouter, useSegments } from "expo-router";
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { ActivityIndicator, View } from "react-native";
+import { AppLockGate } from "../components/AppLock";
 import { API_BASE } from "../constants/config";
 
 // ------------------------------------------------------
@@ -122,7 +123,7 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
 // ------------------------------------------------------
 
 function InitialLayout() {
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, signOut } = useAuth();
   const segments = useSegments();
   const router = useRouter();
   const [isReady, setIsReady] = useState(false);
@@ -157,11 +158,14 @@ function InitialLayout() {
     );
   }
 
+  // ล็อกด้วย PIN / Face ID ทับทั้งแอป — ส่ง user ผ่าน props (AppLock import _layout ไม่ได้ จะเป็น require cycle)
   return (
-    <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="index" />
-      <Stack.Screen name="(tabs)" />
-    </Stack>
+    <AppLockGate userId={user ? String(user.id) : null} userName={user?.fullname} onSignOut={signOut}>
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="index" />
+        <Stack.Screen name="(tabs)" />
+      </Stack>
+    </AppLockGate>
   );
 }
 
