@@ -18,17 +18,18 @@ import {
   Modal,
   RefreshControl,
   ScrollView,
-  StatusBar,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { formatShortThaiDate, formatShortThaiDateTime } from '../../components/DateTimeField';
+import AttachmentManagerModal, { AttachedFile } from '../../components/AttachmentManagerModal';
 import ListPager, { pageCount } from '../../components/ListPager';
+import { useScreenInsets } from '../../components/useScreenInsets';
 import { API_BASE, API_MODULES } from '../../constants/config';
 import { apiMobileGet } from '../../service/api_mobile';
 import { useAuth } from '../_layout';
@@ -196,7 +197,8 @@ function channelLink(ch: Channel): string | null {
 
 export default function LgCashDashboardScreen() {
   const { user } = useAuth();
-  const insets = useSafeAreaInsets();
+  // ขอบจอจริง (หน้าใน Drawer ได้ insets.top = 0 จาก header) — ใช้วางป๊อปอัพไม่ให้ชนแถบสถานะ/แถบนำทาง
+  const insets = useScreenInsets();
 
   const [rows, setRows] = useState<CashRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -211,6 +213,8 @@ export default function LgCashDashboardScreen() {
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [detail, setDetail] = useState<CashRow | null>(null);
+  // รายการที่เปิดป๊อปอัพ "จัดการเอกสารแนบ" อยู่ (เปิดได้จากการ์ดและหน้ารายละเอียด)
+  const [attachFor, setAttachFor] = useState<CashRow | null>(null);
 
   const load = useCallback(
     async (refresh = false) => {
@@ -239,6 +243,7 @@ export default function LgCashDashboardScreen() {
       return () => {
         setDetail(null);
         setFilterSheetOpen(false);
+        setAttachFor(null);
       };
     }, [])
   );
@@ -352,14 +357,21 @@ export default function LgCashDashboardScreen() {
         <Text style={styles.kpiHint}>
           <Ionicons name="funnel-outline" size={10} color="#94a3b8" /> แตะกล่องเพื่อกรองรายการ
         </Text>
+        {/* จัดเป็นหมวดแบบหน้า Dashboard ขออนุมัติหนังสือค้ำ */}
+        <Text style={styles.kpiGroupTitle}>อายุค้ำประกัน</Text>
         <View style={styles.kpiRow}>
           {box('ใกล้หมดอายุ', 'ใกล้หมดอายุ', kpi.expiring, RED, 'notifications')}
           {box('หมดประกัน', 'หมดประกันแล้ว', kpi.expired, GRAY, 'close-circle')}
+        </View>
+        <Text style={styles.kpiGroupTitle}>สถานะรายการ</Text>
+        <View style={styles.kpiRow}>
           {box('ยกเลิก', 'ยกเลิก', kpi.canceled, GRAY, 'ban')}
+          <View style={{ flex: 1 }} />
         </View>
       </View>
     );
   }
+
 
   function renderCard(r: CashRow) {
     const canceled = isCanceled(r);
@@ -373,8 +385,15 @@ export default function LgCashDashboardScreen() {
           </View>
         )}
         <View style={styles.cardTopRow}>
-          <View style={styles.codeBadge}>
-            <Text style={styles.codeBadgeText}>{r.projectCode || '-'}</Text>
+          {/* เลขหน้างาน + ป้ายที่มาแบบคอลัมน์ "เลขหน้างาน" ของเว็บ: นำเข้า (Excel) / คีย์เอง */}
+          {(!r.isImported || !!r.projectCode) && (
+            <View style={styles.codeBadge}>
+              <Text style={styles.codeBadgeText}>{r.projectCode || '-'}</Text>
+            </View>
+          )}
+          <View style={[styles.srcBadge, r.isImported ? styles.srcImport : styles.srcManual]}>
+            <Ionicons name={r.isImported ? 'document-text' : 'keypad'} size={10} color={r.isImported ? GREEN : GRAY} />
+            <Text style={[styles.srcText, { color: r.isImported ? GREEN : GRAY }]}>{r.isImported ? 'นำเข้า' : 'คีย์เอง'}</Text>
           </View>
           <View style={styles.condChip}>
             <Ionicons name="cash-outline" size={11} color={GRAY} />
@@ -412,18 +431,13 @@ export default function LgCashDashboardScreen() {
               <Text style={styles.metaText} numberOfLines={1}>{r.recorder}</Text>
             </View>
           )}
-          {r.files.length > 0 && (
-            <View style={styles.metaItem}>
-              <Ionicons name="attach" size={12} color={GRAY} />
-              <Text style={styles.metaText}>{r.files.length} ไฟล์</Text>
-            </View>
-          )}
-          {r.isImported && (
-            <View style={styles.metaItem}>
-              <Ionicons name="layers-outline" size={12} color={GRAY} />
-              <Text style={styles.metaText}>นำเข้า</Text>
-            </View>
-          )}
+        </View>
+        {/* แถบปุ่มท้ายการ์ด: เอกสารแนบ */}
+        <View style={styles.cardFooter}>
+          <TouchableOpacity style={styles.footerBtn} onPress={() => setAttachFor(r)} accessibilityLabel="จัดการเอกสารแนบ">
+            <Ionicons name="attach" size={15} color={PRIMARY} />
+            <Text style={styles.footerBtnText}>{r.files.length > 0 ? `เอกสารแนบ (${r.files.length} ไฟล์)` : 'แนบไฟล์'}</Text>
+          </TouchableOpacity>
         </View>
       </TouchableOpacity>
     );
@@ -456,15 +470,17 @@ export default function LgCashDashboardScreen() {
     const close = () => setDetail(null);
     const badge = r && !isCanceled(r) ? countdownBadge(countdown(r)) : null;
     return (
-      <Modal visible={!!r} animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={close}>
-        {/* Modal เป็นหน้าต่างแยก — เว้นขอบ notch/แถบล่างเองด้วย insets ไม่งั้นปุ่มกลับบน iPhone กดไม่ได้ */}
-        <View style={[styles.safe, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-          <StatusBar barStyle="dark-content" />
+      <Modal visible={!!r} transparent animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={close}>
+        {/* ป๊อปอัพเลื่อนขึ้นจากด้านล่าง — เว้นด้านบนให้พ้นแถบสถานะ และเว้นท้ายให้พ้นแถบปุ่มนำทางของมือถือ */}
+        <View style={styles.detailOverlay}>
+          <TouchableOpacity style={{ height: insets.top + 24 }} activeOpacity={1} onPress={close} accessibilityLabel="ปิด" />
+          <View style={[styles.detailSheet, { paddingBottom: insets.bottom }]}>
+          <View style={styles.detailGrip} />
           <View style={styles.detailHeader}>
-            <TouchableOpacity onPress={close} style={styles.backBtn} hitSlop={8} accessibilityLabel="กลับ">
-              <Ionicons name="chevron-back" size={22} color="#0f172a" />
-            </TouchableOpacity>
             <Text style={styles.detailHeaderTitle} numberOfLines={1}>ค้ำเงินสด {r?.projectCode || ''}</Text>
+            <TouchableOpacity onPress={close} style={styles.closeBtn} hitSlop={8} accessibilityLabel="ปิด">
+              <Ionicons name="close" size={20} color="#475569" />
+            </TouchableOpacity>
           </View>
           {r && (
             <ScrollView contentContainerStyle={styles.detailScroll}>
@@ -540,6 +556,11 @@ export default function LgCashDashboardScreen() {
                 <InfoRow label="ผู้แก้ไขล่าสุด" value={r.lastEditor} />
               </Section>
               <Section icon="attach" title={`เอกสารแนบ (${r.files.length})`}>
+                {/* ปุ่ม "จัดการเอกสารแนบ" แบบเว็บ — เพิ่มไฟล์ใหม่ / ลบไฟล์เดิม */}
+                <TouchableOpacity style={styles.attachManageBtn} onPress={() => setAttachFor(r)}>
+                  <Ionicons name="cloud-upload-outline" size={15} color={PRIMARY} />
+                  <Text style={styles.attachManageText}>จัดการเอกสารแนบ</Text>
+                </TouchableOpacity>
                 {r.files.length === 0 ? (
                   <Text style={styles.emptyText}>ไม่มีเอกสารแนบ</Text>
                 ) : (
@@ -565,8 +586,31 @@ export default function LgCashDashboardScreen() {
               </Section>
             </ScrollView>
           )}
+          </View>
+          {renderAttachModal()}
         </View>
       </Modal>
+    );
+  }
+
+  // ป๊อปอัพจัดการเอกสารแนบ — บันทึกแล้วอัปเดตรายการ/หน้ารายละเอียดทันที
+  function renderAttachModal() {
+    const a = attachFor;
+    return (
+      <AttachmentManagerModal
+        visible={!!a}
+        onClose={() => setAttachFor(null)}
+        userId={user?.id}
+        kind="cash"
+        recordId={a?.id ?? 0}
+        label={a?.receiptNo ?? ''} // เว็บแสดง contract_no (หน้านี้เรียกเลขที่ใบเสร็จ)
+        files={(a?.files ?? []) as AttachedFile[]}
+        onSaved={(files) => {
+          if (!a) return;
+          setRows((list) => list.map((x) => (x.id === a.id ? { ...x, files } : x)));
+          setDetail((d) => (d && d.id === a.id ? { ...d, files } : d));
+        }}
+      />
     );
   }
 
@@ -713,11 +757,15 @@ export default function LgCashDashboardScreen() {
 
       {renderFilterSheet()}
       {renderDetail()}
+      {!detail && renderAttachModal()}
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  cardFooter: { marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#f1f5f9', gap: 8 },
+  footerBtn: { minHeight: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 10, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#f8fafc', paddingHorizontal: 10 },
+  footerBtnText: { fontSize: 12.5, fontWeight: '800', color: PRIMARY },
   safe: { flex: 1, backgroundColor: '#f8fafc' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 10 },
   errorText: { color: '#475569', fontSize: 13, textAlign: 'center', lineHeight: 20 },
@@ -746,6 +794,7 @@ const styles = StyleSheet.create({
   summarySub: { color: '#94a3b8', fontSize: 11, marginTop: 2 },
   kpiHint: { fontSize: 10.5, color: '#94a3b8', marginTop: 12, marginBottom: 8 },
   kpiRow: { flexDirection: 'row', gap: 8 },
+  kpiGroupTitle: { fontSize: 12, fontWeight: '900', color: '#334155', marginTop: 10, marginBottom: 6 },
   kpiBox: { flex: 1, minHeight: 64, backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', borderTopWidth: 4, paddingHorizontal: 9, paddingVertical: 8, gap: 4 },
   tapHintIcon: { position: 'absolute', top: 6, right: 7 },
   kpiLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingRight: 12 },
@@ -763,6 +812,10 @@ const styles = StyleSheet.create({
   cardTopRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   codeBadge: { backgroundColor: '#eef2ff', borderRadius: 8, paddingHorizontal: 9, paddingVertical: 4 },
   codeBadgeText: { color: '#4338ca', fontSize: 12, fontWeight: '900' },
+  srcBadge: { flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 6, borderWidth: 1, paddingHorizontal: 6, paddingVertical: 3 },
+  srcImport: { backgroundColor: '#ecfdf5', borderColor: '#a7f3d0' },
+  srcManual: { backgroundColor: '#f1f5f9', borderColor: '#e2e8f0' },
+  srcText: { fontSize: 10, fontWeight: '800' },
   condChip: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#f1f5f9', borderRadius: 50, paddingHorizontal: 8, paddingVertical: 3, maxWidth: 150 },
   condChipText: { fontSize: 10.5, color: '#475569', fontWeight: '700', flexShrink: 1 },
   cdBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
@@ -778,8 +831,11 @@ const styles = StyleSheet.create({
   metaItem: { flexDirection: 'row', alignItems: 'center', gap: 4, maxWidth: '100%' },
   metaText: { fontSize: 11, color: '#475569', fontWeight: '600', flexShrink: 1 },
 
-  detailHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
-  backBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  detailOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)' },
+  detailSheet: { flex: 1, backgroundColor: '#f8fafc', borderTopLeftRadius: 20, borderTopRightRadius: 20, overflow: 'hidden' },
+  detailGrip: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: '#cbd5e1', marginTop: 8, marginBottom: 2 },
+  detailHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#f8fafc', paddingLeft: 16, paddingRight: 10, paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
+  closeBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
   detailHeaderTitle: { flex: 1, fontSize: 16, fontWeight: '900', color: '#0f172a' },
   detailScroll: { padding: 14, paddingBottom: 32, gap: 12 },
   cancelBox: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#fef2f2', borderWidth: 1, borderColor: '#fecaca', borderRadius: 10, padding: 10 },
@@ -801,6 +857,11 @@ const styles = StyleSheet.create({
   fileTopic: { fontSize: 12.5, fontWeight: '800', color: '#0f172a' },
   fileName: { fontSize: 11, color: '#475569' },
   fileMeta: { fontSize: 10.5, color: '#94a3b8' },
+  attachManageBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, minHeight: 40, borderRadius: 10, borderWidth: 1, borderStyle: 'dashed', borderColor: '#a5b4fc', backgroundColor: '#eef2ff', marginTop: 8, marginBottom: 4 },
+  attachManageText: { fontSize: 12.5, fontWeight: '800', color: PRIMARY },
+  attachCardBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 50, borderWidth: 1, borderColor: '#c7d2fe', backgroundColor: '#eef2ff', paddingHorizontal: 10, paddingVertical: 5 },
+  attachCardText: { fontSize: 11.5, fontWeight: '800', color: PRIMARY },
+
 
   sheetOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)' },
   sheet: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 16, maxHeight: '85%' },

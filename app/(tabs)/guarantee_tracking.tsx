@@ -25,18 +25,18 @@ import {
   Modal,
   RefreshControl,
   ScrollView,
-  StatusBar,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { formatShortThaiDate, formatShortThaiDateTime } from '../../components/DateTimeField';
 import ListPager, { pageCount } from '../../components/ListPager';
-import { API_BASE, API_MODULES } from '../../constants/config';
+import { useScreenInsets } from '../../components/useScreenInsets';
+import { API_MODULES } from '../../constants/config';
 import { apiMobileGet, apiMobilePost } from '../../service/api_mobile';
 import { useAuth } from '../_layout';
 
@@ -239,7 +239,8 @@ export default function GuaranteeTrackingScreen() {
 export function GuaranteeTrackingView({ variant }: { variant: TrackingVariant }) {
   const cfg = VARIANT[variant];
   const { user } = useAuth();
-  const insets = useSafeAreaInsets();
+  // ขอบจอจริง (หน้าใน Drawer ได้ insets.top = 0 จาก header) — ใช้วางป๊อปอัพไม่ให้ชนแถบสถานะ/แถบนำทาง
+  const insets = useScreenInsets();
 
   const [rows, setRows] = useState<TrackRow[]>([]);
   const [statuses, setStatuses] = useState<string[]>(DEFAULT_STATUSES);
@@ -400,7 +401,9 @@ export function GuaranteeTrackingView({ variant }: { variant: TrackingVariant })
     const row = debtPicker.row;
     const q = debtPicker.search.trim().toLowerCase();
     const list = debtUsers.filter((n) => !q || n.toLowerCase().includes(q));
-    const close = () => !debtPicker.saving && setDebtPicker({ row: null, search: '', saving: false });
+    const close = () => {
+      if (!debtPicker.saving) setDebtPicker({ row: null, search: '', saving: false });
+    };
     return (
       <Modal visible={!!row} transparent animationType="fade" onRequestClose={close}>
         <View style={styles.pickerOverlay}>
@@ -491,16 +494,56 @@ export function GuaranteeTrackingView({ variant }: { variant: TrackingVariant })
         <Text style={styles.kpiHint}>
           <Ionicons name="funnel-outline" size={10} color="#94a3b8" /> สถานะการติดตาม — แตะเพื่อกรองรายการ
         </Text>
-        <View style={styles.kpiGrid}>
-          {box('all', 'ทั้งหมด', summary.total, PRIMARY, 'layers')}
-          {statuses.map((s) => box(s, s, summary.counts[s] ?? 0, statusMeta(s).color, statusMeta(s).icon))}
-          {cfg.showExpiredBox && box(EXPIRED_FILTER, 'หมดประกัน', summary.expired, GRAY, 'close-circle')}
-        </View>
+        {/* จัดสถานะเป็นหมวดตามกติกาสี (เทา = ปกติ, แดง = มีปัญหา, ส้ม = กำลังดำเนินการ, เขียว = เสร็จสิ้น) */}
+        {[
+          { title: 'ภาพรวม', color: GRAY, withAll: true },
+          { title: 'มีปัญหา', color: RED },
+          { title: 'กำลังดำเนินการ', color: AMBER },
+          { title: 'เสร็จสิ้น', color: GREEN },
+        ].map((g) => {
+          const list = statuses.filter((s) => statusMeta(s).color === g.color);
+          if (!g.withAll && list.length === 0) return null;
+          return (
+            <View key={g.title}>
+              <Text style={styles.kpiGroupTitle}>{g.title}</Text>
+              <View style={styles.kpiGrid}>
+                {g.withAll && box('all', 'ทั้งหมด', summary.total, PRIMARY, 'layers')}
+                {list.map((s) => box(s, s, summary.counts[s] ?? 0, statusMeta(s).color, statusMeta(s).icon))}
+              </View>
+            </View>
+          );
+        })}
+        {cfg.showExpiredBox && (
+          <>
+            <Text style={styles.kpiGroupTitle}>อายุค้ำประกัน</Text>
+            <View style={styles.kpiGrid}>{box(EXPIRED_FILTER, 'หมดประกัน', summary.expired, GRAY, 'close-circle')}</View>
+          </>
+        )}
       </View>
     );
   }
 
+
   // -------------------- render: การ์ดรายการ --------------------
+
+  // แถว "ผู้รับผิดชอบติดตามหนี้" ในแถบท้ายการ์ด — กดเพื่อเลือก/เปลี่ยน (ป๊อปอัพรายชื่อเดิม)
+  function renderOwnerRow(name: string, isTeam: boolean, onPress: () => void) {
+    return (
+      <TouchableOpacity style={styles.ownerRow} onPress={onPress} accessibilityLabel="เลือกผู้รับผิดชอบติดตามหนี้">
+        <View style={styles.ownerIcon}>
+          <Ionicons name={isTeam ? 'people' : 'person'} size={14} color={PRIMARY} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.ownerLabel}>ผู้รับผิดชอบติดตามหนี้</Text>
+          <Text style={[styles.ownerName, !name && { color: '#94a3b8' }]} numberOfLines={1}>{name || 'ยังไม่ระบุ'}</Text>
+        </View>
+        <View style={styles.ownerAction}>
+          <Text style={styles.ownerActionText}>{name ? 'เปลี่ยน' : 'เลือก'}</Text>
+          <Ionicons name="chevron-forward" size={12} color={PRIMARY} />
+        </View>
+      </TouchableOpacity>
+    );
+  }
 
   function renderCard(r: TrackRow) {
     const badge = countdownBadge(countdown(r));
@@ -508,8 +551,18 @@ export function GuaranteeTrackingView({ variant }: { variant: TrackingVariant })
     return (
       <TouchableOpacity key={r.id} activeOpacity={0.75} onPress={() => setDetail(r)} style={styles.card}>
         <View style={styles.cardTopRow}>
+          {/* เลขหน้างาน + ที่มาของรายการ (นำเข้าจาก Excel / คีย์เองในระบบ) */}
           <View style={styles.codeBadge}>
             <Text style={styles.codeBadgeText}>{r.projectCode || r.lgNumber || '-'}</Text>
+            <View style={styles.codeBadgeDivider} />
+            <Ionicons
+              name={r.source === 'import' ? 'layers-outline' : 'create-outline'}
+              size={11}
+              color={r.source === 'import' ? '#b45309' : '#0f766e'}
+            />
+            <Text style={[styles.codeSourceText, { color: r.source === 'import' ? '#b45309' : '#0f766e' }]}>
+              {r.source === 'import' ? 'นำเข้า' : 'คีย์เอง'}
+            </Text>
           </View>
           <View style={[styles.statusChip, { backgroundColor: sm.color + '14', borderColor: sm.color + '55' }]}>
             <Ionicons name={sm.icon} size={11} color={sm.color} />
@@ -538,27 +591,19 @@ export function GuaranteeTrackingView({ variant }: { variant: TrackingVariant })
         </View>
 
         <View style={styles.metaRow}>
-          {cfg.debtEditable && (
-            <View style={styles.metaItem}>
-              <Ionicons name={r.debtType === 'ทีม' ? 'people-outline' : 'person-outline'} size={12} color={GRAY} />
-              <Text style={[styles.metaText, !r.debtName && { color: '#94a3b8' }]} numberOfLines={1}>
-                {r.debtName || 'ยังไม่ระบุผู้ติดตาม'}
-              </Text>
-            </View>
-          )}
           {r.followups.length > 0 && (
             <View style={styles.metaItem}>
               <Ionicons name="chatbubbles-outline" size={12} color={GRAY} />
               <Text style={styles.metaText}>ติดตาม {r.followups.length} ครั้ง</Text>
             </View>
           )}
-          {r.source === 'import' && (
-            <View style={styles.metaItem}>
-              <Ionicons name="layers-outline" size={12} color={GRAY} />
-              <Text style={styles.metaText}>นำเข้า</Text>
-            </View>
-          )}
         </View>
+        {/* แถบปุ่มท้ายการ์ด: ผู้รับผิดชอบ */}
+        {cfg.debtEditable && (
+          <View style={styles.cardFooter}>
+            {renderOwnerRow(r.debtName, r.debtType === 'ทีม', () => setDebtPicker({ row: r, search: '', saving: false }))}
+          </View>
+        )}
       </TouchableOpacity>
     );
   }
@@ -593,17 +638,19 @@ export function GuaranteeTrackingView({ variant }: { variant: TrackingVariant })
     const badge = r ? countdownBadge(countdown(r)) : null;
     const sm = r ? statusMeta(r.status) : null;
     return (
-      <Modal visible={!!r} animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={close}>
-        {/* Modal เป็นหน้าต่างแยก — เว้นขอบ notch/แถบล่างเองด้วย insets ไม่งั้นปุ่มกลับบน iPhone กดไม่ได้ */}
-        <View style={[styles.safe, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-          <StatusBar barStyle="dark-content" />
+      <Modal visible={!!r} transparent animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={close}>
+        {/* ป๊อปอัพเลื่อนขึ้นจากด้านล่าง — เว้นด้านบนให้พ้นแถบสถานะ และเว้นท้ายให้พ้นแถบปุ่มนำทางของมือถือ */}
+        <View style={styles.detailOverlay}>
+          <TouchableOpacity style={{ height: insets.top + 24 }} activeOpacity={1} onPress={close} accessibilityLabel="ปิด" />
+          <View style={[styles.detailSheet, { paddingBottom: insets.bottom }]}>
+          <View style={styles.detailGrip} />
           <View style={styles.detailHeader}>
-            <TouchableOpacity onPress={close} style={styles.backBtn} hitSlop={8} accessibilityLabel="กลับ">
-              <Ionicons name="chevron-back" size={22} color="#0f172a" />
-            </TouchableOpacity>
             <Text style={styles.detailHeaderTitle} numberOfLines={1}>
-              {r ? `${r.projectCode || r.lgNumber || ''} · ${r.customerName}` : ''}
+              {r ? [r.projectCode || r.lgNumber, r.customerName].filter(Boolean).join(' · ') || 'รายละเอียด' : ''}
             </Text>
+            <TouchableOpacity onPress={close} style={styles.closeBtn} hitSlop={8} accessibilityLabel="ปิด">
+              <Ionicons name="close" size={20} color="#475569" />
+            </TouchableOpacity>
           </View>
           {r && sm && (
             <ScrollView contentContainerStyle={styles.detailScroll}>
@@ -725,31 +772,7 @@ export function GuaranteeTrackingView({ variant }: { variant: TrackingVariant })
                 <InfoRow label="แผนก" value={r.reqDepartment} />
               </Section>
 
-              <Section icon="attach" title={`เอกสารแนบ (${r.files.length})`}>
-                {r.files.length === 0 ? (
-                  <Text style={styles.emptyText}>ไม่มีเอกสารแนบ</Text>
-                ) : (
-                  r.files.map((f, i) => (
-                    <TouchableOpacity
-                      key={i}
-                      style={styles.fileRow}
-                      onPress={() => f.filePath && Linking.openURL(`${API_BASE}/${f.filePath.replace(/^\/+/, '')}`)}
-                    >
-                      <Ionicons name="document-attach" size={18} color={PRIMARY} />
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.fileTopic} numberOfLines={1}>{f.topic}</Text>
-                        <Text style={styles.fileName} numberOfLines={1}>{f.originalName || f.filePath}</Text>
-                        <Text style={styles.fileMeta} numberOfLines={1}>
-                          {f.uploaderName || '-'}
-                          {f.uploadDate ? ` · ${formatShortThaiDateTime(f.uploadDate)}` : ''}
-                        </Text>
-                      </View>
-                      <Ionicons name="open-outline" size={16} color="#94a3b8" />
-                    </TouchableOpacity>
-                  ))
-                )}
-              </Section>
-
+              {/* ไม่มีกล่องเอกสารแนบ — หน้าเว็บติดตาม (LG / ค้ำเงินสด) ไม่ได้แสดงไฟล์แนบ */}
               <Section icon="git-branch" title="ที่มาของข้อมูล">
                 <InfoRow label="ที่มา" value={r.source === 'import' ? 'นำเข้าจาก Excel' : 'บันทึกในระบบ'} />
                 {r.source === 'import' && !!r.importSheet && <InfoRow label="ชีท" value={r.importSheet} />}
@@ -759,6 +782,7 @@ export function GuaranteeTrackingView({ variant }: { variant: TrackingVariant })
             </ScrollView>
           )}
           {renderDebtPicker()}
+          </View>
         </View>
       </Modal>
     );
@@ -931,6 +955,8 @@ export function GuaranteeTrackingView({ variant }: { variant: TrackingVariant })
 
       {renderFilterSheet()}
       {renderDetail()}
+      {/* เปิดจากการ์ดในรายการ — ตอนเปิดหน้ารายละเอียดอยู่จะใช้ตัวที่ซ้อนในโมดัลรายละเอียดแทน */}
+      {!detail && renderDebtPicker()}
     </SafeAreaView>
   );
 }
@@ -938,6 +964,13 @@ export function GuaranteeTrackingView({ variant }: { variant: TrackingVariant })
 // -------------------- Styles --------------------
 
 const styles = StyleSheet.create({
+  cardFooter: { marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#f1f5f9', gap: 8 },
+  ownerRow: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#f8fafc', borderRadius: 10, borderWidth: 1, borderColor: '#e2e8f0', paddingHorizontal: 10, paddingVertical: 8 },
+  ownerIcon: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#eef2ff', alignItems: 'center', justifyContent: 'center' },
+  ownerLabel: { fontSize: 10.5, color: GRAY },
+  ownerName: { fontSize: 13, fontWeight: '800', color: '#0f172a', marginTop: 1 },
+  ownerAction: { flexDirection: 'row', alignItems: 'center', gap: 2, backgroundColor: '#eef2ff', borderRadius: 50, paddingHorizontal: 10, paddingVertical: 5 },
+  ownerActionText: { fontSize: 11.5, fontWeight: '800', color: PRIMARY },
   safe: { flex: 1, backgroundColor: '#f8fafc' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 10 },
   errorText: { color: '#475569', fontSize: 13, textAlign: 'center', lineHeight: 20 },
@@ -966,6 +999,7 @@ const styles = StyleSheet.create({
   summarySub: { color: '#94a3b8', fontSize: 11, marginTop: 2 },
   kpiHint: { fontSize: 10.5, color: '#94a3b8', marginTop: 12, marginBottom: 8 },
   kpiGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 8 },
+  kpiGroupTitle: { fontSize: 12, fontWeight: '900', color: '#334155', marginTop: 10, marginBottom: 6 },
   kpiBox: { width: '48.8%', minHeight: 64, backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', borderTopWidth: 4, paddingHorizontal: 10, paddingVertical: 8, gap: 4 },
   tapHintIcon: { position: 'absolute', top: 6, right: 7 },
   kpiLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingRight: 12 },
@@ -977,9 +1011,11 @@ const styles = StyleSheet.create({
   emptyText: { color: '#94a3b8', fontSize: 12.5, textAlign: 'center', paddingVertical: 8 },
 
   card: { backgroundColor: '#fff', borderRadius: 14, marginHorizontal: 14, marginTop: 10, padding: 13, borderWidth: 1, borderColor: '#e2e8f0' },
-  cardTopRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  codeBadge: { backgroundColor: '#eef2ff', borderRadius: 8, paddingHorizontal: 9, paddingVertical: 4 },
+  cardTopRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
+  codeBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#eef2ff', borderRadius: 8, paddingHorizontal: 9, paddingVertical: 4 },
   codeBadgeText: { color: '#4338ca', fontSize: 12, fontWeight: '900' },
+  codeBadgeDivider: { width: 1, height: 12, backgroundColor: '#c7d2fe', marginHorizontal: 2 },
+  codeSourceText: { fontSize: 10.5, fontWeight: '800' },
   statusChip: { flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderRadius: 50, paddingHorizontal: 8, paddingVertical: 3, maxWidth: 170 },
   statusChipText: { fontSize: 10.5, fontWeight: '800', flexShrink: 1 },
   cdBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
@@ -993,8 +1029,11 @@ const styles = StyleSheet.create({
   metaItem: { flexDirection: 'row', alignItems: 'center', gap: 4, maxWidth: '100%' },
   metaText: { fontSize: 11, color: '#475569', fontWeight: '600', flexShrink: 1 },
 
-  detailHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
-  backBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  detailOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)' },
+  detailSheet: { flex: 1, backgroundColor: '#f8fafc', borderTopLeftRadius: 20, borderTopRightRadius: 20, overflow: 'hidden' },
+  detailGrip: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: '#cbd5e1', marginTop: 8, marginBottom: 2 },
+  detailHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#f8fafc', paddingLeft: 16, paddingRight: 10, paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
+  closeBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
   detailHeaderTitle: { flex: 1, fontSize: 15, fontWeight: '900', color: '#0f172a' },
   detailScroll: { padding: 14, paddingBottom: 32, gap: 12 },
   statusBanner: { flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderRadius: 14, padding: 12 },
@@ -1017,6 +1056,9 @@ const styles = StyleSheet.create({
   debtName: { fontSize: 14, fontWeight: '900', color: '#0f172a', marginTop: 2 },
   debtBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: PRIMARY, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 9 },
   debtBtnText: { color: '#fff', fontSize: 12.5, fontWeight: '800' },
+  debtChip: { flexDirection: 'row', alignItems: 'center', gap: 4, maxWidth: '100%', backgroundColor: '#eef2ff', borderWidth: 1, borderColor: '#c7d2fe', borderRadius: 50, paddingHorizontal: 9, paddingVertical: 4 },
+  debtChipEmpty: { backgroundColor: '#fff', borderStyle: 'dashed', borderColor: '#a5b4fc' },
+  debtChipText: { fontSize: 11, color: '#3730a3', fontWeight: '800', flexShrink: 1 },
   pickerOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', justifyContent: 'center', padding: 20 },
   pickerSheet: { backgroundColor: '#fff', borderRadius: 16, padding: 16 },
   pickerHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },

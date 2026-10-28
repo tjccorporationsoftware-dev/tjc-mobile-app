@@ -313,7 +313,7 @@ export default function BossCommand() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle={isDark ? "light-content" : "dark-content"} backgroundColor={theme.card} />
+      <StatusBar barStyle={isDark ? "light-content" : "dark-content"} />
       <View style={styles.headerBar}>
           <View>
             <Text style={styles.headerTitle}>สั่งงาน/มอบหมายงาน</Text>

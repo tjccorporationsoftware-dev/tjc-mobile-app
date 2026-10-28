@@ -4317,7 +4317,7 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
               <Ionicons name="folder-open-outline" size={26} color="#cbd5e1" />
               <Text style={styles.emptyText}>ไม่พบเอกสารที่ตรงกับเงื่อนไข</Text>
             </View>
-          ) : null
+          ) : undefined
         }
         // แบ่งหน้าแบบตารางเว็บ หน้าละ PAGE_SIZE — บนจอมีไม่เกิน 1 หน้าเสมอ (เดิมเลื่อนแล้วต่อท้ายสะสมเป็นร้อยรายการ)
         ListFooterComponent={

@@ -7,7 +7,9 @@
  *      get_plan_items = งวดชำระ + ประวัติติดตามของแผน (เว็บ: กดแถวเพื่อขยาย)
  *  - KPI 7 การ์ดเหมือนเว็บ: ไม่เปลี่ยนตามตัวกรอง (เว็บคำนวณฝั่ง PHP ครั้งเดียว) แต่เปลี่ยนตามบริษัทที่เลือก
  *  - ตัวกรองเหมือน applyRowFilters(): บริษัท × สถานะชำระ × สถานะติดตาม × ช่วงวันที่บันทึกติดตาม/ชำระเงิน
- *  - แอปดูอย่างเดียว ไม่มีปุ่มนำเข้า/แก้ไข/ลบ/เลือกผู้ติดตาม/ตั้งค่าแจ้งเตือน (ทำบนเว็บ)
+ *  - แอปดูเป็นหลัก แก้ได้อย่างเดียวคือ "ผู้รับผิดชอบติดตามหนี้" (save_debt_owner แบบเว็บ)
+ *    ไม่มีปุ่มนำเข้า/แก้ไข/ลบ/ตั้งค่าแจ้งเตือน (ทำบนเว็บ)
+ *  - การ์ดในรายการมีปุ่มเลือกผู้ติดตาม / งวดชำระ / ประวัติติดตาม กดได้เลยไม่ต้องเปิดรายละเอียด
  * ------------------------------------------------------------------
  */
 
@@ -16,22 +18,23 @@ import { useFocusEffect } from 'expo-router';
 import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Modal,
   RefreshControl,
   ScrollView,
-  StatusBar,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { DateField, formatShortThaiDate, formatShortThaiDateTime, ymdToDate } from '../../components/DateTimeField';
 import ListPager, { pageCount } from '../../components/ListPager';
+import { useScreenInsets } from '../../components/useScreenInsets';
 import { API_MODULES } from '../../constants/config';
-import { apiMobileGet } from '../../service/api_mobile';
+import { apiMobileGet, apiMobilePost } from '../../service/api_mobile';
 import { useAuth } from '../_layout';
 
 const INST_API_URL = `${API_MODULES}/installment_API_mobile.php`;
@@ -197,12 +200,17 @@ const followColor = (s: string) => (s === 'ยังไม่เคยติด�
 
 export default function InstallmentPlansScreen() {
   const { user } = useAuth();
-  const insets = useSafeAreaInsets();
+  // ขอบจอจริง (หน้าใน Drawer ได้ insets.top = 0 จาก header) — ใช้วางป๊อปอัพไม่ให้ชนแถบสถานะ/แถบนำทาง
+  const insets = useScreenInsets();
 
   const [plans, setPlans] = useState<Plan[]>([]);
   const [kpiAll, setKpiAll] = useState<Kpi>(mapKpi({}));
   const [kpiByComp, setKpiByComp] = useState<CompanyKpi[]>([]);
   const [followOptions, setFollowOptions] = useState<string[]>([]);
+  const [debtUsers, setDebtUsers] = useState<string[]>([]); // รายชื่อให้เลือกเป็นผู้ติดตามหนี้ (query เดียวกับเว็บ)
+  const [debtPicker, setDebtPicker] = useState<{ plan: Plan | null; search: string; saving: boolean }>({ plan: null, search: '', saving: false });
+  // แผนที่เปิดป๊อปอัพงวดชำระ/ประวัติติดตามอยู่ (เปิดได้ทั้งจากการ์ดและหน้ารายละเอียด)
+  const [popupPlan, setPopupPlan] = useState<Plan | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -239,6 +247,7 @@ export default function InstallmentPlansScreen() {
           (Array.isArray(res.kpi_by_company) ? res.kpi_by_company : []).map((c: any) => ({ ...mapKpi(c), key: str(c.comp_key), name: str(c.name) }))
         );
         setFollowOptions(Array.isArray(res.follow_status_options) ? res.follow_status_options.map(str) : []);
+        setDebtUsers(Array.isArray(res.debt_users) ? res.debt_users.map(str) : []);
       } catch (e: any) {
         const notReady = e?.response?.status === 404;
         setLoadError(notReady ? 'ยังเชื่อมต่อข้อมูลไม่ได้ — เซิร์ฟเวอร์ยังไม่มี API ของหน้านี้' : e?.message || 'โหลดข้อมูลไม่สำเร็จ');
@@ -258,6 +267,8 @@ export default function InstallmentPlansScreen() {
       return () => {
         setDetail(null);
         setFilterSheetOpen(false);
+        setListPopup(null);
+        setDebtPicker({ plan: null, search: '', saving: false });
       };
     }, [])
   );
@@ -265,6 +276,17 @@ export default function InstallmentPlansScreen() {
   async function openDetail(p: Plan) {
     setDetail(p);
     setListPopup(null);
+    await loadPlanItems(p);
+  }
+
+  // ปุ่มบนการ์ด: เปิดป๊อปอัพงวดชำระ / ประวัติติดตาม โดยไม่ต้องเข้าหน้ารายละเอียด
+  function openListFromCard(p: Plan, kind: 'items' | 'followups') {
+    setListPopup(kind);
+    void loadPlanItems(p);
+  }
+
+  async function loadPlanItems(p: Plan) {
+    setPopupPlan(p);
     setItems([]);
     setFollowups([]);
     setItemsError(null);
@@ -433,16 +455,44 @@ export default function InstallmentPlansScreen() {
         <Text style={styles.kpiHint}>
           <Ionicons name="funnel-outline" size={10} color="#94a3b8" /> แตะกล่องเพื่อกรองรายการ
         </Text>
+        {/* จัดเป็นหมวด: ภาพรวม / ค้างชำระ / เงินเข้าแล้ว (การ์ดชุดเดียวกับเว็บ 7 ใบ) */}
+        <Text style={styles.kpiGroupTitle}>ภาพรวมแผน</Text>
         <View style={styles.kpiGrid}>
           {box('budget', 'all', 'ทุนตั้งต้น (งบรวมตามแผน)', money(kpi.totalBudget), '', PRIMARY, 'cash')}
+          {box('items', 'paid_full', 'งวดจ่ายแล้ว/ทั้งหมด', `${kpi.paidItems.toLocaleString('en-US')}/${kpi.items.toLocaleString('en-US')}`, 'งวด', '#7c3aed', 'list')}
+        </View>
+        <Text style={styles.kpiGroupTitle}>ค้างชำระ</Text>
+        <View style={styles.kpiGrid}>
           {box('debtor', 'pending', 'หน่วยงานค้างชำระ', kpi.debtorUnits.toLocaleString('en-US'), 'เจ้า', AMBER, 'people')}
           {box('outstanding', 'pending', 'ค้างชำระตามแผน', money(kpi.totalOutstanding), '', RED, 'alert-circle')}
+        </View>
+        <Text style={styles.kpiGroupTitle}>เงินเข้าแล้ว</Text>
+        <View style={styles.kpiGrid}>
           {box('income_units', 'has_income', 'หน้างานที่เงินเข้าแล้ว', kpi.plansWithIncome.toLocaleString('en-US'), 'งาน', '#0891b2', 'document-text')}
           {box('paid', 'has_income', 'เงินเข้าทั้งหมด (ตามแผน)', money(kpi.totalPaid), '', GREEN, 'wallet')}
           {box('net', 'has_income', 'ยอดรับสุทธิ', money(kpi.totalNet), '', TEAL, 'cash-outline')}
-          {box('items', 'paid_full', 'งวดจ่ายแล้ว/ทั้งหมด', `${kpi.paidItems.toLocaleString('en-US')}/${kpi.items.toLocaleString('en-US')}`, 'งวด', '#7c3aed', 'list')}
         </View>
       </View>
+    );
+  }
+
+
+  // แถว "ผู้รับผิดชอบติดตามหนี้" ในแถบท้ายการ์ด — กดเพื่อเลือก/เปลี่ยน (ป๊อปอัพรายชื่อเดิม)
+  function renderOwnerRow(name: string, isTeam: boolean, onPress: () => void) {
+    return (
+      <TouchableOpacity style={styles.ownerRow} onPress={onPress} accessibilityLabel="เลือกผู้รับผิดชอบติดตามหนี้">
+        <View style={styles.ownerIcon}>
+          <Ionicons name={isTeam ? 'people' : 'person'} size={14} color={PRIMARY} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.ownerLabel}>ผู้รับผิดชอบติดตามหนี้</Text>
+          <Text style={[styles.ownerName, !name && { color: '#94a3b8' }]} numberOfLines={1}>{name || 'ยังไม่ระบุ'}</Text>
+        </View>
+        <View style={styles.ownerAction}>
+          <Text style={styles.ownerActionText}>{name ? 'เปลี่ยน' : 'เลือก'}</Text>
+          <Ionicons name="chevron-forward" size={12} color={PRIMARY} />
+        </View>
+      </TouchableOpacity>
     );
   }
 
@@ -482,21 +532,20 @@ export default function InstallmentPlansScreen() {
           <View style={[styles.progressFill, { width: `${pct * 100}%`, backgroundColor: st.color }]} />
         </View>
 
-        <View style={styles.metaRow}>
-          <View style={styles.metaItem}>
-            <Ionicons name="person-outline" size={12} color={GRAY} />
-            <Text style={[styles.metaText, !p.debtUser && { color: '#94a3b8' }]} numberOfLines={1}>{p.debtUser || 'ยังไม่ระบุผู้ติดตาม'}</Text>
-          </View>
-          <View style={styles.metaItem}>
-            <Ionicons name="headset-outline" size={12} color={followColor(p.followStatus)} />
-            <Text style={[styles.metaText, { color: followColor(p.followStatus) }]} numberOfLines={1}>{p.followStatus}</Text>
-          </View>
-          <View style={styles.metaItem}>
-            <Ionicons name="list-outline" size={12} color={GRAY} />
-            <Text style={styles.metaText}>{p.paidCount}/{p.itemCount} งวด</Text>
-          </View>
-          <View style={{ flex: 1 }} />
-          <Ionicons name="chevron-forward" size={16} color="#cbd5e1" />
+        {/* แถบปุ่มท้ายการ์ด: ผู้รับผิดชอบ + ปุ่มการกระทำ */}
+        <View style={styles.cardFooter}>
+          {renderOwnerRow(p.debtUser, false, () => setDebtPicker({ plan: p, search: '', saving: false }))}
+        {/* ปุ่มดูงวดชำระ / ประวัติการติดตาม จากการ์ดเลย */}
+        <View style={styles.cardBtnRow}>
+          <TouchableOpacity style={styles.cardBtn} onPress={() => openListFromCard(p, 'items')} accessibilityLabel="ดูงวดชำระ">
+            <Ionicons name="list" size={14} color={GREEN} />
+            <Text style={styles.cardBtnText} numberOfLines={1}>งวดชำระ {p.paidCount}/{p.itemCount}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.cardBtn} onPress={() => openListFromCard(p, 'followups')} accessibilityLabel="ดูประวัติการติดตาม">
+            <Ionicons name="chatbubbles" size={14} color={AMBER} />
+            <Text style={[styles.cardBtnText, { color: AMBER }]} numberOfLines={1}>ประวัติติดตามหนี้</Text>
+          </TouchableOpacity>
+        </View>
         </View>
       </TouchableOpacity>
     );
@@ -556,15 +605,17 @@ export default function InstallmentPlansScreen() {
       </TouchableOpacity>
     );
     return (
-      <Modal visible={!!p} animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={close}>
-        {/* Modal เป็นหน้าต่างแยก — เว้นขอบ notch/แถบล่างเองด้วย insets ไม่งั้นปุ่มกลับบน iPhone กดไม่ได้ */}
-        <View style={[styles.safe, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-          <StatusBar barStyle="dark-content" />
+      <Modal visible={!!p} transparent animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={close}>
+        {/* ป๊อปอัพเลื่อนขึ้นจากด้านล่าง — เว้นด้านบนให้พ้นแถบสถานะ และเว้นท้ายให้พ้นแถบปุ่มนำทางของมือถือ */}
+        <View style={styles.detailOverlay}>
+          <TouchableOpacity style={{ height: insets.top + 24 }} activeOpacity={1} onPress={close} accessibilityLabel="ปิด" />
+          <View style={[styles.detailSheet, { paddingBottom: insets.bottom }]}>
+          <View style={styles.detailGrip} />
           <View style={styles.detailHeader}>
-            <TouchableOpacity onPress={close} style={styles.backBtn} hitSlop={8} accessibilityLabel="กลับ">
-              <Ionicons name="chevron-back" size={22} color="#0f172a" />
-            </TouchableOpacity>
             <Text style={styles.detailHeaderTitle} numberOfLines={1}>แผนชำระ {p?.siteNo || ''}</Text>
+            <TouchableOpacity onPress={close} style={styles.closeBtn} hitSlop={8} accessibilityLabel="ปิด">
+              <Ionicons name="close" size={20} color="#475569" />
+            </TouchableOpacity>
           </View>
           {p && st && (
             <ScrollView contentContainerStyle={styles.detailScroll}>
@@ -614,13 +665,25 @@ export default function InstallmentPlansScreen() {
                 )}
               </View>
 
+              <Section icon="person" title="ผู้รับผิดชอบติดตามหนี้">
+                <View style={styles.debtRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.infoLabel}>บุคคล</Text>
+                    <Text style={[styles.debtName, !p.debtUser && { color: '#94a3b8' }]}>{p.debtUser || 'ยังไม่ระบุ'}</Text>
+                  </View>
+                  <TouchableOpacity style={styles.debtBtn} onPress={() => setDebtPicker({ plan: p, search: '', saving: false })}>
+                    <Ionicons name={p.debtUser ? 'swap-horizontal' : 'person-add'} size={14} color="#fff" />
+                    <Text style={styles.debtBtnText}>{p.debtUser ? 'เปลี่ยน' : 'เลือก'}</Text>
+                  </TouchableOpacity>
+                </View>
+              </Section>
+
               <Section icon="document-text" title="ข้อมูลแผน">
                 <InfoRow label="เลขหน้างาน" value={p.siteNo} />
                 <InfoRow label="บริษัท (ตามชีท)" value={p.companyRaw} />
                 <InfoRow label="บริษัทในระบบ" value={p.compName} />
                 <InfoRow label="โครงการ" value={[p.projectCode, p.projectName].filter(Boolean).join(' · ')} />
                 <InfoRow label="งวดชำระ" value={p.installmentLabel} />
-                <InfoRow label="ผู้รับผิดชอบติดตามหนี้" value={p.debtUser} />
                 <InfoRow label="ผู้ติดต่อ" value={p.customerContact} />
                 <InfoRow label="ที่อยู่" value={p.customerAddress} />
                 {!!p.sourceSheet && <InfoRow label="ชีทต้นทาง" value={p.sourceSheet} />}
@@ -629,6 +692,85 @@ export default function InstallmentPlansScreen() {
             </ScrollView>
           )}
           {renderListPopup()}
+          {renderDebtPicker()}
+          </View>
+        </View>
+      </Modal>
+    );
+  }
+
+  // บันทึกผู้รับผิดชอบติดตามหนี้ แล้วอัปเดตรายการ/หน้ารายละเอียดทันที (ไม่ต้องโหลดใหม่ เหมือนเว็บ)
+  async function saveDebtOwner(name: string) {
+    const plan = debtPicker.plan;
+    if (!plan || !user?.id) return;
+    setDebtPicker((s) => ({ ...s, saving: true }));
+    try {
+      const res = await apiMobilePost(INST_API_URL, 'save_debt_owner', { user_id: user.id, plan_id: plan.id, debt_user: name });
+      const debtUser = str(res.debt_name) || name;
+      setPlans((list) => list.map((x) => (x.id === plan.id ? { ...x, debtUser } : x)));
+      setDetail((d) => (d && d.id === plan.id ? { ...d, debtUser } : d));
+      setDebtPicker({ plan: null, search: '', saving: false });
+    } catch (e: any) {
+      setDebtPicker((s) => ({ ...s, saving: false }));
+      Alert.alert('บันทึกไม่สำเร็จ', e?.message || 'กรุณาลองใหม่อีกครั้ง');
+    }
+  }
+
+  // ป๊อปอัพเลือกผู้รับผิดชอบ — เปิดได้ทั้งจากการ์ดในรายการและจากหน้ารายละเอียด
+  function renderDebtPicker() {
+    const plan = debtPicker.plan;
+    const q = debtPicker.search.trim().toLowerCase();
+    const list = debtUsers.filter((n) => !q || n.toLowerCase().includes(q));
+    const close = () => {
+      if (!debtPicker.saving) setDebtPicker({ plan: null, search: '', saving: false });
+    };
+    return (
+      <Modal visible={!!plan} transparent animationType="fade" statusBarTranslucent onRequestClose={close}>
+        <View style={styles.pickerOverlay}>
+          <View style={styles.pickerSheet}>
+            <View style={styles.pickerHead}>
+              <Ionicons name="person-circle" size={18} color={PRIMARY} />
+              <Text style={styles.pickerTitle}>ผู้รับผิดชอบติดตามหนี้</Text>
+              <TouchableOpacity onPress={close} hitSlop={8} accessibilityLabel="ปิด">
+                <Ionicons name="close" size={20} color={GRAY} />
+              </TouchableOpacity>
+            </View>
+            {!!plan && (
+              <Text style={styles.pickerSub} numberOfLines={1}>
+                หน้างาน {plan.siteNo || '-'} · {plan.unitName || '-'}
+              </Text>
+            )}
+            <View style={styles.pickerSearch}>
+              <Ionicons name="search" size={14} color="#94a3b8" />
+              <TextInput
+                value={debtPicker.search}
+                onChangeText={(v) => setDebtPicker((s) => ({ ...s, search: v }))}
+                placeholder="ค้นหาชื่อพนักงาน..."
+                placeholderTextColor="#94a3b8"
+                style={styles.pickerSearchInput}
+              />
+            </View>
+            {debtPicker.saving ? (
+              <ActivityIndicator color={PRIMARY} style={{ paddingVertical: 24 }} />
+            ) : (
+              <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled">
+                {list.length === 0 ? (
+                  <Text style={styles.emptyText}>ไม่พบรายชื่อ</Text>
+                ) : (
+                  list.map((n) => {
+                    const current = plan?.debtUser === n;
+                    return (
+                      <TouchableOpacity key={n} style={[styles.pickerOption, current && styles.pickerOptionActive]} onPress={() => saveDebtOwner(n)}>
+                        <Ionicons name="person-outline" size={15} color={current ? PRIMARY : GRAY} />
+                        <Text style={[styles.pickerOptionText, current && { color: PRIMARY, fontWeight: '900' }]}>{n}</Text>
+                        {current && <Ionicons name="checkmark" size={16} color={PRIMARY} />}
+                      </TouchableOpacity>
+                    );
+                  })
+                )}
+              </ScrollView>
+            )}
+          </View>
         </View>
       </Modal>
     );
@@ -639,19 +781,30 @@ export default function InstallmentPlansScreen() {
     const isItems = listPopup === 'items';
     const closePopup = () => setListPopup(null);
     return (
-      <Modal visible={!!listPopup && !!detail} transparent animationType="slide" statusBarTranslucent onRequestClose={closePopup}>
+      <Modal visible={!!listPopup} transparent animationType="slide" statusBarTranslucent onRequestClose={closePopup}>
         <View style={styles.sheetOverlay}>
           <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={closePopup} />
           <View style={[styles.sheet, { paddingBottom: 16 + insets.bottom }]}>
             <View style={styles.sheetHandle} />
             <View style={styles.sheetHeadRow}>
-              <Text style={styles.sheetTitle}>{isItems ? `งวดชำระ (${items.length})` : `ประวัติการติดตาม (${followups.length})`}</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.sheetTitle}>{isItems ? `งวดชำระ (${itemsLoading ? '…' : items.length})` : `ประวัติการติดตาม (${itemsLoading ? '…' : followups.length})`}</Text>
+                {!!popupPlan && (
+                  <Text style={styles.cardSub} numberOfLines={1}>
+                    {popupPlan.siteNo || '-'} · {popupPlan.unitName || '-'}
+                  </Text>
+                )}
+              </View>
               <TouchableOpacity onPress={closePopup} hitSlop={8} accessibilityLabel="ปิด">
                 <Ionicons name="close" size={22} color={GRAY} />
               </TouchableOpacity>
             </View>
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 8 }}>
-              {isItems ? (
+              {itemsLoading ? (
+                <ActivityIndicator color={PRIMARY} style={{ paddingVertical: 24 }} />
+              ) : itemsError ? (
+                <Text style={[styles.emptyText, { color: RED }]}>{itemsError}</Text>
+              ) : isItems ? (
                 items.length === 0 ? (
                   <Text style={styles.emptyText}>ยังไม่มีงวดชำระ</Text>
                 ) : (
@@ -868,6 +1021,9 @@ export default function InstallmentPlansScreen() {
 
       {renderFilterSheet()}
       {renderDetail()}
+      {/* เปิดจากการ์ดในรายการ — ตอนเปิดหน้ารายละเอียดอยู่จะใช้ตัวที่ซ้อนในโมดัลรายละเอียดแทน */}
+      {!detail && renderListPopup()}
+      {!detail && renderDebtPicker()}
     </SafeAreaView>
   );
 }
@@ -882,6 +1038,13 @@ function ItemCell({ label, value, strong }: { label: string; value: string; stro
 }
 
 const styles = StyleSheet.create({
+  cardFooter: { marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#f1f5f9', gap: 8 },
+  ownerRow: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#f8fafc', borderRadius: 10, borderWidth: 1, borderColor: '#e2e8f0', paddingHorizontal: 10, paddingVertical: 8 },
+  ownerIcon: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#eef2ff', alignItems: 'center', justifyContent: 'center' },
+  ownerLabel: { fontSize: 10.5, color: GRAY },
+  ownerName: { fontSize: 13, fontWeight: '800', color: '#0f172a', marginTop: 1 },
+  ownerAction: { flexDirection: 'row', alignItems: 'center', gap: 2, backgroundColor: '#eef2ff', borderRadius: 50, paddingHorizontal: 10, paddingVertical: 5 },
+  ownerActionText: { fontSize: 11.5, fontWeight: '800', color: PRIMARY },
   safe: { flex: 1, backgroundColor: '#f8fafc' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 10 },
   errorText: { color: '#475569', fontSize: 13, textAlign: 'center', lineHeight: 20 },
@@ -920,6 +1083,7 @@ const styles = StyleSheet.create({
   progressFill: { height: '100%', borderRadius: 4 },
   kpiHint: { fontSize: 10.5, color: '#94a3b8', marginTop: 12, marginBottom: 8 },
   kpiGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 8 },
+  kpiGroupTitle: { fontSize: 12, fontWeight: '900', color: '#334155', marginTop: 10, marginBottom: 6 },
   kpiBox: { width: '48.8%', minHeight: 66, backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', borderLeftWidth: 4, paddingHorizontal: 9, paddingVertical: 8, gap: 4 },
   tapHintIcon: { position: 'absolute', top: 6, right: 7 },
   kpiLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingRight: 12 },
@@ -948,8 +1112,11 @@ const styles = StyleSheet.create({
   metaItem: { flexDirection: 'row', alignItems: 'center', gap: 4, maxWidth: '100%' },
   metaText: { fontSize: 11, color: '#475569', fontWeight: '600', flexShrink: 1 },
 
-  detailHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
-  backBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  detailOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)' },
+  detailSheet: { flex: 1, backgroundColor: '#f8fafc', borderTopLeftRadius: 20, borderTopRightRadius: 20, overflow: 'hidden' },
+  detailGrip: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: '#cbd5e1', marginTop: 8, marginBottom: 2 },
+  detailHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#f8fafc', paddingLeft: 16, paddingRight: 10, paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
+  closeBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
   detailHeaderTitle: { flex: 1, fontSize: 16, fontWeight: '900', color: '#0f172a' },
   detailScroll: { padding: 14, paddingBottom: 32, gap: 12 },
   detailHero: { backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#e2e8f0', padding: 13, gap: 4 },
@@ -967,6 +1134,26 @@ const styles = StyleSheet.create({
   popupBtnIcon: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   popupBtnTitle: { fontSize: 13.5, fontWeight: '900', color: '#0f172a' },
   popupBtnSub: { fontSize: 11.5, color: GRAY, marginTop: 2 },
+  cardBtnRow: { flexDirection: 'row', gap: 8 },
+  cardBtn: { flex: 1, minHeight: 38, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 10, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#f8fafc', paddingHorizontal: 8 },
+  cardBtnText: { flexShrink: 1, fontSize: 12, fontWeight: '800', color: '#334155' },
+  debtChip: { flexDirection: 'row', alignItems: 'center', gap: 4, maxWidth: '100%', backgroundColor: '#eef2ff', borderWidth: 1, borderColor: '#c7d2fe', borderRadius: 50, paddingHorizontal: 9, paddingVertical: 4 },
+  debtChipEmpty: { backgroundColor: '#fff', borderStyle: 'dashed', borderColor: '#a5b4fc' },
+  debtChipText: { fontSize: 11, color: '#3730a3', fontWeight: '800', flexShrink: 1 },
+  debtRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
+  debtName: { fontSize: 14, fontWeight: '900', color: '#0f172a', marginTop: 2 },
+  debtBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: PRIMARY, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 9 },
+  debtBtnText: { color: '#fff', fontSize: 12.5, fontWeight: '800' },
+  pickerOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', justifyContent: 'center', padding: 20 },
+  pickerSheet: { backgroundColor: '#fff', borderRadius: 16, padding: 16 },
+  pickerHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  pickerTitle: { flex: 1, fontSize: 15, fontWeight: '900', color: '#0f172a' },
+  pickerSub: { fontSize: 11.5, color: GRAY, marginTop: 4, marginBottom: 10 },
+  pickerSearch: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, paddingHorizontal: 10, height: 40, marginBottom: 8 },
+  pickerSearchInput: { flex: 1, fontSize: 13, color: '#0f172a', padding: 0 },
+  pickerOption: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 12, paddingHorizontal: 8, borderRadius: 8 },
+  pickerOptionActive: { backgroundColor: '#eef2ff' },
+  pickerOptionText: { flex: 1, fontSize: 13.5, color: '#334155', fontWeight: '600' },
   itemCard: { backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, padding: 10, marginTop: 8 },
   itemCardPaid: { backgroundColor: '#f0fdf4', borderColor: '#bbf7d0' },
   itemHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },

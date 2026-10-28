@@ -2008,7 +2008,6 @@ export default function CarDashboardScreen() {
     >
       <StatusBar
         barStyle={isDarkMode ? "light-content" : "dark-content"}
-        backgroundColor={colors.bg}
       />
       <View style={styles.header}>
         <View>

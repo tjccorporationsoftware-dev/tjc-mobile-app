@@ -18,23 +18,25 @@ import { useFocusEffect } from 'expo-router';
 import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Linking,
   Modal,
   RefreshControl,
   ScrollView,
-  StatusBar,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { formatShortThaiDate, formatShortThaiDateTime } from '../../components/DateTimeField';
+import AttachmentManagerModal, { AttachedFile } from '../../components/AttachmentManagerModal';
 import ListPager, { pageCount } from '../../components/ListPager';
+import { useScreenInsets } from '../../components/useScreenInsets';
 import { API_BASE, API_MODULES } from '../../constants/config';
-import { apiMobileGet } from '../../service/api_mobile';
+import { apiMobileGet, apiMobilePost } from '../../service/api_mobile';
 import { useAuth } from '../_layout';
 
 const LG_API_URL = `${API_MODULES}/lg_API_mobile.php`;
@@ -74,6 +76,8 @@ interface LgRow {
   alertDays: number;
   status: string;
   hasChecker: boolean;
+  checkerSet: boolean; // มีชื่อผู้จัดการในคอลัมน์จริง (ไม่นับนำเข้าย้อนหลัง "อนุมัติแล้ว")
+  approverSet: boolean;
   checkerName: string;
   checkedAt: string;
   hasApprover: boolean;
@@ -123,6 +127,8 @@ function mapRow(r: any): LgRow {
     status: str(r.lg_status),
     hasChecker: !!Number(r.has_checker ?? 0) || !!str(r.checker_name) || str(r.lg_status) === 'อนุมัติแล้ว',
     checkerName: str(r.checker_name),
+    checkerSet: !!Number(r.checker_set ?? 0),
+    approverSet: !!Number(r.approver_set ?? 0),
     checkedAt: ymd(r.checked_at),
     hasApprover: !!Number(r.has_approver ?? 0) || !!str(r.approver_name) || str(r.lg_status) === 'อนุมัติแล้ว',
     approverName: str(r.approver_name),
@@ -243,10 +249,15 @@ export default function LgDashboardScreen() {
 export function LgDashboardView({ variant }: { variant: LgVariant }) {
   const isImport = variant === 'import';
   const { user } = useAuth();
-  const insets = useSafeAreaInsets();
+  // ขอบจอจริง (หน้าใน Drawer ได้ insets.top = 0 จาก header) — ใช้วางป๊อปอัพไม่ให้ชนแถบสถานะ/แถบนำทาง
+  const insets = useScreenInsets();
 
   const [rows, setRows] = useState<LgRow[]>([]);
   const [canViewNames, setCanViewNames] = useState(false);
+  // สิทธิ์ปุ่มเหมือนเว็บ: ยกเลิกอนุมัติ (lg_cancel_approval) / ยกเลิกรายการ (lg_cancel_record)
+  const [canCancelApproval, setCanCancelApproval] = useState(false);
+  const [canCancelRecord, setCanCancelRecord] = useState(false);
+  const [approvalBusy, setApprovalBusy] = useState<string | null>(null); // "<id>:<op>"
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -264,6 +275,8 @@ export function LgDashboardView({ variant }: { variant: LgVariant }) {
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [detail, setDetail] = useState<LgRow | null>(null);
+  // รายการที่เปิดป๊อปอัพ "จัดการเอกสารแนบ" อยู่ (เปิดได้จากการ์ดและหน้ารายละเอียด)
+  const [attachFor, setAttachFor] = useState<LgRow | null>(null);
 
   const load = useCallback(
     async (refresh = false) => {
@@ -274,6 +287,8 @@ export function LgDashboardView({ variant }: { variant: LgVariant }) {
         const res = await apiMobileGet(LG_API_URL, VARIANT[variant].action, { user_id: user.id });
         setRows(Array.isArray(res.list) ? res.list.map(mapRow) : []);
         setCanViewNames(!!Number(res.can_view_approver_name ?? 0));
+        setCanCancelApproval(!!Number(res.can_cancel_approval ?? 0));
+        setCanCancelRecord(!!Number(res.can_cancel_record ?? 0));
       } catch (e: any) {
         // 404 = ยังไม่มีไฟล์ lg_API_mobile.php บนเซิร์ฟเวอร์ (ดู docs/LG_Dashboard_API_Spec.md)
         const notReady = e?.response?.status === 404;
@@ -295,6 +310,7 @@ export function LgDashboardView({ variant }: { variant: LgVariant }) {
       return () => {
         setDetail(null);
         setFilterSheetOpen(false);
+        setAttachFor(null);
       };
     }, [])
   );
@@ -401,80 +417,85 @@ export function LgDashboardView({ variant }: { variant: LgVariant }) {
   // -------------------- render: ส่วนหัว --------------------
 
   function renderSummary() {
-    // กล่องสถานะ — แตะเพื่อกรอง แตะซ้ำเพื่อล้าง (ไอคอนกรวย = กดกรองได้)
-    const statusBox = (f: StatusFilter, label: string, value: number, color: string, icon: keyof typeof Ionicons.glyphMap) => {
-      const active = statusFilter === f;
-      return (
-        <TouchableOpacity
-          key={f}
-          style={[styles.kpiBox, { borderTopColor: color }, active && { borderColor: color, backgroundColor: color + '0d' }]}
-          onPress={() => setStatusFilter(active ? 'all' : f)}
-        >
-          <Ionicons name={active ? 'funnel' : 'funnel-outline'} size={10} color={active ? color : '#94a3b8'} style={styles.tapHintIcon} />
-          <View style={styles.kpiLabelRow}>
-            <Ionicons name={icon} size={12} color={color} />
-            <Text style={[styles.kpiLabel, { color }]} numberOfLines={2}>{label}</Text>
-          </View>
-          <Text style={styles.kpiValue}>{value.toLocaleString('en-US')}</Text>
-        </TouchableOpacity>
-      );
-    };
+    // ช่องตัวเลขในการ์ดกลุ่ม (แบบการ์ด KPI ของเว็บ: หัวข้อเล็ก + ตัวเลขใหญ่ คั่นด้วยเส้นตั้ง) — แตะเพื่อกรอง
+    const cell = (key: string, label: string, value: number, color: string, active: boolean, onPress: () => void, last = false) => (
+      <TouchableOpacity key={key} style={[styles.wkCell, !last && styles.wkCellDivider, active && { backgroundColor: color + '14' }]} onPress={onPress}>
+        <Text style={styles.wkCellLabel} numberOfLines={1}>{label}</Text>
+        <Text style={[styles.wkCellValue, { color }]}>{value.toLocaleString('en-US')}</Text>
+        {active && <Ionicons name="funnel" size={10} color={color} style={styles.tapHintIcon} />}
+      </TouchableOpacity>
+    );
+    const group = (title: string, icon: keyof typeof Ionicons.glyphMap, color: string, cells: ReactNode) => (
+      <View style={styles.wkGroup}>
+        <View style={styles.wkGroupHead}>
+          <Ionicons name={icon} size={13} color={color} />
+          <Text style={[styles.wkGroupTitle, { color }]}>{title}</Text>
+        </View>
+        <View style={styles.wkCellRow}>{cells}</View>
+      </View>
+    );
+    const sf = (f: StatusFilter) => () => setStatusFilter(statusFilter === f ? 'all' : f);
+    const cf = (k: CondKind) => () => setCondFilter(condFilter === k ? 'all' : k);
+    const BLUE = '#2563eb';
+    const PURPLE = '#9333ea';
+    const YELLOW = '#d97706';
 
+    // การ์ด KPI ตามหน้าเว็บ: มูลค่ารวม / รายการทั้งหมด / รูปแบบการค้ำประกัน / รออนุมัติ / อนุมัติแล้ว (+ อายุหนังสือค้ำ)
     return (
-      <View style={styles.summaryCard}>
-        <View style={styles.summaryTopBar} />
-        <View style={styles.summaryTotalRow}>
-          <View style={styles.summaryIcon}>
-            <Ionicons name="shield-checkmark" size={20} color={PRIMARY} />
+      <View style={styles.wkWrap}>
+        <View style={styles.wkStatRow}>
+          <View style={styles.wkStat}>
+            <Text style={styles.wkStatLabel}>มูลค่าค้ำประกันรวม</Text>
+            <Text style={[styles.wkStatValue, { color: BLUE }]} numberOfLines={1} adjustsFontSizeToFit>{money(kpi.amount)}</Text>
           </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.summaryLabel}>มูลค่าค้ำประกันรวม</Text>
-            <Text style={styles.summaryValue} numberOfLines={1} adjustsFontSizeToFit>
-              {money(kpi.amount)} <Text style={styles.summaryUnit}>บาท</Text>
-            </Text>
-            <Text style={styles.summarySub}>{kpi.count.toLocaleString('en-US')} รายการ (ไม่รวมที่ยกเลิก)</Text>
+          <View style={styles.wkStat}>
+            <Text style={styles.wkStatLabel}>รายการทั้งหมด (ฉบับ)</Text>
+            <Text style={[styles.wkStatValue, { color: '#475569' }]}>{kpi.count.toLocaleString('en-US')}</Text>
           </View>
         </View>
 
-        {/* รูปแบบการค้ำ — ข้อมูลทั่วไป (เทา) แตะเพื่อกรองรูปแบบ */}
-        <View style={styles.condRow}>
-          {(['normal', 'unlimited'] as CondKind[]).map((k) => {
-            const active = condFilter === k;
-            return (
-              <TouchableOpacity key={k} style={[styles.condBox, active && styles.condBoxActive]} onPress={() => setCondFilter(active ? 'all' : k)}>
-                <Ionicons name={COND_META[k].icon} size={13} color={active ? PRIMARY : GRAY} />
-                <Text style={styles.condLabel} numberOfLines={1}>{COND_META[k].label}</Text>
-                <Text style={styles.condValue}>{kpi[k].toLocaleString('en-US')}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        <Text style={styles.kpiHint}>
-          <Ionicons name="funnel-outline" size={10} color="#94a3b8" /> แตะกล่องเพื่อกรองรายการ
+        {group('รูปแบบการค้ำประกัน', 'document-text', PURPLE, [
+          cell('normal', 'หนังสือค้ำฯ', kpi.normal, BLUE, condFilter === 'normal', cf('normal')),
+          cell('unlimited', 'ภาระผูกพันธ์', kpi.unlimited, PURPLE, condFilter === 'unlimited', cf('unlimited'), true),
+        ])}
+        {group('รออนุมัติ', 'time', YELLOW, [
+          cell('pm', 'รอ ผจก.', kpi.pendingMgr, YELLOW, statusFilter === 'รอผู้จัดการ', sf('รอผู้จัดการ')),
+          cell('pa', 'รอ ผู้ดูแล', kpi.pendingAdmin, YELLOW, statusFilter === 'รอผู้ดูแล', sf('รอผู้ดูแล'), true),
+        ])}
+        {group('อนุมัติแล้ว', 'checkmark-done', GREEN, [
+          cell('am', 'ผจก. อนุมัติ', kpi.approvedMgr, GREEN, statusFilter === 'ผู้จัดการอนุมัติ', sf('ผู้จัดการอนุมัติ')),
+          cell('aa', 'ผู้ดูแล (สมบูรณ์)', kpi.approvedAdmin, GREEN, statusFilter === 'ผู้ดูแลอนุมัติ', sf('ผู้ดูแลอนุมัติ'), true),
+        ])}
+        {group('อายุหนังสือค้ำ', 'notifications', RED, [
+          cell('ex', 'ใกล้หมดอายุ', kpi.expiring, RED, statusFilter === 'ใกล้หมดอายุ', sf('ใกล้หมดอายุ')),
+          cell('ed', 'หมดประกันแล้ว', kpi.expired, GRAY, statusFilter === 'หมดประกัน', sf('หมดประกัน'), true),
+        ])}
+        <Text style={styles.wkHint}>
+          <Ionicons name="funnel-outline" size={10} color="#94a3b8" /> แตะตัวเลขเพื่อกรองรายการ (แตะซ้ำเพื่อล้าง)
         </Text>
-        <Text style={styles.kpiGroupTitle}>ขั้นที่ 1 · ผู้จัดการ</Text>
-        <View style={styles.kpiRow}>
-          {statusBox('รอผู้จัดการ', 'รออนุมัติ', kpi.pendingMgr, AMBER, 'hourglass-outline')}
-          {statusBox('ผู้จัดการอนุมัติ', 'อนุมัติแล้ว', kpi.approvedMgr, GREEN, 'checkmark-circle')}
-        </View>
-        <Text style={styles.kpiGroupTitle}>ขั้นที่ 2 · ผู้ดูแลหนังสือค้ำ</Text>
-        <View style={styles.kpiRow}>
-          {statusBox('รอผู้ดูแล', 'รออนุมัติ', kpi.pendingAdmin, AMBER, 'hourglass-outline')}
-          {statusBox('ผู้ดูแลอนุมัติ', 'อนุมัติแล้ว', kpi.approvedAdmin, GREEN, 'checkmark-done-circle')}
-        </View>
-        <Text style={styles.kpiGroupTitle}>อายุหนังสือค้ำ</Text>
-        <View style={styles.kpiRow}>
-          {statusBox('ใกล้หมดอายุ', 'ใกล้หมดอายุ', kpi.expiring, RED, 'notifications')}
-          {statusBox('หมดประกัน', 'หมดประกันแล้ว', kpi.expired, GRAY, 'close-circle')}
-        </View>
       </View>
     );
   }
 
   // -------------------- render: การ์ดรายการ --------------------
 
-  function ApprovalStep({ label, done, name, at }: { label: string; done: boolean; name: string; at: string }) {
+  // ขั้นอนุมัติ + ปุ่มตามช่องในตารางเว็บ (lg_dashboard.php:1165-1268):
+  //   ยังไม่อนุมัติ -> ปุ่ม "อนุมัติ" (ทุกคนที่เข้าหน้าได้ เหมือนเว็บ)
+  //   อนุมัติแล้ว   -> ปุ่ม "ยกเลิกอนุมัติ" (เฉพาะสิทธิ์ lg_cancel_approval)
+  //   ผู้จัดการแบบนำเข้าย้อนหลัง "อนุมัติแล้ว" (ไม่มีชื่อ) เว็บไม่มีปุ่มยกเลิก — ผู้ดูแลมี
+  function ApprovalStep({ label, step, r }: { label: string; step: 'check' | 'approve'; r: LgRow }) {
+    const isCheck = step === 'check';
+    const done = isCheck ? r.hasChecker : r.hasApprover;
+    const name = isCheck ? r.checkerName : r.approverName;
+    const at = isCheck ? r.checkedAt : r.approvedAt;
+    const canceled = isCanceled(r);
+    const retroOnly = isCheck ? !r.checkerSet && r.status === 'อนุมัติแล้ว' : false;
+    const busyOp = approvalBusy?.startsWith(`${r.id}:`) ? approvalBusy.split(':')[1] : null;
+    let btn: { op: string; text: string; color: string; icon: keyof typeof Ionicons.glyphMap } | null = null;
+    if (!canceled) {
+      if (!done) btn = { op: step, text: 'อนุมัติ', color: GREEN, icon: 'checkmark-circle-outline' };
+      else if (canCancelApproval && !retroOnly) btn = { op: isCheck ? 'uncheck' : 'unapprove', text: 'ยกเลิกอนุมัติ', color: RED, icon: 'arrow-undo' };
+    }
     return (
       <View style={[styles.stepBox, done ? styles.stepDone : styles.stepWait]}>
         <Text style={styles.stepLabel}>{label}</Text>
@@ -485,8 +506,65 @@ export function LgDashboardView({ variant }: { variant: LgVariant }) {
           </Text>
         </View>
         {done && !!at && <Text style={styles.stepAt}>{formatShortThaiDateTime(at)}</Text>}
+        {btn && (
+          <TouchableOpacity
+            style={[styles.stepBtn, { borderColor: btn.color + '55', backgroundColor: btn.op === step ? btn.color : '#fff' }]}
+            onPress={() => confirmApproval(r, btn!.op as ApprovalOp)}
+            disabled={!!busyOp}
+            accessibilityLabel={btn.text}
+          >
+            {busyOp === btn.op ? (
+              <ActivityIndicator size="small" color={btn.op === step ? '#fff' : btn.color} />
+            ) : (
+              <Ionicons name={btn.icon} size={13} color={btn.op === step ? '#fff' : btn.color} />
+            )}
+            <Text style={[styles.stepBtnText, { color: btn.op === step ? '#fff' : btn.color }]}>{btn.text}</Text>
+          </TouchableOpacity>
+        )}
       </View>
     );
+  }
+
+  type ApprovalOp = 'check' | 'approve' | 'uncheck' | 'unapprove' | 'cancel';
+
+  // ยืนยันก่อนกด — ข้อความเดียวกับ Swal ของเว็บ (confirmAction / confirmUnapprove / confirmCancel)
+  function confirmApproval(r: LgRow, op: ApprovalOp) {
+    const t: Record<ApprovalOp, [string, string, string]> = {
+      check: ['ผู้จัดการยืนยันการอนุมัติ?', 'คุณต้องการอนุมัติหนังสือค้ำประกันฉบับนี้ใช่หรือไม่?', 'อนุมัติ'],
+      approve: ['ผู้ดูเเลหนังสือค้ำยืนยันการอนุมัติ?', 'คุณต้องการอนุมัติหนังสือค้ำประกันฉบับนี้ใช่หรือไม่?', 'อนุมัติ'],
+      uncheck: [
+        'ยืนยันยกเลิกการอนุมัติ?',
+        r.approverSet
+          ? 'ผู้ดูแลหนังสือค้ำอนุมัติรายการนี้ไปแล้ว หากยกเลิกการอนุมัติของผู้จัดการ ระบบจะยกเลิกการอนุมัติของผู้ดูแลหนังสือค้ำให้ด้วย'
+          : 'สถานะของรายการนี้จะถูกเปลี่ยนกลับเป็น "รออนุมัติ"',
+        'ยืนยันยกเลิกอนุมัติ',
+      ],
+      unapprove: ['ยืนยันยกเลิกการอนุมัติ?', 'สถานะของรายการนี้จะถูกเปลี่ยนกลับเป็น "รออนุมัติ"', 'ยืนยันยกเลิกอนุมัติ'],
+      cancel: ['ยืนยันยกเลิกรายการ?', 'รายการนี้จะถูกขีดฆ่าและไม่นำมาคำนวณในหน้าแดชบอร์ดอีก (เหมือนการลบ)', 'ยืนยันยกเลิก'],
+    };
+    const [title, msg, ok] = t[op];
+    Alert.alert(title, msg, [
+      { text: op === 'check' || op === 'approve' ? 'ยกเลิก' : 'ปิดหน้าต่าง', style: 'cancel' },
+      { text: ok, style: op === 'cancel' ? 'destructive' : 'default', onPress: () => void runApproval(r, op) },
+    ]);
+  }
+
+  async function runApproval(r: LgRow, op: ApprovalOp) {
+    if (!user?.id) return;
+    setApprovalBusy(`${r.id}:${op}`);
+    try {
+      const res = await apiMobilePost(LG_API_URL, 'lg_action', { user_id: user.id, kind: isImport ? 'import' : 'lg', id: r.id, op });
+      // โหลดรายการใหม่ให้ KPI/สถานะตรงกับเว็บ แล้วอัปเดตหน้ารายละเอียดที่เปิดอยู่
+      const fresh = await apiMobileGet(LG_API_URL, VARIANT[variant].action, { user_id: user.id });
+      const list: LgRow[] = Array.isArray(fresh.list) ? fresh.list.map(mapRow) : [];
+      setRows(list);
+      setDetail((d) => (d ? list.find((x) => x.id === d.id) ?? null : d));
+      Alert.alert(String(res.message || 'บันทึกสำเร็จ'));
+    } catch (e: any) {
+      Alert.alert('บันทึกไม่สำเร็จ', e?.message || 'กรุณาลองใหม่อีกครั้ง');
+    } finally {
+      setApprovalBusy(null);
+    }
   }
 
   function renderCard(r: LgRow) {
@@ -543,27 +621,24 @@ export function LgDashboardView({ variant }: { variant: LgVariant }) {
 
         {!canceled && (
           <View style={styles.stepRowWrap}>
-            <ApprovalStep label="ผู้จัดการ" done={r.hasChecker} name={r.checkerName} at={r.checkedAt} />
-            <ApprovalStep label="ผู้ดูแลหนังสือค้ำ" done={r.hasApprover} name={r.approverName} at={r.approvedAt} />
+            <ApprovalStep label="ผู้จัดการ" step="check" r={r} />
+            <ApprovalStep label="ผู้ดูแลหนังสือค้ำ" step="approve" r={r} />
           </View>
         )}
 
-        {(r.files.length > 0 || isImport) && (
+        {isImport && (
           <View style={styles.fileHint}>
-            {r.files.length > 0 && (
-              <>
-                <Ionicons name="attach" size={13} color={GRAY} />
-                <Text style={styles.fileHintText}>{r.files.length} ไฟล์แนบ</Text>
-              </>
-            )}
-            {isImport && (
-              <>
-                <Ionicons name="layers-outline" size={13} color={GRAY} style={{ marginLeft: r.files.length > 0 ? 8 : 0 }} />
-                <Text style={styles.fileHintText} numberOfLines={1}>{r.importSheet ? `ชีท ${r.importSheet}` : 'นำเข้า'}</Text>
-              </>
-            )}
+            <Ionicons name="layers-outline" size={13} color={GRAY} />
+            <Text style={styles.fileHintText} numberOfLines={1}>{r.importSheet ? `ชีท ${r.importSheet}` : 'นำเข้า'}</Text>
           </View>
         )}
+        {/* แถบปุ่มท้ายการ์ด: เอกสารแนบ (เว็บ: คอลัมน์ไฟล์แนบ) */}
+        <View style={styles.cardFooter}>
+          <TouchableOpacity style={styles.footerBtn} onPress={() => setAttachFor(r)} accessibilityLabel="จัดการเอกสารแนบ">
+            <Ionicons name="attach" size={15} color={PRIMARY} />
+            <Text style={styles.footerBtnText}>{r.files.length > 0 ? `เอกสารแนบ (${r.files.length} ไฟล์)` : 'แนบไฟล์'}</Text>
+          </TouchableOpacity>
+        </View>
       </TouchableOpacity>
     );
   }
@@ -598,17 +673,19 @@ export function LgDashboardView({ variant }: { variant: LgVariant }) {
     const cd = r ? countdown(r) : null;
     const badge = r && cd && !isCanceled(r) ? countdownBadge(cd) : null;
     return (
-      <Modal visible={!!r} animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={close}>
-        {/* Modal เป็นหน้าต่างแยก — เว้นขอบ notch/แถบล่างเองด้วย insets ไม่งั้นปุ่มกลับบน iPhone กดไม่ได้ */}
-        <View style={[styles.safe, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-          <StatusBar barStyle="dark-content" />
+      <Modal visible={!!r} transparent animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={close}>
+        {/* ป๊อปอัพเลื่อนขึ้นจากด้านล่าง — เว้นด้านบนให้พ้นแถบสถานะ และเว้นท้ายให้พ้นแถบปุ่มนำทางของมือถือ */}
+        <View style={styles.detailOverlay}>
+          <TouchableOpacity style={{ height: insets.top + 24 }} activeOpacity={1} onPress={close} accessibilityLabel="ปิด" />
+          <View style={[styles.detailSheet, { paddingBottom: insets.bottom }]}>
+          <View style={styles.detailGrip} />
           <View style={styles.detailHeader}>
-            <TouchableOpacity onPress={close} style={styles.backBtn} hitSlop={8} accessibilityLabel="กลับ">
-              <Ionicons name="chevron-back" size={22} color="#0f172a" />
-            </TouchableOpacity>
             <Text style={styles.detailHeaderTitle} numberOfLines={1}>
               หนังสือค้ำ {(isImport ? r?.lgNumber || r?.projectCode : r?.projectCode) || ''}
             </Text>
+            <TouchableOpacity onPress={close} style={styles.closeBtn} hitSlop={8} accessibilityLabel="ปิด">
+              <Ionicons name="close" size={20} color="#475569" />
+            </TouchableOpacity>
           </View>
           {r && (
             <ScrollView contentContainerStyle={styles.detailScroll}>
@@ -661,9 +738,16 @@ export function LgDashboardView({ variant }: { variant: LgVariant }) {
 
               <Section icon="checkmark-done" title="การอนุมัติ">
                 <View style={styles.stepRowWrap}>
-                  <ApprovalStep label="ขั้นที่ 1 · ผู้จัดการ" done={r.hasChecker} name={r.checkerName} at={r.checkedAt} />
-                  <ApprovalStep label="ขั้นที่ 2 · ผู้ดูแลหนังสือค้ำ" done={r.hasApprover} name={r.approverName} at={r.approvedAt} />
+                  <ApprovalStep label="ขั้นที่ 1 · ผู้จัดการ" step="check" r={r} />
+                  <ApprovalStep label="ขั้นที่ 2 · ผู้ดูแลหนังสือค้ำ" step="approve" r={r} />
                 </View>
+                {/* ยกเลิกรายการ (ขีดฆ่า) — เฉพาะสิทธิ์ lg_cancel_record แบบปุ่มในคอลัมน์จัดการของเว็บ */}
+                {canCancelRecord && !isCanceled(r) && (
+                  <TouchableOpacity style={styles.cancelRecordBtn} onPress={() => confirmApproval(r, 'cancel')} disabled={!!approvalBusy}>
+                    {approvalBusy === `${r.id}:cancel` ? <ActivityIndicator size="small" color={RED} /> : <Ionicons name="ban" size={14} color={RED} />}
+                    <Text style={styles.cancelRecordText}>ยกเลิกรายการนี้</Text>
+                  </TouchableOpacity>
+                )}
                 <InfoRow label="ผู้ลงข้อมูล" value={r.recorder} />
                 <InfoRow label="ผู้แก้ไขล่าสุด" value={r.lastEditor} />
               </Section>
@@ -679,6 +763,11 @@ export function LgDashboardView({ variant }: { variant: LgVariant }) {
               )}
 
               <Section icon="attach" title={`เอกสารแนบ (${r.files.length})`}>
+                {/* ปุ่ม "จัดการเอกสารแนบ" แบบเว็บ — เพิ่มไฟล์ใหม่ / ลบไฟล์เดิม */}
+                <TouchableOpacity style={styles.attachManageBtn} onPress={() => setAttachFor(r)}>
+                  <Ionicons name="cloud-upload-outline" size={15} color={PRIMARY} />
+                  <Text style={styles.attachManageText}>จัดการเอกสารแนบ</Text>
+                </TouchableOpacity>
                 {r.files.length === 0 ? (
                   <Text style={styles.emptyText}>ไม่มีเอกสารแนบ</Text>
                 ) : (
@@ -704,8 +793,31 @@ export function LgDashboardView({ variant }: { variant: LgVariant }) {
               </Section>
             </ScrollView>
           )}
+          </View>
+          {renderAttachModal()}
         </View>
       </Modal>
+    );
+  }
+
+  // ป๊อปอัพจัดการเอกสารแนบ — บันทึกแล้วอัปเดตรายการ/หน้ารายละเอียดทันที
+  function renderAttachModal() {
+    const a = attachFor;
+    return (
+      <AttachmentManagerModal
+        visible={!!a}
+        onClose={() => setAttachFor(null)}
+        userId={user?.id}
+        kind={isImport ? 'import' : 'lg'}
+        recordId={a?.id ?? 0}
+        label={a?.contractNo ?? ''} // เว็บแสดงเลขที่สัญญา (ว่าง = ไม่ระบุ)
+        files={(a?.files ?? []) as AttachedFile[]}
+        onSaved={(files) => {
+          if (!a) return;
+          setRows((list) => list.map((x) => (x.id === a.id ? { ...x, files } : x)));
+          setDetail((d) => (d && d.id === a.id ? { ...d, files } : d));
+        }}
+      />
     );
   }
 
@@ -886,6 +998,7 @@ export function LgDashboardView({ variant }: { variant: LgVariant }) {
 
       {renderFilterSheet()}
       {renderDetail()}
+      {!detail && renderAttachModal()}
     </SafeAreaView>
   );
 }
@@ -893,6 +1006,9 @@ export function LgDashboardView({ variant }: { variant: LgVariant }) {
 // -------------------- Styles --------------------
 
 const styles = StyleSheet.create({
+  cardFooter: { marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#f1f5f9', gap: 8 },
+  footerBtn: { minHeight: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 10, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#f8fafc', paddingHorizontal: 10 },
+  footerBtnText: { fontSize: 12.5, fontWeight: '800', color: PRIMARY },
   safe: { flex: 1, backgroundColor: '#f8fafc' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 10 },
   errorText: { color: '#475569', fontSize: 13, textAlign: 'center', lineHeight: 20 },
@@ -926,6 +1042,21 @@ const styles = StyleSheet.create({
   condValue: { fontSize: 15, fontWeight: '900', color: '#0f172a' },
   kpiHint: { fontSize: 10.5, color: '#94a3b8', marginTop: 12 },
   kpiGroupTitle: { fontSize: 12, fontWeight: '900', color: '#334155', marginTop: 10, marginBottom: 6 },
+  // การ์ด KPI แบบหน้าเว็บ
+  wkWrap: { marginHorizontal: 14, marginTop: 12, gap: 10 },
+  wkStatRow: { flexDirection: 'row', gap: 10 },
+  wkStat: { flex: 1, backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#e2e8f0', paddingHorizontal: 14, paddingVertical: 12 },
+  wkStatLabel: { fontSize: 12, fontWeight: '700', color: '#334155' },
+  wkStatValue: { fontSize: 22, fontWeight: '900', marginTop: 4 },
+  wkGroup: { backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#e2e8f0', overflow: 'hidden' },
+  wkGroupHead: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: '#eef2f7' },
+  wkGroupTitle: { fontSize: 12.5, fontWeight: '900' },
+  wkCellRow: { flexDirection: 'row' },
+  wkCell: { flex: 1, alignItems: 'center', paddingVertical: 10, gap: 2 },
+  wkCellDivider: { borderRightWidth: 1, borderRightColor: '#e2e8f0' },
+  wkCellLabel: { fontSize: 11.5, color: GRAY },
+  wkCellValue: { fontSize: 20, fontWeight: '900' },
+  wkHint: { fontSize: 10.5, color: '#94a3b8' },
   kpiRow: { flexDirection: 'row', gap: 8 },
   kpiBox: { flex: 1, minHeight: 64, backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', borderTopWidth: 4, paddingHorizontal: 10, paddingVertical: 8, gap: 4 },
   tapHintIcon: { position: 'absolute', top: 6, right: 7 },
@@ -962,11 +1093,18 @@ const styles = StyleSheet.create({
   stepRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   stepStatus: { flexShrink: 1, fontSize: 12, fontWeight: '800' },
   stepAt: { fontSize: 10, color: GRAY },
+  stepBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, minHeight: 32, borderRadius: 8, borderWidth: 1, marginTop: 6, paddingHorizontal: 6 },
+  stepBtnText: { fontSize: 11.5, fontWeight: '800' },
+  cancelRecordBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, minHeight: 40, borderRadius: 10, borderWidth: 1, borderColor: '#fecaca', backgroundColor: '#fef2f2', marginTop: 10 },
+  cancelRecordText: { fontSize: 12.5, fontWeight: '800', color: RED },
   fileHint: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 8 },
   fileHintText: { fontSize: 11, color: GRAY, fontWeight: '600' },
 
-  detailHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
-  backBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  detailOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)' },
+  detailSheet: { flex: 1, backgroundColor: '#f8fafc', borderTopLeftRadius: 20, borderTopRightRadius: 20, overflow: 'hidden' },
+  detailGrip: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: '#cbd5e1', marginTop: 8, marginBottom: 2 },
+  detailHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#f8fafc', paddingLeft: 16, paddingRight: 10, paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
+  closeBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
   detailHeaderTitle: { flex: 1, fontSize: 16, fontWeight: '900', color: '#0f172a' },
   detailScroll: { padding: 14, paddingBottom: 32, gap: 12 },
   cancelBox: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#fef2f2', borderWidth: 1, borderColor: '#fecaca', borderRadius: 10, padding: 10 },
@@ -982,6 +1120,11 @@ const styles = StyleSheet.create({
   fileTopic: { fontSize: 12.5, fontWeight: '800', color: '#0f172a' },
   fileName: { fontSize: 11, color: '#475569' },
   fileMeta: { fontSize: 10.5, color: '#94a3b8' },
+  attachManageBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, minHeight: 40, borderRadius: 10, borderWidth: 1, borderStyle: 'dashed', borderColor: '#a5b4fc', backgroundColor: '#eef2ff', marginTop: 8, marginBottom: 4 },
+  attachManageText: { fontSize: 12.5, fontWeight: '800', color: PRIMARY },
+  attachCardBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 50, borderWidth: 1, borderColor: '#c7d2fe', backgroundColor: '#eef2ff', paddingHorizontal: 10, paddingVertical: 5 },
+  attachCardText: { fontSize: 11.5, fontWeight: '800', color: PRIMARY },
+
 
   sheetOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)' },
   sheet: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingHorizontal: 16, maxHeight: '85%' },

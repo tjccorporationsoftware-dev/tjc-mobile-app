@@ -435,6 +435,7 @@ function ProjectCard({
   onRecord,
   onViewFollowHistory,
   onViewPaymentTerms,
+  onOwnerPress,
 }: {
   item: Project;
   busy: boolean;
@@ -444,6 +445,7 @@ function ProjectCard({
   onRecord: () => void;
   onViewFollowHistory: () => void;
   onViewPaymentTerms: () => void;
+  onOwnerPress: () => void;
 }) {
   return (
     <View style={styles.card}>
@@ -471,6 +473,20 @@ function ProjectCard({
       {/* โซนปุ่ม — ปุ่มครบเหมือนเดิม (สถานะติดตาม / สถานะจ่ายเงิน / ติดตาม / ลงบัญชี) แยกพื้นที่แตะจากโซนข้อมูล
           ปุ่มสถานะย่อเหลือแถวเดียว (วันที่ดูต่อได้ในหน้ารายละเอียด/ป็อปอัพประวัติ) */}
       <View style={styles.cardActionZone}>
+        {/* ผู้รับผิดชอบติดตามหนี้ — กดเลือก/เปลี่ยนได้จากการ์ดเลย ไม่ต้องเปิดหน้ารายละเอียดก่อน */}
+        <Pressable onPress={onOwnerPress} style={({ pressed }) => [styles.cardOwnerRow, pressed && styles.pressed]} accessibilityLabel="เลือกผู้รับผิดชอบติดตามหนี้">
+          <View style={styles.cardOwnerIcon}>
+            <Ionicons name="person" size={14} color="#4f46e5" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.cardOwnerLabel}>ผู้รับผิดชอบติดตามหนี้</Text>
+            <Text style={[styles.cardOwnerName, item.owner === 'ยังไม่ระบุ' && { color: '#94a3b8' }]} numberOfLines={1}>{item.owner}</Text>
+          </View>
+          <View style={styles.cardOwnerAction}>
+            <Text style={styles.cardOwnerActionText}>{item.owner === 'ยังไม่ระบุ' ? 'เลือก' : 'เปลี่ยน'}</Text>
+            <Ionicons name="chevron-forward" size={12} color="#4f46e5" />
+          </View>
+        </Pressable>
         <View style={styles.statusCompactRow}>
           <Pressable onPress={onViewFollowHistory} style={({ pressed }) => [styles.statusCompactCol, pressed && styles.pressed]} accessibilityLabel="ดูประวัติการติดตาม">
             <FollowChip item={item} />
@@ -985,7 +1001,7 @@ export default function AccountingDashboard({
   const listParamsRef = useRef<Record<string, string | number | undefined>>({});
   const pageRef = useRef(1);
   // ScrollView หลัก + ตำแหน่งหัวรายการ — เปลี่ยนหน้าแล้วเลื่อนกลับมาที่งานแรกของหน้า (ไม่เด้งไปบนสุดของการ์ดสรุป)
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
   const listTopYRef = useRef(0);
 
   // get_dashboard (README_accounting.md ข้อ 4.2 kpi_all + kpi_by_company) — การ์ดสรุป/แยกตามบริษัท
@@ -1652,6 +1668,7 @@ export default function AccountingDashboard({
               onRecord={() => handleRecord(item)}
               onViewFollowHistory={() => handleViewPayments(item, 'follow')}
               onViewPaymentTerms={() => handleViewPayments(item, 'payment')}
+              onOwnerPress={() => openDebtModal(item)}
             />
           ))
         )}
@@ -2015,7 +2032,13 @@ const styles = StyleSheet.create({
 
   peopleRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginTop: 12, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: '#eef2f6' },
   ownerChip: { maxWidth: '52%', minHeight: 30, borderRadius: 15, backgroundColor: '#eef2ff', paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 5 },
-  ownerText: { color: '#4f46e5', fontSize: 11.5, fontWeight: '800' },
+  ownerText: { color: '#4f46e5', fontSize: 11.5, fontWeight: '800', flexShrink: 1 },
+  cardOwnerRow: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#f8fafc', borderRadius: 10, borderWidth: 1, borderColor: '#e2e8f0', paddingHorizontal: 10, paddingVertical: 8, marginBottom: 8 },
+  cardOwnerIcon: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#eef2ff', alignItems: 'center', justifyContent: 'center' },
+  cardOwnerLabel: { fontSize: 10.5, color: '#64748b' },
+  cardOwnerName: { fontSize: 13, fontWeight: '800', color: '#0f172a', marginTop: 1 },
+  cardOwnerAction: { flexDirection: 'row', alignItems: 'center', gap: 2, backgroundColor: '#eef2ff', borderRadius: 50, paddingHorizontal: 10, paddingVertical: 5 },
+  cardOwnerActionText: { fontSize: 11.5, fontWeight: '800', color: '#4f46e5' },
   closedBlock: { alignItems: 'flex-end' },
   microLabel: { color: '#98a5b3', fontSize: 10 },
   closedBy: { color: '#33475d', fontSize: 11.5, fontWeight: '900', marginTop: 2 },

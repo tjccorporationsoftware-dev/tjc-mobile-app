@@ -475,7 +475,7 @@ export default function LoginScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
-  const passRef = useRef<TextInput>(null);
+  const passRef = useRef<React.ComponentRef<typeof TextInput>>(null);
 
   // หน้าเต็มจอ: ส่วนหัวได้พื้นที่ที่เหลือจากการ์ดฟอร์ม แล้วย่อโลโก้/ชื่อให้พอดีพื้นที่นั้นเอง
   // (heroSpace = ความสูงที่ใช้ได้ · heroContent = ความสูงจริงของโลโก้+ชื่อ ก่อนย่อ)
@@ -570,7 +570,7 @@ export default function LoginScreen() {
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
+      <StatusBar barStyle="light-content" />
 
       {/* พื้นหลัง: ไล่สีน้ำเงินเข้ม -> น้ำเงิน -> ฟ้า (ถึงฟ้าในครึ่งบนที่มองเห็น) + ก้อนแสง + ฟองแสงลอยขึ้น */}
       <LinearGradient

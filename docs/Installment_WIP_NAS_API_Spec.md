@@ -50,6 +50,15 @@ KPI ไม่เปลี่ยนตามตัวกรอง เหมือ
 - `items[]`: `installment_no, payment_name, amount, net_amount, cumulative_paid, remaining, invoice_no, invoice_date, due_date, received_date, is_paid, remark`
 - `followups[]`: `followup_name, call_status, bank_name, remark, created_by, created_at`
 
+### `save_debt_owner` (POST: `user_id`, `plan_id`, `debt_user`) — action เขียนตัวเดียวของไฟล์นี้
+- ทำเหมือน `save_debt_owner` ของเว็บ (installment_plans.php:82-118):
+  - แผนต้องมีอยู่ ถ้าไม่มี ตอบ `not_found`
+  - ชื่อต้องตรงกับ `TRIM(fullname)` ของผู้ใช้ ถ้าไม่ตรง ตอบ `invalid_user`
+  - บันทึก `installment_plans.debt_user`
+- รายชื่อให้เลือกส่งมาเป็น `debt_users` ใน `get_dashboard` (`SELECT DISTINCT TRIM(fullname) ...` แบบเว็บ)
+- เว็บไม่ลงประวัติแก้ไขของแผน ไฟล์นี้จึงไม่ลงเหมือนกัน
+- ตอบกลับ `{ plan_id, debt_name }`
+
 ---
 
 ## 7. wip_API_mobile.php — Dashboard แนชเก่า (wip_jobs)
@@ -81,6 +90,23 @@ KPI ไม่เปลี่ยนตามตัวกรอง เหมือ
 - ถ้าไม่พบงาน ตอบ `not_found` / ถ้าไม่มีสิทธิ์หน้า `wip_dashboard.php` ตอบ `no_permission` / ถ้าไม่ได้ส่งแบบ POST ถูกปฏิเสธ
 - บันทึกแล้วเพิ่มแถวใน `wip_job_edit_logs` โดยใช้ชื่อผู้ใช้ (fullname) เป็น editor เหมือน `wip_logEdit()`
 - ตอบกลับ `{ id, debt_type, debt_name, editor }`
+
+### ปุ่มจัดการงาน (POST: `user_id`, `id`) — ตามคอลัมน์ "จัดการ" ของเว็บ ยกเว้นแก้ไข
+| action | ต้นทางเว็บ | ทำอะไร | ใช้ได้เมื่อ |
+|---|---|---|---|
+| `close_job` | `wip_force_complete` (:202-233) | `status='ปิดจบหน้างาน'`, `closed_by`, `closed_at` + ลงประวัติแก้ไข + `wip_syncToNasProjects()` (สร้าง/อัปเดตแถวใน `nas_projects`) | ยังไม่ปิดจบและไม่ยกเลิก |
+| `undo_close` | `wip_undo_complete` (:238-282) | กลับเป็น `สัญญาจ้าง` ล้าง `closed_*` + `wip_job_undo_logs` (ใน transaction) + ลงประวัติแก้ไข + `wip_maybeDeleteNasSync()` (ลบแถวที่ WIP สร้าง ถ้ายังไม่มีเงินเข้า) | ปิดจบแล้ว |
+| `cancel_job` (+ `cancel_reason` บังคับ) | `wip_cancel_job` (:287-318) | `status='ยกเลิก'`, `cancel_reason`, `canceled_by` + ลงประวัติแก้ไข | ยังไม่ปิดจบและไม่ยกเลิก |
+
+- ฟังก์ชัน sync ไปบัญชีลูกหนี้แนสเรียกตัวเดียวกับเว็บ (`require wip_nas_sync.php` โดยไม่แก้ไฟล์นั้น) ผลส่งกลับใน `nas_sync.message`
+- ผู้ทำรายการคือ fullname ของ `user_id`
+- เว็บซ่อนปุ่มตามสถานะ API ตรวจสถานะซ้ำอีกชั้น ถ้าไม่ตรงตอบ `invalid_state`
+- ไม่มีในแอป: แก้ไขข้อมูลงาน (ตามที่ผู้ใช้สั่ง), นำเข้า/Export Excel, ปุ่ม "ลบ" หลายรายการ (เว็บระบุว่าไว้ใช้ช่วงทดสอบ และลบถาวรกู้คืนไม่ได้)
+
+### `get_canceled_history` / `get_undo_history` (`user_id`, `year`)
+- ปุ่มประวัติบนหัวตารางเว็บ ตามปีชีท
+- `get_canceled_history` ส่ง `list[]` ฟิลด์ `id, site_no, project_name, company, budget, cancel_reason, canceled_by`
+- `get_undo_history` ส่ง `list[]` ฟิลด์ `created_at, performed_by, site_no, company, project_name`
 
 ---
 
@@ -130,5 +156,4 @@ KPI ไม่เปลี่ยนตามตัวกรอง เหมือ
 - นำเข้า Excel / Export Excel
 - แก้ไข / ลบ / ปิดจบ / ยกเลิกปิดจบ / ยกเลิกงาน
 - ลงบัญชีรับชำระ / บันทึกติดตาม
-- เลือกผู้รับผิดชอบติดตามหนี้ของหน้า 6 (หน้า 7 และ 8 ทำแล้ว ดู `save_debt_owner` ด้านบน)
 - ตั้งค่าวันแจ้งเตือน

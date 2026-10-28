@@ -437,7 +437,7 @@ export default function AlertScreen() {
               <Text style={styles.emptyTitle}>ยอดเยี่ยมมาก!</Text>
               <Text style={styles.emptySub}>รถทุกคันเอกสารครบถ้วนสมบูรณ์</Text>
             </View>
-          ) : null
+          ) : undefined
         }
       />
       {loading && !refreshing && (

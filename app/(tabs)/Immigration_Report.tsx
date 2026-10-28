@@ -673,7 +673,6 @@ export default function ImmigrationFormScreen() {
     >
       <StatusBar
         barStyle={isDark ? "light-content" : "dark-content"}
-        backgroundColor={theme.background}
       />
       <SafeAreaView style={{ flex: 1 }}>
         {/* [NEW] ใส่ keyboardShouldPersistTaps เพื่อให้กดเลือกรายการจาก Dropdown ได้โดยไม่เด้งปิดคีย์บอร์ด */}

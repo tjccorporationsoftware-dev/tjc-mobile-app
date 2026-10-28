@@ -7,8 +7,8 @@
  *      get_edit_history = ประวัติการแก้ไขของงาน
  *  - KPI การ์ดเหมือนเว็บ: นับเฉพาะงานที่ไม่ยกเลิก ไม่เปลี่ยนตามตัวกรอง ยกเว้น "ยอดงบรวม" ที่เว็บรวมตามแถวที่กรองอยู่
  *  - กดการ์ด = wipFilterByKpi() ของเว็บ (ตั้งตัวกรองสถานะนับถอยหลัง/สถานะงาน/ประกัน)
- *  - แอปดูเป็นหลัก แก้ได้อย่างเดียวคือ "ผู้รับผิดชอบติดตามหนี้" (save_debt_owner — เลือกบุคคลแบบ popup ของเว็บ)
- *    ไม่มีปุ่มนำเข้า/แก้ไข/ปิดจบ/ยกเลิก/ลบ/Export (ทำบนเว็บ)
+ *  - ปุ่มตามเว็บ ยกเว้นแก้ไข: เลือกผู้รับผิดชอบ, ปิดจบหน้างาน, ยกเลิกปิดจบ, ยกเลิกงาน (ต้องใส่เหตุผล),
+ *    ประวัติงานที่ยกเลิก, ประวัติยกเลิกปิดจบ — ไม่มี นำเข้า/Export Excel/ลบทดสอบ (ทำบนเว็บ)
  *  - ปีชีทในตารางเป็น พ.ศ. — แอปแสดงเป็น ค.ศ. ตามกติกาทั้งแอป
  * ------------------------------------------------------------------
  */
@@ -23,17 +23,17 @@ import {
   Modal,
   RefreshControl,
   ScrollView,
-  StatusBar,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { DateField, formatShortThaiDate, formatShortThaiDateTime, ymdToDate } from '../../components/DateTimeField';
 import ListPager, { pageCount } from '../../components/ListPager';
+import { useScreenInsets } from '../../components/useScreenInsets';
 import { API_MODULES } from '../../constants/config';
 import { apiMobileGet, apiMobilePost } from '../../service/api_mobile';
 import { useAuth } from '../_layout';
@@ -211,7 +211,8 @@ const dateOrNote = (d: string, note: string) => (d ? formatShortThaiDate(d) : no
 
 export default function WipDashboardScreen() {
   const { user } = useAuth();
-  const insets = useSafeAreaInsets();
+  // ขอบจอจริง (หน้าใน Drawer ได้ insets.top = 0 จาก header) — ใช้วางป๊อปอัพไม่ให้ชนแถบสถานะ/แถบนำทาง
+  const insets = useScreenInsets();
 
   const [years, setYears] = useState<number[]>([]);
   const [year, setYear] = useState(0); // ปีชีท พ.ศ. (0 = ให้ API เลือกปีล่าสุด)
@@ -241,6 +242,16 @@ export default function WipDashboardScreen() {
 
   const [detail, setDetail] = useState<WipJob | null>(null);
   const [editLogs, setEditLogs] = useState<{ editor: string; editedAt: string }[] | null>(null);
+  // ปุ่มจัดการตามเว็บ (ยกเว้นแก้ไข): ปิดจบ / ยกเลิกปิดจบ / ยกเลิกงาน
+  const [actionBusyId, setActionBusyId] = useState<number | null>(null);
+  const [cancelJob, setCancelJob] = useState<{ job: WipJob | null; reason: string; saving: boolean }>({ job: null, reason: '', saving: false });
+  // ป๊อปอัพประวัติ (ปุ่มบนหัวตารางเว็บ)
+  const [historyPopup, setHistoryPopup] = useState<{ kind: 'canceled' | 'undo' | null; loading: boolean; list: any[]; error: string | null }>({
+    kind: null,
+    loading: false,
+    list: [],
+    error: null,
+  });
 
   const load = useCallback(
     async (refresh = false, y = year) => {
@@ -381,6 +392,8 @@ export default function WipDashboardScreen() {
       if (jobStatusFilter === '__not_closed__') {
         if (isFinished(j) || isCanceled(j)) return false;
       } else if (jobStatusFilter !== 'all' && j.jobStatus !== jobStatusFilter) return false;
+      // งานที่ยกเลิกแล้วซ่อนไว้ — เห็นเฉพาะตอนเลือกตัวกรองสถานะงาน "ยกเลิก" (ผู้ใช้ขอ ต่างจากตารางเว็บที่โชว์ปนแบบขีดฆ่า)
+      if (isCanceled(j) && jobStatusFilter !== 'ยกเลิก') return false;
       if (warrantyFlag === 'near' && !j.nearWarranty) return false;
       if (warrantyFlag === 'expired' && !j.warrantyExpired) return false;
       if (closedStart || closedEnd) {
@@ -492,19 +505,28 @@ export default function WipDashboardScreen() {
         <Text style={styles.kpiHint}>
           <Ionicons name="funnel-outline" size={10} color="#94a3b8" /> แตะกล่องเพื่อกรองรายการ
         </Text>
+        {/* จัดเป็นหมวด: สถานะงาน / กำหนดส่งมอบ / การรับประกัน */}
+        <Text style={styles.kpiGroupTitle}>สถานะงาน</Text>
         <View style={styles.kpiGrid}>
+          {box('all', 'งานทั้งหมด', kpi.total, PRIMARY, 'folder-open')}
           {box('not_closed', 'ยังไม่ปิดจบหน้างาน', kpi.notClosed, AMBER, 'alert-circle')}
-          {box('warning', 'ใกล้ครบกำหนดส่ง', kpi.nearDue, AMBER, 'hourglass')}
-          {box('danger', 'เกินกำหนด', kpi.overdue, RED, 'alarm')}
           {box('closed', 'ปิดจบหน้างาน', kpi.closed, GREEN, 'flag', kpi.closedUnpaid > 0 ? `(${kpi.closedUnpaid.toLocaleString('en-US')} ยังไม่ชำระ)` : undefined)}
           {box('paid', 'ชำระเรียบร้อย', kpi.paid, GREEN, 'cash')}
+        </View>
+        <Text style={styles.kpiGroupTitle}>กำหนดส่งมอบ</Text>
+        <View style={styles.kpiGrid}>
+          {box('warning', 'ใกล้ครบกำหนดส่ง', kpi.nearDue, AMBER, 'hourglass')}
+          {box('danger', 'เกินกำหนด', kpi.overdue, RED, 'alarm')}
+        </View>
+        <Text style={styles.kpiGroupTitle}>การรับประกัน</Text>
+        <View style={styles.kpiGrid}>
           {box('near_warranty', 'ใกล้หมดประกัน', kpi.nearWarranty, AMBER, 'shield-half')}
           {box('warranty_expired', 'หมดประกันแล้ว', kpi.warrantyExpired, GRAY, 'shield-outline')}
-          {box('all', 'งานทั้งหมด', kpi.total, PRIMARY, 'folder-open')}
         </View>
       </View>
     );
   }
+
 
   function renderCompanies() {
     if (companies.length === 0) return null;
@@ -528,10 +550,30 @@ export default function WipDashboardScreen() {
     );
   }
 
+  // แถว "ผู้รับผิดชอบติดตามหนี้" ในแถบท้ายการ์ด — กดเพื่อเลือก/เปลี่ยน (ป๊อปอัพรายชื่อเดิม)
+  function renderOwnerRow(name: string, isTeam: boolean, onPress: () => void) {
+    return (
+      <TouchableOpacity style={styles.ownerRow} onPress={onPress} accessibilityLabel="เลือกผู้รับผิดชอบติดตามหนี้">
+        <View style={styles.ownerIcon}>
+          <Ionicons name={isTeam ? 'people' : 'person'} size={14} color={PRIMARY} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.ownerLabel}>ผู้รับผิดชอบติดตามหนี้</Text>
+          <Text style={[styles.ownerName, !name && { color: '#94a3b8' }]} numberOfLines={1}>{name || 'ยังไม่ระบุ'}</Text>
+        </View>
+        <View style={styles.ownerAction}>
+          <Text style={styles.ownerActionText}>{name ? 'เปลี่ยน' : 'เลือก'}</Text>
+          <Ionicons name="chevron-forward" size={12} color={PRIMARY} />
+        </View>
+      </TouchableOpacity>
+    );
+  }
+
   function renderCard(j: WipJob) {
     const canceled = isCanceled(j);
     const due = dueBadge(j);
     const st = jobStatusMeta(j.jobStatus);
+    const phone = j.contactPhone.replace(/[^\d+]/g, '');
     return (
       <TouchableOpacity key={j.id} activeOpacity={0.75} onPress={() => openDetail(j)} style={[styles.card, canceled && styles.cardCanceled]}>
         <View style={styles.cardTopRow}>
@@ -562,17 +604,6 @@ export default function WipDashboardScreen() {
               {dateOrNote(j.startDate, j.startNote)} → {dateOrNote(j.endDate, j.endNote)}
             </Text>
           </View>
-          {/* ปุ่มเลือก/เปลี่ยนผู้รับผิดชอบบนการ์ดเลย ไม่ต้องเปิดรายละเอียดก่อน (เหมือนช่องในตารางเว็บ) */}
-          <TouchableOpacity
-            style={[styles.debtChip, !j.debtName && styles.debtChipEmpty]}
-            onPress={() => setDebtPicker({ job: j, search: '', saving: false })}
-            hitSlop={6}
-            accessibilityLabel="เลือกผู้รับผิดชอบติดตามหนี้"
-          >
-            <Ionicons name={j.debtName ? (j.debtType === 'ทีม' ? 'people' : 'person') : 'person-add'} size={12} color={PRIMARY} />
-            <Text style={styles.debtChipText} numberOfLines={1}>{j.debtName || 'เลือกผู้ติดตาม'}</Text>
-            {!!j.debtName && <Ionicons name="chevron-down" size={11} color={PRIMARY} />}
-          </TouchableOpacity>
           {(j.nearWarranty || j.warrantyExpired) && (
             <View style={styles.metaItem}>
               <Ionicons name="shield-half" size={12} color={j.warrantyExpired ? GRAY : AMBER} />
@@ -580,16 +611,42 @@ export default function WipDashboardScreen() {
             </View>
           )}
         </View>
+        {/* แถบปุ่มท้ายการ์ด: ผู้รับผิดชอบ + ปุ่มการกระทำ */}
+        <View style={styles.cardFooter}>
+          {renderOwnerRow(j.debtName, j.debtType === 'ทีม', () => setDebtPicker({ job: j, search: '', saving: false }))}
+        {/* ปุ่มจัดการตามเว็บ (ยกเว้นแก้ไข) + โทรหาหน่วยงาน — กดจากการ์ดได้เลย */}
+        {renderJobActions(j)}
+        {!!phone && (
+          <View style={styles.cardBtnRow}>
+            <TouchableOpacity style={styles.cardBtn} onPress={() => Linking.openURL(`tel:${phone}`)} accessibilityLabel="โทรหาหน่วยงาน">
+              <Ionicons name="call" size={14} color={PRIMARY} />
+              <Text style={[styles.cardBtnText, { color: PRIMARY }]} numberOfLines={1}>โทร {j.contactPhone}</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+        </View>
       </TouchableOpacity>
     );
   }
 
-  function InfoRow({ label, value, color }: { label: string; value?: string; color?: string }) {
-    return (
-      <View style={styles.infoRow}>
-        <Text style={styles.infoLabel}>{label}</Text>
-        <Text style={[styles.infoValue, color ? { color, fontWeight: '900' } : null]}>{value?.trim() ? value : '-'}</Text>
-      </View>
+  // แถวข้อมูลแบบ modal รายละเอียดของเว็บ: ไอคอน + หัวข้อซ้าย / ค่าขวา (sub = บรรทัดเล็กใต้ค่า เช่น เวลาปิดจบ)
+  function InfoRow({ label, value, color, icon, sub, onPress }: { label: string; value?: string; color?: string; icon?: keyof typeof Ionicons.glyphMap; sub?: string; onPress?: () => void }) {
+    const body = (
+      <>
+        <View style={styles.infoLabelWrap}>
+          {!!icon && <Ionicons name={icon} size={14} color="#94a3b8" />}
+          <Text style={styles.infoLabel}>{label}</Text>
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.infoValue, color ? { color, fontWeight: '900' } : null]}>{value?.trim() ? value : '-'}</Text>
+          {!!sub && <Text style={styles.infoSub}>{sub}</Text>}
+        </View>
+      </>
+    );
+    return onPress ? (
+      <TouchableOpacity style={styles.infoRow} onPress={onPress}>{body}</TouchableOpacity>
+    ) : (
+      <View style={styles.infoRow}>{body}</View>
     );
   }
   function Section({ icon, title, children }: { icon: keyof typeof Ionicons.glyphMap; title: string; children: ReactNode }) {
@@ -613,15 +670,17 @@ export default function WipDashboardScreen() {
     const wc = j ? warrantyCountdown(j) : null;
     const phone = j?.contactPhone.replace(/[^\d+]/g, '') ?? '';
     return (
-      <Modal visible={!!j} animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={close}>
-        {/* Modal เป็นหน้าต่างแยก — เว้นขอบ notch/แถบล่างเองด้วย insets ไม่งั้นปุ่มกลับบน iPhone กดไม่ได้ */}
-        <View style={[styles.safe, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-          <StatusBar barStyle="dark-content" />
+      <Modal visible={!!j} transparent animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={close}>
+        {/* ป๊อปอัพเลื่อนขึ้นจากด้านล่าง — เว้นด้านบนให้พ้นแถบสถานะ และเว้นท้ายให้พ้นแถบปุ่มนำทางของมือถือ */}
+        <View style={styles.detailOverlay}>
+          <TouchableOpacity style={{ height: insets.top + 24 }} activeOpacity={1} onPress={close} accessibilityLabel="ปิด" />
+          <View style={[styles.detailSheet, { paddingBottom: insets.bottom }]}>
+          <View style={styles.detailGrip} />
           <View style={styles.detailHeader}>
-            <TouchableOpacity onPress={close} style={styles.backBtn} hitSlop={8} accessibilityLabel="กลับ">
-              <Ionicons name="chevron-back" size={22} color="#0f172a" />
-            </TouchableOpacity>
             <Text style={styles.detailHeaderTitle} numberOfLines={1}>หน้างาน {j?.siteNo || ''}</Text>
+            <TouchableOpacity onPress={close} style={styles.closeBtn} hitSlop={8} accessibilityLabel="ปิด">
+              <Ionicons name="close" size={20} color="#475569" />
+            </TouchableOpacity>
           </View>
           {j && due && wc && (
             <ScrollView contentContainerStyle={styles.detailScroll}>
@@ -634,44 +693,55 @@ export default function WipDashboardScreen() {
                   </Text>
                 </View>
               )}
-              <Section icon="briefcase" title="ข้อมูลงาน">
-                <InfoRow label="หน้างาน" value={j.siteNo} />
-                <InfoRow label="บริษัท" value={compName(j.company)} />
-                <InfoRow label="เลขที่สัญญา" value={j.contractNo} />
-                <InfoRow label="หน่วยงาน" value={j.agency} />
-                <InfoRow label="ชื่อโครงการ" value={j.projectName} />
-                <InfoRow label="ยอดงบ" value={j.budget === null ? '' : `฿${money(j.budget)}`} color={GREEN} />
-                <InfoRow label="ประเภทงาน" value={j.jobType} />
-                <InfoRow label="สถานะงาน" value={j.jobStatus} color={jobStatusMeta(j.jobStatus).color} />
-                <View style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>ครบกำหนดส่งมอบ</Text>
-                  <View style={[styles.cdBadge, { backgroundColor: due.bg }]}>
-                    <Ionicons name={due.icon} size={11} color={due.fg} />
-                    <Text style={[styles.cdBadgeText, { color: due.fg }]}>{due.text}</Text>
-                  </View>
-                </View>
+              {/* 4 กล่องเรียงตาม modal รายละเอียดของเว็บ: ข้อมูลงาน / ข้อมูลหน่วยงาน / การรับประกัน / ข้อมูลระบบ */}
+              <Section icon="clipboard" title="ข้อมูลงาน">
+                <InfoRow icon="pricetag-outline" label="หน้างาน" value={j.siteNo} />
+                <InfoRow icon="business-outline" label="บริษัท" value={compName(j.company)} />
+                <InfoRow icon="document-text-outline" label="เลขที่สัญญา" value={j.contractNo} />
+                <InfoRow icon="construct-outline" label="ประเภทงาน" value={j.jobType} />
+                <InfoRow icon="cash-outline" label="ยอดงบ" value={j.budget === null ? '' : `฿${money(j.budget)}`} color={GREEN} />
+                <InfoRow icon="calendar-outline" label="วันเริ่มสัญญา" value={dateOrNote(j.startDate, j.startNote)} />
+                <InfoRow icon="calendar-clear-outline" label="วันสิ้นสุดสัญญา" value={dateOrNote(j.endDate, j.endNote)} />
+                <InfoRow icon="cube-outline" label="ครบกำหนดส่งมอบ" value={due.text} color={due.bg === RED ? RED : due.fg} />
+                <InfoRow icon="mail-outline" label="วันยื่นซอง" value={dateOrNote(j.submitDate, j.submitNote)} />
+                {!!j.remark && <InfoRow icon="chatbox-ellipses-outline" label="หมายเหตุ" value={j.remark} />}
               </Section>
-              <Section icon="calendar" title="วันที่">
-                <InfoRow label="วันยื่นซอง" value={dateOrNote(j.submitDate, j.submitNote)} />
-                <InfoRow label="วันเริ่มสัญญา" value={dateOrNote(j.startDate, j.startNote)} />
-                <InfoRow label="วันสิ้นสุดสัญญา" value={dateOrNote(j.endDate, j.endNote)} />
-                <InfoRow label="วันที่ลงข้อมูล" value={j.entryDate ? formatShortThaiDate(j.entryDate) : ''} />
-                <InfoRow label="แจ้งเตือนล่วงหน้า" value={`${j.alertDays} วัน`} />
+              <Section icon="business" title="ข้อมูลหน่วยงาน">
+                <InfoRow icon="library-outline" label="หน่วยงาน" value={j.agency} />
+                <InfoRow icon="create-outline" label="ชื่อโครงการ" value={j.projectName} />
+                <InfoRow icon="location-outline" label="ที่อยู่" value={j.address} />
+                <InfoRow icon="git-network-outline" label="สังกัด" value={j.affiliation} />
+                <InfoRow
+                  icon="call-outline"
+                  label="เบอร์ติดต่อ"
+                  value={j.contactPhone}
+                  color={phone ? PRIMARY : undefined}
+                  onPress={phone ? () => Linking.openURL(`tel:${phone}`) : undefined}
+                />
               </Section>
-              <Section icon="shield-checkmark" title="การรับประกัน">
-                <InfoRow label="ระยะรับประกัน" value={j.warrantyText} />
-                <InfoRow label="เริ่มรับประกัน" value={j.warrantyStart ? formatShortThaiDate(j.warrantyStart) : ''} />
-                <InfoRow label="สิ้นสุดรับประกัน" value={j.warrantyEnd ? formatShortThaiDate(j.warrantyEnd) : ''} />
-                <InfoRow label="นับถอยหลังประกัน" value={wc.text} color={wc.text === '-' ? undefined : wc.color} />
+              <Section icon="shield-half" title="การรับประกัน">
+                <InfoRow icon="shield-outline" label="ระยะเวลารับประกัน" value={j.warrantyText} />
+                <InfoRow icon="calendar-outline" label="วันที่เริ่มรับประกัน" value={j.warrantyStart ? formatShortThaiDate(j.warrantyStart) : ''} />
+                <InfoRow icon="calendar-clear-outline" label="วันที่สิ้นสุดค้ำ" value={j.warrantyEnd ? formatShortThaiDate(j.warrantyEnd) : ''} />
+                <InfoRow icon="hourglass-outline" label="สถานะรับประกัน" value={wc.text} color={wc.text === '-' ? undefined : wc.color} />
               </Section>
-              <Section icon="business" title="หน่วยงาน / ผู้ติดต่อ">
-                <InfoRow label="สังกัด" value={j.affiliation} />
-                <InfoRow label="ที่อยู่" value={j.address} />
-                <TouchableOpacity disabled={!phone} onPress={() => phone && Linking.openURL(`tel:${phone}`)} style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>เบอร์ติดต่อ</Text>
-                  <Text style={[styles.infoValue, !!phone && { color: PRIMARY }]}>{j.contactPhone || '-'}</Text>
-                </TouchableOpacity>
+              <Section icon="people" title="ข้อมูลระบบ">
+                <InfoRow icon="person-add-outline" label="ผู้ลงข้อมูล" value={j.recordedBy} />
+                <InfoRow icon="pencil-outline" label="วันที่ลงข้อมูล" value={j.entryDate ? formatShortThaiDate(j.entryDate) : ''} />
+                <InfoRow icon="time-outline" label="ผู้แก้ไขล่าสุด" value={j.lastEditor ? `${j.lastEditor} (${j.editCount} ครั้ง)` : ''} />
+                <InfoRow
+                  icon="flag-outline"
+                  label="ปิดจบหน้างานโดย"
+                  value={j.closedBy}
+                  sub={j.closedAt ? formatShortThaiDateTime(j.closedAt) : undefined}
+                />
               </Section>
+              {!isCanceled(j) && (
+                <Section icon="flag" title="จัดการงาน">
+                  {renderJobActions(j)}
+                  <View style={{ height: 6 }} />
+                </Section>
+              )}
               <Section icon={j.debtType === 'ทีม' ? 'people' : 'person'} title="ผู้รับผิดชอบติดตามหนี้">
                 <View style={styles.debtRow}>
                   <View style={{ flex: 1 }}>
@@ -683,13 +753,6 @@ export default function WipDashboardScreen() {
                     <Text style={styles.debtBtnText}>{j.debtName ? 'เปลี่ยน' : 'เลือก'}</Text>
                   </TouchableOpacity>
                 </View>
-              </Section>
-              <Section icon="person-circle" title="ผู้บันทึก / ปิดจบ">
-                <InfoRow label="ผู้ลงข้อมูล" value={j.recordedBy} />
-                <InfoRow label="ผู้แก้ไขล่าสุด" value={j.lastEditor ? `${j.lastEditor} (${j.editCount} ครั้ง)` : ''} />
-                <InfoRow label="ผู้ปิดจบหน้างาน" value={j.closedBy} />
-                <InfoRow label="วันเวลาปิดจบ" value={j.closedAt ? formatShortThaiDateTime(j.closedAt) : ''} />
-                {!!j.remark && <InfoRow label="หมายเหตุ" value={j.remark} />}
               </Section>
               {j.editCount > 0 && (
                 <Section icon="time" title={`ประวัติการแก้ไข (${j.editCount})`}>
@@ -711,12 +774,202 @@ export default function WipDashboardScreen() {
             </ScrollView>
           )}
           {renderDebtPicker()}
+          {renderCancelModal()}
+          </View>
         </View>
       </Modal>
     );
   }
 
   // บันทึกผู้รับผิดชอบติดตามหนี้ แล้วอัปเดตรายการ/หน้ารายละเอียด/ประวัติแก้ไขทันที (ไม่ต้องโหลดใหม่ เหมือนเว็บ)
+  // ปุ่ม ปิดจบ / ยกเลิกปิดจบ / ยกเลิกงาน — ตามคอลัมน์ "จัดการ" ของเว็บ (แสดงตามสถานะงาน)
+  function renderJobActions(j: WipJob) {
+    if (isCanceled(j)) return null;
+    const busy = actionBusyId === j.id;
+    if (isFinished(j)) {
+      return (
+        <View style={styles.cardBtnRow}>
+          <TouchableOpacity style={[styles.cardBtn, styles.actBtnAmber]} disabled={busy} onPress={() => confirmJobAction(j, 'undo_close')} accessibilityLabel="ยกเลิกปิดจบหน้างาน">
+            {busy ? <ActivityIndicator size="small" color={AMBER} /> : <Ionicons name="arrow-undo" size={14} color={AMBER} />}
+            <Text style={[styles.cardBtnText, { color: AMBER }]} numberOfLines={1}>ยกเลิกปิดจบหน้างาน</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+    return (
+      <View style={styles.cardBtnRow}>
+        <TouchableOpacity style={[styles.cardBtn, styles.actBtnGreen]} disabled={busy} onPress={() => confirmJobAction(j, 'close_job')} accessibilityLabel="ปิดจบหน้างาน">
+          {busy ? <ActivityIndicator size="small" color={GREEN} /> : <Ionicons name="flag" size={14} color={GREEN} />}
+          <Text style={[styles.cardBtnText, { color: GREEN }]} numberOfLines={1}>ปิดจบหน้างาน</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.cardBtn, styles.actBtnRed]} disabled={busy} onPress={() => setCancelJob({ job: j, reason: '', saving: false })} accessibilityLabel="ยกเลิกงาน">
+          <Ionicons name="ban" size={14} color={RED} />
+          <Text style={[styles.cardBtnText, { color: RED }]} numberOfLines={1}>ยกเลิกงาน</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  const jobLabel = (j: WipJob) => [j.siteNo, j.projectName].filter(Boolean).join(' ') || 'รายการนี้';
+
+  // ยืนยันก่อนทำ (ข้อความเดียวกับ Swal ของเว็บ) แล้วโหลดใหม่ให้ KPI ตรงกับเว็บ
+  function confirmJobAction(j: WipJob, action: 'close_job' | 'undo_close') {
+    const isClose = action === 'close_job';
+    Alert.alert(
+      isClose ? 'ยืนยันปิดจบหน้างาน?' : 'ยืนยันยกเลิกปิดจบหน้างาน?',
+      isClose
+        ? `คุณกำลังจะเปลี่ยนสถานะ\n${jobLabel(j)}\nให้กลายเป็น "ปิดจบหน้างาน" ใช่หรือไม่?`
+        : `คุณกำลังจะยกเลิกการปิดจบหน้างานของ\n${jobLabel(j)}\nสถานะจะกลับไปเป็น "สัญญาจ้าง" ใช่หรือไม่?`,
+      [
+        { text: 'ยกเลิก', style: 'cancel' },
+        { text: isClose ? 'ใช่, ปิดจบเลย' : 'ใช่, ยกเลิกปิดจบ', onPress: () => void runJobAction(j, action) },
+      ]
+    );
+  }
+
+  async function runJobAction(j: WipJob, action: 'close_job' | 'undo_close' | 'cancel_job', reason = '') {
+    if (!user?.id) return;
+    setActionBusyId(j.id);
+    try {
+      const res = await apiMobilePost(WIP_API_URL, action, { user_id: user.id, id: j.id, ...(action === 'cancel_job' ? { cancel_reason: reason } : {}) });
+      const nasMsg = str(res.nas_sync?.message);
+      const title = action === 'close_job' ? 'ปิดจบหน้างานเรียบร้อย' : action === 'undo_close' ? 'ยกเลิกปิดจบหน้างานสำเร็จ' : 'ยกเลิกงานเรียบร้อย';
+      Alert.alert(title, nasMsg || undefined);
+      setDetail(null);
+      await load(true);
+    } catch (e: any) {
+      Alert.alert('เกิดข้อผิดพลาด', e?.message || 'กรุณาลองใหม่อีกครั้ง');
+    } finally {
+      setActionBusyId(null);
+    }
+  }
+
+  async function submitCancel() {
+    const j = cancelJob.job;
+    const reason = cancelJob.reason.trim();
+    if (!j) return;
+    if (!reason) {
+      Alert.alert('กรุณาระบุเหตุผล', 'ต้องระบุหมายเหตุ/เหตุผลในการยกเลิก');
+      return;
+    }
+    setCancelJob((s) => ({ ...s, saving: true }));
+    await runJobAction(j, 'cancel_job', reason);
+    setCancelJob({ job: null, reason: '', saving: false });
+  }
+
+  // ป๊อปอัพกรอกเหตุผลยกเลิกงาน (เว็บบังคับกรอก)
+  function renderCancelModal() {
+    const j = cancelJob.job;
+    const close = () => {
+      if (!cancelJob.saving) setCancelJob({ job: null, reason: '', saving: false });
+    };
+    return (
+      <Modal visible={!!j} transparent animationType="fade" statusBarTranslucent onRequestClose={close}>
+        <View style={styles.pickerOverlay}>
+          <View style={styles.pickerSheet}>
+            <View style={styles.pickerHead}>
+              <Ionicons name="ban" size={18} color={RED} />
+              <Text style={styles.pickerTitle}>ยืนยันการยกเลิกงาน?</Text>
+              <TouchableOpacity onPress={close} hitSlop={8} accessibilityLabel="ปิด">
+                <Ionicons name="close" size={20} color={GRAY} />
+              </TouchableOpacity>
+            </View>
+            {!!j && <Text style={styles.pickerSub} numberOfLines={2}>{jobLabel(j)}</Text>}
+            <Text style={styles.cancelHint}>ไม่ลบข้อมูล แต่งานนี้จะไม่ถูกนำไปคำนวณ</Text>
+            <TextInput
+              value={cancelJob.reason}
+              onChangeText={(v) => setCancelJob((s) => ({ ...s, reason: v }))}
+              placeholder="ระบุหมายเหตุ/เหตุผลในการยกเลิก *"
+              placeholderTextColor="#94a3b8"
+              multiline
+              style={styles.cancelInput}
+              editable={!cancelJob.saving}
+            />
+            <View style={styles.sheetFooter}>
+              <TouchableOpacity style={styles.sheetResetBtn} onPress={close} disabled={cancelJob.saving}>
+                <Text style={styles.sheetResetText}>ปิด</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.sheetApplyBtn, { backgroundColor: RED }]} onPress={submitCancel} disabled={cancelJob.saving}>
+                {cancelJob.saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.sheetApplyText}>ยืนยันยกเลิกงาน</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    );
+  }
+
+  async function openHistory(kind: 'canceled' | 'undo') {
+    if (!user?.id) return;
+    setHistoryPopup({ kind, loading: true, list: [], error: null });
+    try {
+      const res = await apiMobileGet(WIP_API_URL, kind === 'canceled' ? 'get_canceled_history' : 'get_undo_history', { user_id: user.id, year });
+      setHistoryPopup({ kind, loading: false, list: Array.isArray(res.list) ? res.list : [], error: null });
+    } catch (e: any) {
+      setHistoryPopup({ kind, loading: false, list: [], error: e?.message || 'โหลดประวัติไม่สำเร็จ' });
+    }
+  }
+
+  function renderHistoryPopup() {
+    const h = historyPopup;
+    const close = () => setHistoryPopup({ kind: null, loading: false, list: [], error: null });
+    const isCanceledList = h.kind === 'canceled';
+    return (
+      <Modal visible={!!h.kind} transparent animationType="slide" statusBarTranslucent onRequestClose={close}>
+        <View style={styles.sheetOverlay}>
+          <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={close} />
+          <View style={[styles.sheet, { paddingBottom: 16 + insets.bottom }]}>
+            <View style={styles.sheetHandle} />
+            <View style={styles.sheetHeadRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.sheetTitle}>{isCanceledList ? 'ประวัติงานที่ถูกยกเลิก' : 'ประวัติการยกเลิกปิดจบหน้างาน'}</Text>
+                <Text style={styles.cardSub}>ปีชีท {ceYear(year)} · {h.loading ? '…' : h.list.length} รายการ</Text>
+              </View>
+              <TouchableOpacity onPress={close} hitSlop={8} accessibilityLabel="ปิด">
+                <Ionicons name="close" size={22} color={GRAY} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 8 }}>
+              {h.loading ? (
+                <ActivityIndicator color={PRIMARY} style={{ paddingVertical: 24 }} />
+              ) : h.error ? (
+                <Text style={[styles.emptyText, { color: RED }]}>{h.error}</Text>
+              ) : h.list.length === 0 ? (
+                <Text style={styles.emptyText}>ไม่มีประวัติ</Text>
+              ) : (
+                h.list.map((x: any, i: number) => (
+                  <View key={i} style={styles.histRow}>
+                    <View style={styles.histHead}>
+                      <View style={styles.codeBadge}>
+                        <Text style={styles.codeBadgeText}>{str(x.site_no) || '-'}</Text>
+                      </View>
+                      <Text style={styles.cardComp} numberOfLines={1}>{compName(str(x.company))}</Text>
+                      {isCanceledList && x.budget !== null && x.budget !== undefined && (
+                        <Text style={styles.histBudget}>฿{money(num(x.budget))}</Text>
+                      )}
+                    </View>
+                    <Text style={styles.histTitle} numberOfLines={2}>{str(x.project_name) || '-'}</Text>
+                    {isCanceledList ? (
+                      <>
+                        {!!str(x.cancel_reason) && <Text style={styles.histText}>เหตุผล: {str(x.cancel_reason)}</Text>}
+                        <Text style={styles.histMeta}>ยกเลิกโดย {str(x.canceled_by) || '-'}</Text>
+                      </>
+                    ) : (
+                      <Text style={styles.histMeta}>
+                        {str(x.performed_by) || '-'}
+                        {x.created_at ? ` · ${formatShortThaiDateTime(str(x.created_at))}` : ''}
+                      </Text>
+                    )}
+                  </View>
+                ))
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+    );
+  }
+
   async function saveDebtOwner(name: string) {
     const job = debtPicker.job;
     if (!job || !user?.id) return;
@@ -746,7 +999,9 @@ export default function WipDashboardScreen() {
     const job = debtPicker.job;
     const q = debtPicker.search.trim().toLowerCase();
     const list = debtUsers.filter((n) => !q || n.toLowerCase().includes(q));
-    const close = () => !debtPicker.saving && setDebtPicker({ job: null, search: '', saving: false });
+    const close = () => {
+      if (!debtPicker.saving) setDebtPicker({ job: null, search: '', saving: false });
+    };
     return (
       <Modal visible={!!job} transparent animationType="fade" statusBarTranslucent onRequestClose={close}>
         <View style={styles.pickerOverlay}>
@@ -821,6 +1076,8 @@ export default function WipDashboardScreen() {
       </View>
     );
     const JS: JobStatusFilter[] = ['all', 'สัญญาจ้าง', '__not_closed__', 'ปิดจบหน้างาน', 'ชำระเรียบร้อย', 'ยกเลิก'];
+    // จำนวนในตัวเลือกนับเฉพาะงานที่ไม่ยกเลิก ให้ตรงกับรายการที่เห็น (งานยกเลิกดูได้ผ่านตัวกรอง "ยกเลิก")
+    const activeJobs = jobs.filter((j) => !isCanceled(j));
     const CD: CountdownFilter[] = ['all', 'normal', 'warning', 'danger'];
     return (
       <Modal visible={filterSheetOpen} transparent animationType="slide" onRequestClose={() => setFilterSheetOpen(false)}>
@@ -835,7 +1092,7 @@ export default function WipDashboardScreen() {
               </TouchableOpacity>
             </View>
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingBottom: 8 }}>
-              {group('pricetag', 'สถานะงาน', JS.map((s) => opt(s, JOB_STATUS_LABEL[s], jobStatusFilter === s, () => setJobStatusFilter(s))))}
+              {group('pricetag', 'สถานะงาน', JS.map((s) => opt(s, JOB_STATUS_LABEL[s], jobStatusFilter === s, () => setJobStatusFilter(s), s === 'ยกเลิก' ? jobs.filter(isCanceled).length : undefined)))}
               {group('hourglass', 'สถานะนับถอยหลัง', CD.map((s) => opt(s, COUNTDOWN_LABEL[s], countdownFilter === s, () => setCountdownFilter(s))))}
               {group('shield-half', 'การรับประกัน', [
                 opt('', 'ทั้งหมด', warrantyFlag === '', () => setWarrantyFlag('')),
@@ -845,17 +1102,17 @@ export default function WipDashboardScreen() {
               {companies.length > 0 &&
                 group('business', 'บริษัท', [
                   opt('', 'ทั้งหมด', companyFilter === '', () => setCompanyFilter('')),
-                  ...companies.map((c) => opt(c.company, c.name, companyFilter === c.company, () => setCompanyFilter(c.company), jobs.filter((j) => j.company === c.company).length)),
+                  ...companies.map((c) => opt(c.company, c.name, companyFilter === c.company, () => setCompanyFilter(c.company), activeJobs.filter((j) => j.company === c.company).length)),
                 ])}
               {jobTypes.length > 0 &&
                 group('construct', 'ประเภทงาน', [
                   opt('', 'ทั้งหมด', jobTypeFilter === '', () => setJobTypeFilter('')),
-                  ...jobTypes.map((t) => opt(t, t, jobTypeFilter === t, () => setJobTypeFilter(t), jobs.filter((j) => j.jobType === t).length)),
+                  ...jobTypes.map((t) => opt(t, t, jobTypeFilter === t, () => setJobTypeFilter(t), activeJobs.filter((j) => j.jobType === t).length)),
                 ])}
               {group('person', 'ผู้รับผิดชอบติดตามหนี้', [
                 opt('', 'ทั้งหมด', debtFilter === '', () => setDebtFilter('')),
-                opt('__none__', 'ยังไม่ระบุ', debtFilter === '__none__', () => setDebtFilter('__none__'), jobs.filter((j) => !j.debtName).length),
-                ...debtPresent.map((d) => opt(d, d, debtFilter === d, () => setDebtFilter(d), jobs.filter((j) => j.debtName === d).length)),
+                opt('__none__', 'ยังไม่ระบุ', debtFilter === '__none__', () => setDebtFilter('__none__'), activeJobs.filter((j) => !j.debtName).length),
+                ...debtPresent.map((d) => opt(d, d, debtFilter === d, () => setDebtFilter(d), activeJobs.filter((j) => j.debtName === d).length)),
               ])}
               {group(
                 'flag',
@@ -954,6 +1211,17 @@ export default function WipDashboardScreen() {
           {renderYearTabs()}
           {renderSummary()}
           {renderCompanies()}
+          {/* ปุ่มประวัติบนหัวตารางเว็บ: งานที่ถูกยกเลิก / การยกเลิกปิดจบหน้างาน (ตามปีชีทที่เลือก) */}
+          <View style={[styles.cardBtnRow, { marginHorizontal: 14, marginTop: 12 }]}>
+            <TouchableOpacity style={styles.cardBtn} onPress={() => openHistory('canceled')} accessibilityLabel="ประวัติงานที่ถูกยกเลิก">
+              <Ionicons name="ban" size={14} color={GRAY} />
+              <Text style={styles.cardBtnText} numberOfLines={1}>ประวัติงานที่ยกเลิก</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.cardBtn} onPress={() => openHistory('undo')} accessibilityLabel="ประวัติยกเลิกปิดจบหน้างาน">
+              <Ionicons name="arrow-undo" size={14} color={AMBER} />
+              <Text style={[styles.cardBtnText, { color: AMBER }]} numberOfLines={1}>ประวัติยกเลิกปิดจบ</Text>
+            </TouchableOpacity>
+          </View>
           <Text style={styles.resultText}>
             พบ {filtered.length.toLocaleString('en-US')} งาน · เรียงหน้างาน{sortAsc ? 'น้อย→มาก' : 'มาก→น้อย'}
           </Text>
@@ -973,11 +1241,20 @@ export default function WipDashboardScreen() {
       {renderDetail()}
       {/* เปิดจากการ์ดในรายการ — ตอนเปิดหน้ารายละเอียดอยู่จะใช้ตัวที่ซ้อนในโมดัลรายละเอียดแทน */}
       {!detail && renderDebtPicker()}
+      {!detail && renderCancelModal()}
+      {renderHistoryPopup()}
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  cardFooter: { marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#f1f5f9', gap: 8 },
+  ownerRow: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#f8fafc', borderRadius: 10, borderWidth: 1, borderColor: '#e2e8f0', paddingHorizontal: 10, paddingVertical: 8 },
+  ownerIcon: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#eef2ff', alignItems: 'center', justifyContent: 'center' },
+  ownerLabel: { fontSize: 10.5, color: GRAY },
+  ownerName: { fontSize: 13, fontWeight: '800', color: '#0f172a', marginTop: 1 },
+  ownerAction: { flexDirection: 'row', alignItems: 'center', gap: 2, backgroundColor: '#eef2ff', borderRadius: 50, paddingHorizontal: 10, paddingVertical: 5 },
+  ownerActionText: { fontSize: 11.5, fontWeight: '800', color: PRIMARY },
   safe: { flex: 1, backgroundColor: '#f8fafc' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 10 },
   errorText: { color: '#475569', fontSize: 13, textAlign: 'center', lineHeight: 20 },
@@ -1010,6 +1287,7 @@ const styles = StyleSheet.create({
   summarySub: { color: '#94a3b8', fontSize: 11, marginTop: 2 },
   kpiHint: { fontSize: 10.5, color: '#94a3b8', marginTop: 12, marginBottom: 8 },
   kpiGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 8 },
+  kpiGroupTitle: { fontSize: 12, fontWeight: '900', color: '#334155', marginTop: 10, marginBottom: 6 },
   kpiBox: { width: '48.8%', minHeight: 66, backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', borderTopWidth: 4, paddingHorizontal: 9, paddingVertical: 8, gap: 4 },
   tapHintIcon: { position: 'absolute', top: 6, right: 7 },
   kpiLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingRight: 12 },
@@ -1048,8 +1326,11 @@ const styles = StyleSheet.create({
   metaItem: { flexDirection: 'row', alignItems: 'center', gap: 4, maxWidth: '100%' },
   metaText: { fontSize: 11, color: '#475569', fontWeight: '600', flexShrink: 1 },
 
-  detailHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
-  backBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  detailOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)' },
+  detailSheet: { flex: 1, backgroundColor: '#f8fafc', borderTopLeftRadius: 20, borderTopRightRadius: 20, overflow: 'hidden' },
+  detailGrip: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: '#cbd5e1', marginTop: 8, marginBottom: 2 },
+  detailHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#f8fafc', paddingLeft: 16, paddingRight: 10, paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
+  closeBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
   detailHeaderTitle: { flex: 1, fontSize: 16, fontWeight: '900', color: '#0f172a' },
   detailScroll: { padding: 14, paddingBottom: 32, gap: 12 },
   cancelBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, backgroundColor: '#fef2f2', borderWidth: 1, borderColor: '#fecaca', borderRadius: 10, padding: 10 },
@@ -1058,13 +1339,29 @@ const styles = StyleSheet.create({
   sectionHead: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10, marginBottom: 2, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
   sectionIcon: { width: 28, height: 28, borderRadius: 8, backgroundColor: '#eef2ff', alignItems: 'center', justifyContent: 'center' },
   sectionTitle: { fontSize: 14, fontWeight: '900', color: '#0f172a' },
-  infoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingVertical: 8 },
-  infoLabel: { fontSize: 12, color: '#475569', fontWeight: '600', maxWidth: '45%' },
-  infoValue: { flex: 1, fontSize: 12.5, color: '#0f172a', fontWeight: '800', textAlign: 'right' },
+  infoRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, paddingVertical: 8 },
+  infoLabel: { fontSize: 12, color: '#475569', fontWeight: '600', flexShrink: 1, lineHeight: 18 },
+  infoValue: { flex: 1, fontSize: 12.5, color: '#0f172a', fontWeight: '800', textAlign: 'right', lineHeight: 18 },
   logRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: '#f8fafc' },
   logNo: { width: 22, fontSize: 11.5, color: GRAY, fontWeight: '700' },
   logEditor: { flex: 1, fontSize: 12.5, color: '#0f172a', fontWeight: '800' },
   logAt: { fontSize: 11, color: GRAY },
+  infoLabelWrap: { flexDirection: 'row', alignItems: 'center', gap: 7, width: '38%', flexShrink: 0 },
+  infoSub: { fontSize: 10.5, color: '#94a3b8', textAlign: 'right', marginTop: 2 },
+  cardBtnRow: { flexDirection: 'row', gap: 8 },
+  cardBtn: { flex: 1, minHeight: 38, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 10, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#f8fafc', paddingHorizontal: 8 },
+  cardBtnText: { flexShrink: 1, fontSize: 12, fontWeight: '800', color: '#334155' },
+  actBtnGreen: { backgroundColor: '#ecfdf5', borderColor: '#a7f3d0' },
+  actBtnAmber: { backgroundColor: '#fffbeb', borderColor: '#fcd34d' },
+  actBtnRed: { backgroundColor: '#fef2f2', borderColor: '#fecaca' },
+  cancelHint: { fontSize: 11.5, color: GRAY, marginBottom: 8 },
+  cancelInput: { minHeight: 80, borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, backgroundColor: '#f8fafc', padding: 10, fontSize: 13, color: '#0f172a', textAlignVertical: 'top' },
+  histRow: { paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#f1f5f9', gap: 4 },
+  histHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  histBudget: { fontSize: 12, fontWeight: '900', color: '#0f172a' },
+  histTitle: { fontSize: 13, fontWeight: '800', color: '#0f172a' },
+  histText: { fontSize: 12, color: '#334155' },
+  histMeta: { fontSize: 11, color: '#94a3b8' },
   debtChip: { flexDirection: 'row', alignItems: 'center', gap: 4, maxWidth: '100%', backgroundColor: '#eef2ff', borderWidth: 1, borderColor: '#c7d2fe', borderRadius: 50, paddingHorizontal: 9, paddingVertical: 4 },
   debtChipEmpty: { backgroundColor: '#fff', borderStyle: 'dashed', borderColor: '#a5b4fc' },
   debtChipText: { fontSize: 11, color: '#3730a3', fontWeight: '800', flexShrink: 1 },

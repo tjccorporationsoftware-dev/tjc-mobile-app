@@ -184,7 +184,7 @@ export default function MapDashboardScreen() {
     <View style={styles.container}>
       <MapView
         ref={mapRef}
-        style={StyleSheet.absoluteFillObject}
+        style={StyleSheet.absoluteFill}
         provider={PROVIDER_GOOGLE}
         mapType={mapType}
         initialRegion={{

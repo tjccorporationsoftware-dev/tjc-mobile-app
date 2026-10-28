@@ -222,6 +222,61 @@ action=save_debt_owner&user_id={id}&lg_id={lg_id}&debt_user={ชื่อ}
 
 - ป๊อปอัพบนเว็บเลือกได้เฉพาะ **บุคคล** (`:2544-2590`) แอปจึงบันทึก `debt_type = 'บุคคล'`, `debt_team = NULL` เหมือนกัน
 
+## ปุ่มอนุมัติ — `lg_action` (หน้า 1, 2)
+
+ตรงกับ `?action=…&id=…` ของ `lg_dashboard.php:12-71` และ `lg_import_dashboard.php:33-82` (สองหน้าใช้ตรรกะเดียวกัน) ส่วนหน้าค้ำเงินสดบนเว็บซ่อนปุ่มอนุมัติไว้ จึงไม่มีในแอป
+
+```
+POST {API_BASE}/mobile_api/modules/lg_API_mobile.php
+action=lg_action&user_id={id}&kind=lg|import&id={lg_id}&op={op}
+→ { status, id, op, message }
+```
+
+| `op` | ผล | สิทธิ์ |
+|---|---|---|
+| `check` | `checker_name`, `checked_at` (ผู้จัดการอนุมัติ) | เข้าหน้าได้ (เว็บไม่เช็คเพิ่ม) |
+| `approve` | `approver_name`, `approved_at`, `lg_status='อนุมัติ'` | เข้าหน้าได้ |
+| `uncheck` | ล้างทั้ง 2 ขั้น + `lg_status=NULL` | `lg_cancel_approval` |
+| `unapprove` | ล้างขั้นผู้ดูแล + `lg_status=NULL` | `lg_cancel_approval` |
+| `cancel` | `lg_status='ยกเลิก'`, `canceled_by`, `canceled_at` | `lg_cancel_record` |
+
+- ผู้กดคือ fullname ของ `user_id` และใช้เวลาไทยแบบเว็บ
+- `get_dashboard` / `get_import_dashboard` ส่งข้อมูลเพิ่มให้แอปใช้แสดงปุ่ม
+  - สิทธิ์ `can_cancel_approval`, `can_cancel_record`
+  - ทุกแถวมี `checker_set` / `approver_set` (มีชื่อในคอลัมน์จริง)
+  - แอปใช้ค่าเหล่านี้แสดงปุ่มแบบเดียวกับช่องในตารางเว็บ ผู้จัดการแบบนำเข้าย้อนหลัง "อนุมัติแล้ว" ไม่มีปุ่มยกเลิก
+- API กันเพิ่มจากเว็บ
+  - รายการต้องอยู่ในหน้านั้นจริง ถ้าไม่ใช่ ตอบ `not_found`
+  - รายการที่ยกเลิกไปแล้วกดซ้ำไม่ได้ ตอบ `invalid_state`
+
+## จัดการเอกสารแนบ — `save_attachments` (หน้า 1, 2, 4)
+
+ตรงกับฟอร์ม `update_files_lg_id` ของ `lg_dashboard.php:77-125`, `lg_import_dashboard.php` และ `lg_cash_dashboard.php:87-130`
+
+```
+POST (multipart) {API_BASE}/mobile_api/modules/lg_API_mobile.php
+action=save_attachments, user_id, kind=lg|import|cash, id,
+keep=["uploads/lg_files/...", ...]      ← file_path ของไฟล์เดิมที่ไม่ลบ
+upload_files[]=<ไฟล์>, new_file_topics[]=<หัวข้อ>
+→ { status, id, added, removed, attached_files: [...] }
+```
+
+| `kind` | ตาราง / เงื่อนไขแถว | สิทธิ์หน้า |
+|---|---|---|
+| `lg` | `letter_of_guarantees` ที่ไม่ใช่ค้ำเงินสด และ `data_source` เป็น NULL หรือ `manual` | `lg_dashboard.php` |
+| `import` | `letter_of_guarantees` ที่ไม่ใช่ค้ำเงินสด และ `data_source = 'import'` | `lg_import_dashboard.php` |
+| `cash` | `cash_guarantees` | `lg_cash_dashboard.php` |
+
+- ไฟล์เดิมที่เก็บไว้ ใช้ก้อนข้อมูลเดิมจาก DB โดยเทียบ `file_path` กับ `keep` (ไม่รับ JSON ไฟล์จากเครื่องลูก)
+- ไฟล์ใหม่ใช้รูปแบบเดียวกับเว็บ
+  - ตั้งชื่อ `LG_<time>_<uniqid>.<ext>` และเก็บที่ `uploads/lg_files/`
+  - เก็บข้อมูล `{topic, file_path, original_name, upload_date, uploader_name}` โดย `uploader_name` เป็น fullname ของ `user_id`
+- หัวข้อในแอปชุดเดียวกับเว็บ: ส่งมอบงาน / สัญญาจ้าง / หนังสือค้ำประกัน / เอกสารอื่นๆ ถ้าไม่ระบุ ใช้ "เอกสารแนบเพิ่มเติม" แบบเว็บ
+- **ต่างจากเว็บ 1 จุด:** API รับเฉพาะ `pdf, doc, docx, jpg, jpeg, png` ตาม `accept` ของฟอร์มเว็บ
+  - เว็บไม่ได้ตรวจฝั่งเซิร์ฟเวอร์ จึงอัปไฟล์สคริปต์ขึ้นไปได้
+  - API ตรวจนามสกุลทุกไฟล์ก่อนย้ายไฟล์ใดๆ ถ้ามีไฟล์ใดผิด ทั้งคำขอถูกปฏิเสธ (`invalid_file`) และไม่มีไฟล์ค้างบนเซิร์ฟเวอร์
+- แอปเปิดป๊อปอัพนี้ได้ทั้งจากปุ่ม "ไฟล์แนบ/แนบไฟล์" บนการ์ด และปุ่ม "จัดการเอกสารแนบ" ในหน้ารายละเอียด
+
 ---
 
 # ส่วนที่ 4: Dashboard ค้ำเงินสด

@@ -24,17 +24,17 @@ import {
   Modal,
   RefreshControl,
   ScrollView,
-  StatusBar,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { DateField, formatShortThaiDate, formatShortThaiDateTime, ymdToDate } from '../../components/DateTimeField';
 import ListPager, { pageCount } from '../../components/ListPager';
+import { useScreenInsets } from '../../components/useScreenInsets';
 import { API_MODULES } from '../../constants/config';
 import { apiMobileGet, apiMobilePost } from '../../service/api_mobile';
 import { useAuth } from '../_layout';
@@ -258,7 +258,8 @@ function inRange(dt: string, start: string, end: string): boolean {
 
 export default function NasAccountingDashboardScreen() {
   const { user } = useAuth();
-  const insets = useSafeAreaInsets();
+  // ขอบจอจริง (หน้าใน Drawer ได้ insets.top = 0 จาก header) — ใช้วางป๊อปอัพไม่ให้ชนแถบสถานะ/แถบนำทาง
+  const insets = useScreenInsets();
 
   const [years, setYears] = useState<number[]>([]);
   const [year, setYear] = useState(0); // ปีงบ พ.ศ. (0 = ให้ API เลือกปีล่าสุด)
@@ -295,6 +296,8 @@ export default function NasAccountingDashboardScreen() {
   const [itemsError, setItemsError] = useState<string | null>(null);
   // ป๊อปอัพในหน้ารายละเอียด: งวดชำระ / ประวัติการติดตาม (แยกออกมาให้หน้ารายละเอียดสั้น ไม่ต้องเลื่อนหา)
   const [listPopup, setListPopup] = useState<'payments' | 'follows' | null>(null);
+  // โครงการที่เปิดป๊อปอัพงวดชำระ/ประวัติติดตามอยู่ (เปิดได้ทั้งจากการ์ดและหน้ารายละเอียด)
+  const [popupProject, setPopupProject] = useState<NasProject | null>(null);
 
   const load = useCallback(
     async (refresh = false, y = year) => {
@@ -347,6 +350,17 @@ export default function NasAccountingDashboardScreen() {
   async function openDetail(p: NasProject) {
     setDetail(p);
     setListPopup(null);
+    await loadPaymentItems(p);
+  }
+
+  // ปุ่มบนการ์ด: เปิดป๊อปอัพงวดชำระ / ประวัติติดตาม โดยไม่ต้องเข้าหน้ารายละเอียด
+  function openListFromCard(p: NasProject, kind: 'payments' | 'follows') {
+    setListPopup(kind);
+    void loadPaymentItems(p);
+  }
+
+  async function loadPaymentItems(p: NasProject) {
+    setPopupProject(p);
     setPayments([]);
     setFollows([]);
     setItemsError(null);
@@ -497,7 +511,15 @@ export default function NasAccountingDashboardScreen() {
 
   function renderSummary() {
     // 7 การ์ดเหมือน nas_mini_cards() ของเว็บ — กดเพื่อกรองสถานะ (กดซ้ำ = ล้าง)
-    const box = (key: string, state: StateFilter, label: string, value: string, unit: string, color: string, icon: keyof typeof Ionicons.glyphMap) => {
+    const box = (
+      key: string,
+      state: StateFilter,
+      label: string,
+      value: string,
+      unit: string,
+      color: string,
+      icon: keyof typeof Ionicons.glyphMap
+    ) => {
       const active = state !== 'all' && stateFilter === state;
       return (
         <TouchableOpacity
@@ -505,7 +527,9 @@ export default function NasAccountingDashboardScreen() {
           style={[styles.kpiBox, { borderLeftColor: color }, active && { borderColor: color, backgroundColor: color + '0d' }]}
           onPress={() => setStateFilter(state === 'all' || stateFilter === state ? 'all' : state)}
         >
-          {state !== 'all' && <Ionicons name={active ? 'funnel' : 'funnel-outline'} size={10} color={active ? color : '#94a3b8'} style={styles.tapHintIcon} />}
+          {state !== 'all' && (
+            <Ionicons name={active ? 'funnel' : 'funnel-outline'} size={10} color={active ? color : '#94a3b8'} style={styles.tapHintIcon} />
+          )}
           <View style={styles.kpiLabelRow}>
             <Ionicons name={icon} size={12} color={color} />
             <Text style={[styles.kpiLabel, { color }]} numberOfLines={2}>{label}</Text>
@@ -541,15 +565,24 @@ export default function NasAccountingDashboardScreen() {
         <Text style={styles.kpiHint}>
           <Ionicons name="funnel-outline" size={10} color="#94a3b8" /> แตะกล่องเพื่อกรองรายการ
         </Text>
+        {/* จัดเป็นหมวด: ภาพรวม / ค้างชำระ / เงินเข้าแล้ว (การ์ดชุดเดียวกับเว็บ 7 ใบ) */}
+        <Text style={styles.kpiGroupTitle}>ภาพรวม</Text>
         <View style={styles.kpiGrid}>
           {box('budget', 'all', 'ทุนตั้งต้น (งบรวม)', money(kpi.totalBudget), '', PRIMARY, 'cash')}
+          {box('paid_full', 'paid_full', 'ชำระเรียบร้อย', kpi.paidFullProjects.toLocaleString('en-US'), 'งาน', '#7c3aed', 'ribbon')}
+        </View>
+        <Text style={styles.kpiGroupTitle}>ค้างชำระ</Text>
+        <View style={styles.kpiGrid}>
           {box('debtor', 'unpaid_any', 'ลูกหนี้ค้างชำระ', kpi.debtorCount.toLocaleString('en-US'), 'เจ้า', AMBER, 'people')}
           {box('outstanding', 'unpaid_any', 'ลูกหนี้คงค้าง', money(kpi.totalOutstanding), '', RED, 'alert-circle')}
+        </View>
+        <Text style={styles.kpiGroupTitle}>เงินเข้าแล้ว</Text>
+        <View style={styles.kpiGrid}>
           {box('income_units', 'has_income', 'หน้างานที่เงินเข้าแล้ว', kpi.projectsWithIncome.toLocaleString('en-US'), 'งาน', '#0891b2', 'document-text')}
           {box('received', 'has_income', 'เงินเข้าทั้งหมด (ยอดจ่าย)', money(kpi.totalReceived), '', GREEN, 'wallet')}
           {box('net', 'has_income', 'ยอดรับสุทธิ', money(kpi.totalNet), '', TEAL, 'cash-outline')}
-          {box('paid_full', 'paid_full', 'ชำระเรียบร้อย', kpi.paidFullProjects.toLocaleString('en-US'), 'งาน', '#7c3aed', 'ribbon')}
         </View>
+        <Text style={styles.kpiGroupTitle}>งานระหว่างทำ</Text>
         {/* งานระหว่างทำ (WIP) ที่ยังไม่ปิดจบ — ดึงจาก wip_jobs ปีเดียวกัน (เว็บแสดงเป็นกล่องเส้นประ ไม่ได้กดกรอง) */}
         <View style={styles.wipBox}>
           <Ionicons name="construct" size={16} color={AMBER} />
@@ -561,6 +594,26 @@ export default function NasAccountingDashboardScreen() {
           </View>
         </View>
       </View>
+    );
+  }
+
+
+  // แถว "ผู้รับผิดชอบติดตามหนี้" ในแถบท้ายการ์ด — กดเพื่อเลือก/เปลี่ยน (ป๊อปอัพรายชื่อเดิม)
+  function renderOwnerRow(name: string, isTeam: boolean, onPress: () => void) {
+    return (
+      <TouchableOpacity style={styles.ownerRow} onPress={onPress} accessibilityLabel="เลือกผู้รับผิดชอบติดตามหนี้">
+        <View style={styles.ownerIcon}>
+          <Ionicons name={isTeam ? 'people' : 'person'} size={14} color={PRIMARY} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.ownerLabel}>ผู้รับผิดชอบติดตามหนี้</Text>
+          <Text style={[styles.ownerName, !name && { color: '#94a3b8' }]} numberOfLines={1}>{name || 'ยังไม่ระบุ'}</Text>
+        </View>
+        <View style={styles.ownerAction}>
+          <Text style={styles.ownerActionText}>{name ? 'เปลี่ยน' : 'เลือก'}</Text>
+          <Ionicons name="chevron-forward" size={12} color={PRIMARY} />
+        </View>
+      </TouchableOpacity>
     );
   }
 
@@ -604,23 +657,27 @@ export default function NasAccountingDashboardScreen() {
             <Ionicons name="headset-outline" size={12} color={fb.color} />
             <Text style={[styles.metaText, { color: fb.color }]} numberOfLines={1}>{fb.text}</Text>
           </View>
-          {/* ปุ่มเลือก/เปลี่ยนผู้รับผิดชอบบนการ์ดเลย ไม่ต้องเปิดรายละเอียดก่อน (เหมือนช่องในตารางเว็บ) */}
-          <TouchableOpacity
-            style={[styles.debtChip, !p.debtName && styles.debtChipEmpty]}
-            onPress={() => setDebtPicker({ project: p, search: '', saving: false })}
-            hitSlop={6}
-            accessibilityLabel="เลือกผู้รับผิดชอบติดตามหนี้"
-          >
-            <Ionicons name={p.debtName ? (p.debtType === 'ทีม' ? 'people' : 'person') : 'person-add'} size={12} color={PRIMARY} />
-            <Text style={styles.debtChipText} numberOfLines={1}>{p.debtName || 'เลือกผู้ติดตาม'}</Text>
-            {!!p.debtName && <Ionicons name="chevron-down" size={11} color={PRIMARY} />}
-          </TouchableOpacity>
           {!!p.closedAt && (
             <View style={styles.metaItem}>
               <Ionicons name="flag-outline" size={12} color={TEAL} />
               <Text style={[styles.metaText, { color: TEAL }]}>ปิดจบ {formatShortThaiDate(p.closedAt.slice(0, 10))}</Text>
             </View>
           )}
+        </View>
+        {/* แถบปุ่มท้ายการ์ด: ผู้รับผิดชอบ + ปุ่มการกระทำ */}
+        <View style={styles.cardFooter}>
+          {renderOwnerRow(p.debtName, p.debtType === 'ทีม', () => setDebtPicker({ project: p, search: '', saving: false }))}
+        {/* ปุ่มดูงวดชำระ / ประวัติการติดตาม จากการ์ดเลย */}
+        <View style={styles.cardBtnRow}>
+          <TouchableOpacity style={styles.cardBtn} onPress={() => openListFromCard(p, 'payments')} accessibilityLabel="ดูงวดชำระ">
+            <Ionicons name="list" size={14} color={pb.color} />
+            <Text style={[styles.cardBtnText, { color: pb.color }]} numberOfLines={1}>งวดชำระ ({p.paymentCount})</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.cardBtn} onPress={() => openListFromCard(p, 'follows')} accessibilityLabel="ดูประวัติการติดตาม">
+            <Ionicons name="chatbubbles" size={14} color={fb.color} />
+            <Text style={[styles.cardBtnText, { color: fb.color }]} numberOfLines={1}>ประวัติติดตาม</Text>
+          </TouchableOpacity>
+        </View>
         </View>
       </TouchableOpacity>
     );
@@ -683,15 +740,17 @@ export default function NasAccountingDashboardScreen() {
       </TouchableOpacity>
     );
     return (
-      <Modal visible={!!p} animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={close}>
-        {/* Modal เป็นหน้าต่างแยก — เว้นขอบ notch/แถบล่างเองด้วย insets ไม่งั้นปุ่มกลับบน iPhone กดไม่ได้ */}
-        <View style={[styles.safe, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-          <StatusBar barStyle="dark-content" />
+      <Modal visible={!!p} transparent animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={close}>
+        {/* ป๊อปอัพเลื่อนขึ้นจากด้านล่าง — เว้นด้านบนให้พ้นแถบสถานะ และเว้นท้ายให้พ้นแถบปุ่มนำทางของมือถือ */}
+        <View style={styles.detailOverlay}>
+          <TouchableOpacity style={{ height: insets.top + 24 }} activeOpacity={1} onPress={close} accessibilityLabel="ปิด" />
+          <View style={[styles.detailSheet, { paddingBottom: insets.bottom }]}>
+          <View style={styles.detailGrip} />
           <View style={styles.detailHeader}>
-            <TouchableOpacity onPress={close} style={styles.backBtn} hitSlop={8} accessibilityLabel="กลับ">
-              <Ionicons name="chevron-back" size={22} color="#0f172a" />
-            </TouchableOpacity>
             <Text style={styles.detailHeaderTitle} numberOfLines={1}>หน้างาน {p?.siteNo || ''}</Text>
+            <TouchableOpacity onPress={close} style={styles.closeBtn} hitSlop={8} accessibilityLabel="ปิด">
+              <Ionicons name="close" size={20} color="#475569" />
+            </TouchableOpacity>
           </View>
           {p && pb && fb && (
             <ScrollView contentContainerStyle={styles.detailScroll}>
@@ -803,6 +862,7 @@ export default function NasAccountingDashboardScreen() {
           )}
           {renderListPopup()}
           {renderDebtPicker()}
+          </View>
         </View>
       </Modal>
     );
@@ -813,19 +873,30 @@ export default function NasAccountingDashboardScreen() {
     const isPayments = listPopup === 'payments';
     const closePopup = () => setListPopup(null);
     return (
-      <Modal visible={!!listPopup && !!detail} transparent animationType="slide" statusBarTranslucent onRequestClose={closePopup}>
+      <Modal visible={!!listPopup} transparent animationType="slide" statusBarTranslucent onRequestClose={closePopup}>
         <View style={styles.sheetOverlay}>
           <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={closePopup} />
           <View style={[styles.sheet, { paddingBottom: 16 + insets.bottom }]}>
             <View style={styles.sheetHandle} />
             <View style={styles.sheetHeadRow}>
-              <Text style={styles.sheetTitle}>{isPayments ? `งวดชำระ (${payments.length})` : `ประวัติการติดตาม (${follows.length})`}</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.sheetTitle}>{isPayments ? `งวดชำระ (${itemsLoading ? '…' : payments.length})` : `ประวัติการติดตาม (${itemsLoading ? '…' : follows.length})`}</Text>
+                {!!popupProject && (
+                  <Text style={styles.cardSub} numberOfLines={1}>
+                    {popupProject.siteNo || '-'} · {popupProject.unitName || '-'}
+                  </Text>
+                )}
+              </View>
               <TouchableOpacity onPress={closePopup} hitSlop={8} accessibilityLabel="ปิด">
                 <Ionicons name="close" size={22} color={GRAY} />
               </TouchableOpacity>
             </View>
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 8 }}>
-              {isPayments ? (
+              {itemsLoading ? (
+                <ActivityIndicator color={PRIMARY} style={{ paddingVertical: 24 }} />
+              ) : itemsError ? (
+                <Text style={[styles.emptyText, { color: RED }]}>{itemsError}</Text>
+              ) : isPayments ? (
                 payments.length === 0 ? (
                   <Text style={styles.emptyText}>ยังไม่มีการลงบัญชีรับชำระ</Text>
                 ) : (
@@ -930,7 +1001,9 @@ export default function NasAccountingDashboardScreen() {
     const project = debtPicker.project;
     const q = debtPicker.search.trim().toLowerCase();
     const list = debtUsers.filter((n) => !q || n.toLowerCase().includes(q));
-    const close = () => !debtPicker.saving && setDebtPicker({ project: null, search: '', saving: false });
+    const close = () => {
+      if (!debtPicker.saving) setDebtPicker({ project: null, search: '', saving: false });
+    };
     return (
       <Modal visible={!!project} transparent animationType="fade" statusBarTranslucent onRequestClose={close}>
         <View style={styles.pickerOverlay}>
@@ -1148,6 +1221,7 @@ export default function NasAccountingDashboardScreen() {
       {renderFilterSheet()}
       {renderDetail()}
       {/* เปิดจากการ์ดในรายการ — ตอนเปิดหน้ารายละเอียดอยู่จะใช้ตัวที่ซ้อนในโมดัลรายละเอียดแทน */}
+      {!detail && renderListPopup()}
       {!detail && renderDebtPicker()}
     </SafeAreaView>
   );
@@ -1163,6 +1237,13 @@ function ItemCell({ label, value, strong }: { label: string; value: string; stro
 }
 
 const styles = StyleSheet.create({
+  cardFooter: { marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#f1f5f9', gap: 8 },
+  ownerRow: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#f8fafc', borderRadius: 10, borderWidth: 1, borderColor: '#e2e8f0', paddingHorizontal: 10, paddingVertical: 8 },
+  ownerIcon: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#eef2ff', alignItems: 'center', justifyContent: 'center' },
+  ownerLabel: { fontSize: 10.5, color: GRAY },
+  ownerName: { fontSize: 13, fontWeight: '800', color: '#0f172a', marginTop: 1 },
+  ownerAction: { flexDirection: 'row', alignItems: 'center', gap: 2, backgroundColor: '#eef2ff', borderRadius: 50, paddingHorizontal: 10, paddingVertical: 5 },
+  ownerActionText: { fontSize: 11.5, fontWeight: '800', color: PRIMARY },
   safe: { flex: 1, backgroundColor: '#f8fafc' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 10 },
   errorText: { color: '#475569', fontSize: 13, textAlign: 'center', lineHeight: 20 },
@@ -1201,13 +1282,14 @@ const styles = StyleSheet.create({
   progressFill: { height: '100%', borderRadius: 4 },
   kpiHint: { fontSize: 10.5, color: '#94a3b8', marginTop: 12, marginBottom: 8 },
   kpiGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 8 },
+  kpiGroupTitle: { fontSize: 12, fontWeight: '900', color: '#334155', marginTop: 10, marginBottom: 6 },
   kpiBox: { width: '48.8%', minHeight: 66, backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', borderLeftWidth: 4, paddingHorizontal: 9, paddingVertical: 8, gap: 4 },
   tapHintIcon: { position: 'absolute', top: 6, right: 7 },
   kpiLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingRight: 12 },
   kpiLabel: { fontSize: 11, fontWeight: '800', flexShrink: 1 },
   kpiValue: { color: '#0f172a', fontSize: 16, fontWeight: '900', marginTop: 'auto' },
   kpiUnit: { fontSize: 11, fontWeight: '600', color: '#94a3b8' },
-  wipBox: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10, borderRadius: 12, borderWidth: 1.5, borderStyle: 'dashed', borderColor: '#fcd34d', backgroundColor: '#fffbeb', padding: 10 },
+  wipBox: { flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 12, borderWidth: 1.5, borderStyle: 'dashed', borderColor: '#fcd34d', backgroundColor: '#fffbeb', padding: 10 },
   wipLabel: { fontSize: 11, fontWeight: '800', color: '#92400e' },
   wipValue: { fontSize: 14, fontWeight: '900', color: '#0f172a', marginTop: 2 },
 
@@ -1232,8 +1314,11 @@ const styles = StyleSheet.create({
   metaItem: { flexDirection: 'row', alignItems: 'center', gap: 4, maxWidth: '100%' },
   metaText: { fontSize: 11, color: '#475569', fontWeight: '600', flexShrink: 1 },
 
-  detailHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
-  backBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  detailOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)' },
+  detailSheet: { flex: 1, backgroundColor: '#f8fafc', borderTopLeftRadius: 20, borderTopRightRadius: 20, overflow: 'hidden' },
+  detailGrip: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: '#cbd5e1', marginTop: 8, marginBottom: 2 },
+  detailHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#f8fafc', paddingLeft: 16, paddingRight: 10, paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
+  closeBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
   detailHeaderTitle: { flex: 1, fontSize: 16, fontWeight: '900', color: '#0f172a' },
   detailScroll: { padding: 14, paddingBottom: 32, gap: 12 },
   detailHero: { backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#e2e8f0', padding: 13, gap: 4 },
@@ -1271,6 +1356,9 @@ const styles = StyleSheet.create({
   popupBtnIcon: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   popupBtnTitle: { fontSize: 13.5, fontWeight: '900', color: '#0f172a' },
   popupBtnSub: { fontSize: 11.5, color: GRAY, marginTop: 2 },
+  cardBtnRow: { flexDirection: 'row', gap: 8 },
+  cardBtn: { flex: 1, minHeight: 38, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 10, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#f8fafc', paddingHorizontal: 8 },
+  cardBtnText: { flexShrink: 1, fontSize: 12, fontWeight: '800', color: '#334155' },
 
   debtChip: { flexDirection: 'row', alignItems: 'center', gap: 4, maxWidth: '100%', backgroundColor: '#eef2ff', borderWidth: 1, borderColor: '#c7d2fe', borderRadius: 50, paddingHorizontal: 9, paddingVertical: 4 },
   debtChipEmpty: { backgroundColor: '#fff', borderStyle: 'dashed', borderColor: '#a5b4fc' },
