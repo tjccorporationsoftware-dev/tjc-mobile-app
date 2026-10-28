@@ -257,6 +257,7 @@ export function GuaranteeTrackingView({ variant }: { variant: TrackingVariant })
   const [startYear, setStartYear] = useState('all');
   const [endYear, setEndYear] = useState('all');
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(false); // ส่วนสรุปด้านบน: ปกติย่อไว้
   const [page, setPage] = useState(1);
   const [detail, setDetail] = useState<TrackRow | null>(null);
   // เลือกผู้รับผิดชอบติดตามหนี้ — รายชื่อพนักงานจาก get_tracking.debt_users
@@ -459,6 +460,22 @@ export function GuaranteeTrackingView({ variant }: { variant: TrackingVariant })
   // -------------------- render: การ์ดสรุป --------------------
 
   function renderSummary() {
+    // ย่อ/กางสรุป — ปกติแสดงแค่ปุ่มกรองด่วน รายการจะขึ้นมาใกล้ด้านบน
+    const quick = (key: string, label: string, count: number, color: string, active: boolean, onPress: () => void) => (
+      <TouchableOpacity key={key} style={[styles.quickChip, active && { borderColor: color, backgroundColor: color + '14' }]} onPress={onPress}>
+        <Text style={[styles.quickChipLabel, active && { color }]} numberOfLines={1}>{label}</Text>
+        <View style={[styles.quickChipCount, { backgroundColor: color }]}>
+          <Text style={styles.quickChipCountText}>{count.toLocaleString('en-US')}</Text>
+        </View>
+      </TouchableOpacity>
+    );
+    const summaryToggle = (
+      <TouchableOpacity style={styles.summaryToggle} onPress={() => setSummaryOpen((v) => !v)}>
+        <Text style={styles.summaryToggleText}>{summaryOpen ? 'ย่อสรุป' : 'ดูสรุปทั้งหมด'}</Text>
+        <Ionicons name={summaryOpen ? 'chevron-up' : 'chevron-down'} size={14} color={PRIMARY} />
+      </TouchableOpacity>
+    );
+
     const box = (key: string, label: string, value: number, color: string, icon: keyof typeof Ionicons.glyphMap) => {
       const active = statusFilter === key;
       return (
@@ -491,6 +508,19 @@ export function GuaranteeTrackingView({ variant }: { variant: TrackingVariant })
             <Text style={styles.summarySub}>ทั้งหมด {summary.total.toLocaleString('en-US')} ใบ (ไม่รวมที่ยกเลิก)</Text>
           </View>
         </View>
+        {!summaryOpen && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.quickRow}>
+            {statuses
+              .filter((s) => (summary.counts[s] ?? 0) > 0)
+              .map((s) => quick(s, s, summary.counts[s] ?? 0, statusMeta(s).color, statusFilter === s, () => setStatusFilter(statusFilter === s ? 'all' : s)))}
+            {cfg.showExpiredBox &&
+              quick(EXPIRED_FILTER, 'หมดประกัน', summary.expired, GRAY, statusFilter === EXPIRED_FILTER, () =>
+                setStatusFilter(statusFilter === EXPIRED_FILTER ? 'all' : EXPIRED_FILTER)
+              )}
+          </ScrollView>
+        )}
+        {summaryOpen && (
+          <>
         <Text style={styles.kpiHint}>
           <Ionicons name="funnel-outline" size={10} color="#94a3b8" /> สถานะการติดตาม — แตะเพื่อกรองรายการ
         </Text>
@@ -519,6 +549,9 @@ export function GuaranteeTrackingView({ variant }: { variant: TrackingVariant })
             <View style={styles.kpiGrid}>{box(EXPIRED_FILTER, 'หมดประกัน', summary.expired, GRAY, 'close-circle')}</View>
           </>
         )}
+          </>
+        )}
+        {summaryToggle}
       </View>
     );
   }
@@ -964,6 +997,13 @@ export function GuaranteeTrackingView({ variant }: { variant: TrackingVariant })
 // -------------------- Styles --------------------
 
 const styles = StyleSheet.create({
+  quickRow: { gap: 8, paddingTop: 12, paddingBottom: 2 },
+  quickChip: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 50, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#fff', paddingLeft: 12, paddingRight: 5, paddingVertical: 5 },
+  quickChipLabel: { fontSize: 12, fontWeight: '700', color: '#334155' },
+  quickChipCount: { minWidth: 22, borderRadius: 11, paddingHorizontal: 6, paddingVertical: 2, alignItems: 'center' },
+  quickChipCountText: { color: '#fff', fontSize: 11, fontWeight: '900' },
+  summaryToggle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, marginTop: 8, paddingVertical: 6 },
+  summaryToggleText: { fontSize: 12, fontWeight: '800', color: PRIMARY },
   cardFooter: { marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#f1f5f9', gap: 8 },
   ownerRow: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#f8fafc', borderRadius: 10, borderWidth: 1, borderColor: '#e2e8f0', paddingHorizontal: 10, paddingVertical: 8 },
   ownerIcon: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#eef2ff', alignItems: 'center', justifyContent: 'center' },

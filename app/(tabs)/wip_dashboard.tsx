@@ -238,6 +238,7 @@ export default function WipDashboardScreen() {
   const [closedEnd, setClosedEnd] = useState('');
   const [sortAsc, setSortAsc] = useState(false); // ค่าเริ่มต้นเว็บ: เลขหน้างาน มาก->น้อย
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(false); // ส่วนสรุปด้านบน: ปกติย่อไว้
   const [page, setPage] = useState(1);
 
   const [detail, setDetail] = useState<WipJob | null>(null);
@@ -465,6 +466,22 @@ export default function WipDashboardScreen() {
 
   function renderSummary() {
     if (!kpi) return null;
+    // ย่อ/กางสรุป — ปกติแสดงแค่ปุ่มกรองด่วน รายการจะขึ้นมาใกล้ด้านบน
+    const quick = (key: string, label: string, count: number, color: string, active: boolean, onPress: () => void) => (
+      <TouchableOpacity key={key} style={[styles.quickChip, active && { borderColor: color, backgroundColor: color + '14' }]} onPress={onPress}>
+        <Text style={[styles.quickChipLabel, active && { color }]} numberOfLines={1}>{label}</Text>
+        <View style={[styles.quickChipCount, { backgroundColor: color }]}>
+          <Text style={styles.quickChipCountText}>{count.toLocaleString('en-US')}</Text>
+        </View>
+      </TouchableOpacity>
+    );
+    const summaryToggle = (
+      <TouchableOpacity style={styles.summaryToggle} onPress={() => setSummaryOpen((v) => !v)}>
+        <Text style={styles.summaryToggleText}>{summaryOpen ? 'ย่อสรุป' : 'ดูสรุปทั้งหมด'}</Text>
+        <Ionicons name={summaryOpen ? 'chevron-up' : 'chevron-down'} size={14} color={PRIMARY} />
+      </TouchableOpacity>
+    );
+
     const box = (type: KpiKey, label: string, value: number, color: string, icon: keyof typeof Ionicons.glyphMap, extra?: string) => {
       const active = activeKpi === type && type !== 'all';
       return (
@@ -502,6 +519,16 @@ export default function WipDashboardScreen() {
             </Text>
           </View>
         </View>
+        {!summaryOpen && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.quickRow}>
+            {quick('not_closed', 'ยังไม่ปิดจบ', kpi.notClosed, AMBER, activeKpi === 'not_closed', () => filterByKpi(activeKpi === 'not_closed' ? 'all' : 'not_closed'))}
+            {quick('danger', 'เกินกำหนด', kpi.overdue, RED, activeKpi === 'danger', () => filterByKpi(activeKpi === 'danger' ? 'all' : 'danger'))}
+            {quick('warning', 'ใกล้ครบกำหนด', kpi.nearDue, AMBER, activeKpi === 'warning', () => filterByKpi(activeKpi === 'warning' ? 'all' : 'warning'))}
+            {quick('near_warranty', 'ใกล้หมดประกัน', kpi.nearWarranty, AMBER, activeKpi === 'near_warranty', () => filterByKpi(activeKpi === 'near_warranty' ? 'all' : 'near_warranty'))}
+          </ScrollView>
+        )}
+        {summaryOpen && (
+          <>
         <Text style={styles.kpiHint}>
           <Ionicons name="funnel-outline" size={10} color="#94a3b8" /> แตะกล่องเพื่อกรองรายการ
         </Text>
@@ -523,6 +550,9 @@ export default function WipDashboardScreen() {
           {box('near_warranty', 'ใกล้หมดประกัน', kpi.nearWarranty, AMBER, 'shield-half')}
           {box('warranty_expired', 'หมดประกันแล้ว', kpi.warrantyExpired, GRAY, 'shield-outline')}
         </View>
+          </>
+        )}
+        {summaryToggle}
       </View>
     );
   }
@@ -1248,6 +1278,13 @@ export default function WipDashboardScreen() {
 }
 
 const styles = StyleSheet.create({
+  quickRow: { gap: 8, paddingTop: 12, paddingBottom: 2 },
+  quickChip: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 50, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#fff', paddingLeft: 12, paddingRight: 5, paddingVertical: 5 },
+  quickChipLabel: { fontSize: 12, fontWeight: '700', color: '#334155' },
+  quickChipCount: { minWidth: 22, borderRadius: 11, paddingHorizontal: 6, paddingVertical: 2, alignItems: 'center' },
+  quickChipCountText: { color: '#fff', fontSize: 11, fontWeight: '900' },
+  summaryToggle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, marginTop: 8, paddingVertical: 6 },
+  summaryToggleText: { fontSize: 12, fontWeight: '800', color: PRIMARY },
   cardFooter: { marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#f1f5f9', gap: 8 },
   ownerRow: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#f8fafc', borderRadius: 10, borderWidth: 1, borderColor: '#e2e8f0', paddingHorizontal: 10, paddingVertical: 8 },
   ownerIcon: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#eef2ff', alignItems: 'center', justifyContent: 'center' },
