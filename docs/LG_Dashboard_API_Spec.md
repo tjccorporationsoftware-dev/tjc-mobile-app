@@ -224,7 +224,12 @@ action=save_debt_owner&user_id={id}&lg_id={lg_id}&debt_user={ชื่อ}
 
 ## ปุ่มอนุมัติ — `lg_action` (หน้า 1, 2)
 
-ตรงกับ `?action=…&id=…` ของ `lg_dashboard.php:12-71` และ `lg_import_dashboard.php:33-82` (สองหน้าใช้ตรรกะเดียวกัน) ส่วนหน้าค้ำเงินสดบนเว็บซ่อนปุ่มอนุมัติไว้ จึงไม่มีในแอป
+ตรงกับ `?action=…&id=…` ของ `lg_dashboard.php:12-71` และ `lg_import_dashboard.php:33-82` (สองหน้าใช้ตรรกะเดียวกัน)
+
+**หน้าค้ำเงินสด (`kind=cash`, ตาราง `cash_guarantees`)**
+- ตรงกับ `lg_cash_dashboard.php:21-79`
+- เว็บซ่อนปุ่มอนุมัติไว้ เหลือแค่ปุ่ม "ยกเลิกรายการ" API จึงรับเฉพาะ `op=cancel` ถ้าส่ง op อื่นตอบ "op ไม่ถูกต้อง"
+- ใช้สิทธิ์ `lg_cancel_record` และ `get_cash_dashboard` ส่ง `can_cancel_record` มาด้วย
 
 ```
 POST {API_BASE}/mobile_api/modules/lg_API_mobile.php

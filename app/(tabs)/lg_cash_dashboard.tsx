@@ -14,6 +14,7 @@ import { useFocusEffect } from 'expo-router';
 import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Linking,
   Modal,
   RefreshControl,
@@ -31,7 +32,7 @@ import AttachmentManagerModal, { AttachedFile } from '../../components/Attachmen
 import ListPager, { pageCount } from '../../components/ListPager';
 import { useScreenInsets } from '../../components/useScreenInsets';
 import { API_BASE, API_MODULES } from '../../constants/config';
-import { apiMobileGet } from '../../service/api_mobile';
+import { apiMobileGet, apiMobilePost } from '../../service/api_mobile';
 import { useAuth } from '../_layout';
 
 const LG_API_URL = `${API_MODULES}/lg_API_mobile.php`;
@@ -216,6 +217,9 @@ export default function LgCashDashboardScreen() {
   const [detail, setDetail] = useState<CashRow | null>(null);
   // รายการที่เปิดป๊อปอัพ "จัดการเอกสารแนบ" อยู่ (เปิดได้จากการ์ดและหน้ารายละเอียด)
   const [attachFor, setAttachFor] = useState<CashRow | null>(null);
+  // ปุ่ม "ยกเลิกรายการ" — สิทธิ์ lg_cancel_record จาก API (เว็บซ่อนปุ่มถ้าไม่มีสิทธิ์)
+  const [canCancelRecord, setCanCancelRecord] = useState(false);
+  const [cancelBusyId, setCancelBusyId] = useState<number | null>(null);
 
   const load = useCallback(
     async (refresh = false) => {
@@ -225,6 +229,7 @@ export default function LgCashDashboardScreen() {
       try {
         const res = await apiMobileGet(LG_API_URL, 'get_cash_dashboard', { user_id: user.id });
         setRows(Array.isArray(res.list) ? res.list.map(mapRow) : []);
+        setCanCancelRecord(!!Number(res.can_cancel_record ?? 0));
       } catch (e: any) {
         const notReady = e?.response?.status === 404;
         setLoadError(notReady ? 'ยังเชื่อมต่อข้อมูลไม่ได้ — เซิร์ฟเวอร์ยังไม่มี API ของหน้านี้' : e?.message || 'โหลดข้อมูลไม่สำเร็จ');
@@ -468,15 +473,47 @@ export default function LgCashDashboardScreen() {
             </View>
           )}
         </View>
-        {/* แถบปุ่มท้ายการ์ด: เอกสารแนบ */}
-        <View style={styles.cardFooter}>
-          <TouchableOpacity style={styles.footerBtn} onPress={() => setAttachFor(r)} accessibilityLabel="จัดการเอกสารแนบ">
+        {/* แถบปุ่มท้ายการ์ด: เอกสารแนบ + ยกเลิกรายการ (เฉพาะสิทธิ์ lg_cancel_record แบบเว็บ) */}
+        <View style={[styles.cardFooter, styles.footerRow]}>
+          <TouchableOpacity style={[styles.footerBtn, { flex: 1 }]} onPress={() => setAttachFor(r)} accessibilityLabel="จัดการเอกสารแนบ">
             <Ionicons name="attach" size={15} color={PRIMARY} />
-            <Text style={styles.footerBtnText}>{r.files.length > 0 ? `เอกสารแนบ (${r.files.length} ไฟล์)` : 'แนบไฟล์'}</Text>
+            <Text style={styles.footerBtnText} numberOfLines={1}>{r.files.length > 0 ? `เอกสารแนบ (${r.files.length})` : 'แนบไฟล์'}</Text>
           </TouchableOpacity>
+          {canCancelRecord && !canceled && (
+            <TouchableOpacity style={[styles.footerBtn, styles.footerBtnDanger, { flex: 1 }]} onPress={() => confirmCancel(r)} disabled={cancelBusyId === r.id} accessibilityLabel="ยกเลิกรายการนี้">
+              {cancelBusyId === r.id ? <ActivityIndicator size="small" color={RED} /> : <Ionicons name="ban" size={15} color={RED} />}
+              <Text style={[styles.footerBtnText, { color: RED }]} numberOfLines={1}>ยกเลิกรายการ</Text>
+            </TouchableOpacity>
+          )}
         </View>
       </TouchableOpacity>
     );
+  }
+
+  // ยกเลิกรายการ — ข้อความยืนยันเดียวกับ confirmCancel() ของเว็บ (lg_cash_dashboard.php:2189)
+  function confirmCancel(r: CashRow) {
+    Alert.alert('ยืนยันยกเลิกรายการ?', 'รายการนี้จะถูกขีดฆ่าและไม่นำมาคำนวณในหน้าแดชบอร์ดอีก (เหมือนการลบ)', [
+      { text: 'ปิดหน้าต่าง', style: 'cancel' },
+      { text: 'ยืนยันยกเลิก', style: 'destructive', onPress: () => void runCancel(r) },
+    ]);
+  }
+
+  async function runCancel(r: CashRow) {
+    if (!user?.id) return;
+    setCancelBusyId(r.id);
+    try {
+      const res = await apiMobilePost(LG_API_URL, 'lg_action', { user_id: user.id, kind: 'cash', id: r.id, op: 'cancel' });
+      // โหลดรายการใหม่ให้ KPI ตรงกับเว็บ แล้วอัปเดตหน้ารายละเอียดที่เปิดอยู่
+      const fresh = await apiMobileGet(LG_API_URL, 'get_cash_dashboard', { user_id: user.id });
+      const list: CashRow[] = Array.isArray(fresh.list) ? fresh.list.map(mapRow) : [];
+      setRows(list);
+      setDetail((d) => (d ? list.find((x) => x.id === d.id) ?? null : d));
+      Alert.alert(String(res.message || 'ยกเลิกรายการสำเร็จ'));
+    } catch (e: any) {
+      Alert.alert('ยกเลิกไม่สำเร็จ', e?.message || 'กรุณาลองใหม่อีกครั้ง');
+    } finally {
+      setCancelBusyId(null);
+    }
   }
 
   function InfoRow({ label, value, color }: { label: string; value?: string; color?: string }) {
@@ -620,6 +657,13 @@ export default function LgCashDashboardScreen() {
                 <InfoRow label="ที่มา" value={r.isImported ? 'นำเข้าจาก Excel' : 'บันทึกในระบบ'} />
                 {r.isImported && <InfoRow label="หมายเหตุการนำเข้า" value={r.importNote} />}
               </Section>
+              {/* ยกเลิกรายการ (ขีดฆ่า) — เฉพาะสิทธิ์ lg_cancel_record แบบปุ่มในคอลัมน์จัดการของเว็บ */}
+              {canCancelRecord && !isCanceled(r) && (
+                <TouchableOpacity style={[styles.footerBtn, styles.footerBtnDanger]} onPress={() => confirmCancel(r)} disabled={cancelBusyId === r.id}>
+                  {cancelBusyId === r.id ? <ActivityIndicator size="small" color={RED} /> : <Ionicons name="ban" size={15} color={RED} />}
+                  <Text style={[styles.footerBtnText, { color: RED }]}>ยกเลิกรายการนี้</Text>
+                </TouchableOpacity>
+              )}
             </ScrollView>
           )}
           </View>
@@ -809,6 +853,8 @@ const styles = StyleSheet.create({
   cardFooter: { marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#f1f5f9', gap: 8 },
   footerBtn: { minHeight: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 10, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#f8fafc', paddingHorizontal: 10 },
   footerBtnText: { fontSize: 12.5, fontWeight: '800', color: PRIMARY },
+  footerRow: { flexDirection: 'row' },
+  footerBtnDanger: { borderColor: '#fecaca', backgroundColor: '#fef2f2' },
   safe: { flex: 1, backgroundColor: '#f8fafc' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 10 },
   errorText: { color: '#475569', fontSize: 13, textAlign: 'center', lineHeight: 20 },

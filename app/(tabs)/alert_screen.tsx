@@ -1,5 +1,6 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import axios from "axios";
+import { isRunningInExpoGo } from "expo";
 import Constants, { ExecutionEnvironment } from "expo-constants";
 import { LinearGradient } from "expo-linear-gradient";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
@@ -27,7 +28,9 @@ import { useAuth } from "../_layout";
 // guard ใดๆ จะได้ทำงานด้วยซ้ำ) จึงต้องโหลดแบบ require() แบบมีเงื่อนไขแทน import ปกติ เพื่อไม่ให้
 // โมดูลถูก require เลยตอนรันบน Expo Go — ต้องใช้ development build ถึงจะได้แจ้งเตือนจริง
 type NotificationsModule = typeof import("expo-notifications");
-const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+// isRunningInExpoGo() ของ expo ตรวจได้แน่นอนกว่า executionEnvironment (Expo Go ของ SDK 58 ไม่ได้รายงานเป็น StoreClient เสมอ
+// เลยหลุดไป require โมดูลจนขึ้นคำเตือน push notification ทุกครั้งที่เปิดแอป)
+const isExpoGo = isRunningInExpoGo() || Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 let Notifications: NotificationsModule | null = null;
 if (!isExpoGo) {
   try {
