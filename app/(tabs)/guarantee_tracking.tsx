@@ -34,6 +34,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { formatShortThaiDate, formatShortThaiDateTime } from '../../components/DateTimeField';
+import AutoGrid from '../../components/AutoGrid';
 import ListPager, { pageCount } from '../../components/ListPager';
 import { useScreenInsets } from '../../components/useScreenInsets';
 import { API_MODULES } from '../../constants/config';
@@ -509,7 +510,7 @@ export function GuaranteeTrackingView({ variant }: { variant: TrackingVariant })
           </View>
         </View>
         {!summaryOpen && (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.quickRow}>
+          <AutoGrid style={styles.quickRow}>
             {statuses
               .filter((s) => (summary.counts[s] ?? 0) > 0)
               .map((s) => quick(s, s, summary.counts[s] ?? 0, statusMeta(s).color, statusFilter === s, () => setStatusFilter(statusFilter === s ? 'all' : s)))}
@@ -517,7 +518,7 @@ export function GuaranteeTrackingView({ variant }: { variant: TrackingVariant })
               quick(EXPIRED_FILTER, 'หมดประกัน', summary.expired, GRAY, statusFilter === EXPIRED_FILTER, () =>
                 setStatusFilter(statusFilter === EXPIRED_FILTER ? 'all' : EXPIRED_FILTER)
               )}
-          </ScrollView>
+          </AutoGrid>
         )}
         {summaryOpen && (
           <>
@@ -998,8 +999,8 @@ export function GuaranteeTrackingView({ variant }: { variant: TrackingVariant })
 
 const styles = StyleSheet.create({
   quickRow: { gap: 8, paddingTop: 12, paddingBottom: 2 },
-  quickChip: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 50, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#fff', paddingLeft: 12, paddingRight: 5, paddingVertical: 5 },
-  quickChipLabel: { fontSize: 12, fontWeight: '700', color: '#334155' },
+  quickChip: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6, borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 8 },
+  quickChipLabel: { flexShrink: 1, fontSize: 12, fontWeight: '700', color: '#334155' },
   quickChipCount: { minWidth: 22, borderRadius: 11, paddingHorizontal: 6, paddingVertical: 2, alignItems: 'center' },
   quickChipCountText: { color: '#fff', fontSize: 11, fontWeight: '900' },
   summaryToggle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, marginTop: 8, paddingVertical: 6 },

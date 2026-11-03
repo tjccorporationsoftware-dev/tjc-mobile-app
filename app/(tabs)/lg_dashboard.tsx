@@ -33,6 +33,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { formatShortThaiDate, formatShortThaiDateTime } from '../../components/DateTimeField';
 import AttachmentManagerModal, { AttachedFile } from '../../components/AttachmentManagerModal';
+import AutoGrid from '../../components/AutoGrid';
 import ListPager, { pageCount } from '../../components/ListPager';
 import { useScreenInsets } from '../../components/useScreenInsets';
 import { API_BASE, API_MODULES } from '../../constants/config';
@@ -472,12 +473,12 @@ export function LgDashboardView({ variant }: { variant: LgVariant }) {
         </View>
 
         {!summaryOpen && (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.quickRow}>
+          <AutoGrid style={styles.quickRow}>
             {quick('pm', 'รอ ผจก.', kpi.pendingMgr, AMBER, statusFilter === 'รอผู้จัดการ', sf('รอผู้จัดการ'))}
             {quick('pa', 'รอ ผู้ดูแล', kpi.pendingAdmin, AMBER, statusFilter === 'รอผู้ดูแล', sf('รอผู้ดูแล'))}
             {quick('ex', 'ใกล้หมดอายุ', kpi.expiring, RED, statusFilter === 'ใกล้หมดอายุ', sf('ใกล้หมดอายุ'))}
             {quick('ed', 'หมดประกัน', kpi.expired, GRAY, statusFilter === 'หมดประกัน', sf('หมดประกัน'))}
-          </ScrollView>
+          </AutoGrid>
         )}
         {summaryOpen && (
           <>
@@ -1037,8 +1038,8 @@ export function LgDashboardView({ variant }: { variant: LgVariant }) {
 
 const styles = StyleSheet.create({
   quickRow: { gap: 8, paddingTop: 12, paddingBottom: 2 },
-  quickChip: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 50, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#fff', paddingLeft: 12, paddingRight: 5, paddingVertical: 5 },
-  quickChipLabel: { fontSize: 12, fontWeight: '700', color: '#334155' },
+  quickChip: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6, borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 8 },
+  quickChipLabel: { flexShrink: 1, fontSize: 12, fontWeight: '700', color: '#334155' },
   quickChipCount: { minWidth: 22, borderRadius: 11, paddingHorizontal: 6, paddingVertical: 2, alignItems: 'center' },
   quickChipCountText: { color: '#fff', fontSize: 11, fontWeight: '900' },
   summaryToggle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, marginTop: 8, paddingVertical: 6 },

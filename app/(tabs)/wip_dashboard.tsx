@@ -32,6 +32,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { DateField, formatShortThaiDate, formatShortThaiDateTime, ymdToDate } from '../../components/DateTimeField';
+import AutoGrid from '../../components/AutoGrid';
 import ListPager, { pageCount } from '../../components/ListPager';
 import { useScreenInsets } from '../../components/useScreenInsets';
 import { API_MODULES } from '../../constants/config';
@@ -451,7 +452,7 @@ export default function WipDashboardScreen() {
   function renderYearTabs() {
     if (years.length <= 1) return null;
     return (
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.yearRow}>
+      <AutoGrid style={styles.yearRow}>
         {years.map((y) => {
           const active = y === year;
           return (
@@ -460,7 +461,7 @@ export default function WipDashboardScreen() {
             </TouchableOpacity>
           );
         })}
-      </ScrollView>
+      </AutoGrid>
     );
   }
 
@@ -520,12 +521,12 @@ export default function WipDashboardScreen() {
           </View>
         </View>
         {!summaryOpen && (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.quickRow}>
+          <AutoGrid style={styles.quickRow}>
             {quick('not_closed', 'ยังไม่ปิดจบ', kpi.notClosed, AMBER, activeKpi === 'not_closed', () => filterByKpi(activeKpi === 'not_closed' ? 'all' : 'not_closed'))}
             {quick('danger', 'เกินกำหนด', kpi.overdue, RED, activeKpi === 'danger', () => filterByKpi(activeKpi === 'danger' ? 'all' : 'danger'))}
             {quick('warning', 'ใกล้ครบกำหนด', kpi.nearDue, AMBER, activeKpi === 'warning', () => filterByKpi(activeKpi === 'warning' ? 'all' : 'warning'))}
             {quick('near_warranty', 'ใกล้หมดประกัน', kpi.nearWarranty, AMBER, activeKpi === 'near_warranty', () => filterByKpi(activeKpi === 'near_warranty' ? 'all' : 'near_warranty'))}
-          </ScrollView>
+          </AutoGrid>
         )}
         {summaryOpen && (
           <>
@@ -561,7 +562,7 @@ export default function WipDashboardScreen() {
   function renderCompanies() {
     if (companies.length === 0) return null;
     return (
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.compRow}>
+      <AutoGrid style={styles.compRow}>
         {companies.map((c) => {
           const active = companyFilter === c.company;
           return (
@@ -576,7 +577,7 @@ export default function WipDashboardScreen() {
             </TouchableOpacity>
           );
         })}
-      </ScrollView>
+      </AutoGrid>
     );
   }
 
@@ -1279,8 +1280,8 @@ export default function WipDashboardScreen() {
 
 const styles = StyleSheet.create({
   quickRow: { gap: 8, paddingTop: 12, paddingBottom: 2 },
-  quickChip: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 50, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#fff', paddingLeft: 12, paddingRight: 5, paddingVertical: 5 },
-  quickChipLabel: { fontSize: 12, fontWeight: '700', color: '#334155' },
+  quickChip: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6, borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 8 },
+  quickChipLabel: { flexShrink: 1, fontSize: 12, fontWeight: '700', color: '#334155' },
   quickChipCount: { minWidth: 22, borderRadius: 11, paddingHorizontal: 6, paddingVertical: 2, alignItems: 'center' },
   quickChipCountText: { color: '#fff', fontSize: 11, fontWeight: '900' },
   summaryToggle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, marginTop: 8, paddingVertical: 6 },
@@ -1311,7 +1312,7 @@ const styles = StyleSheet.create({
   chipText: { color: '#3730a3', fontSize: 11, fontWeight: '700', flexShrink: 1 },
 
   yearRow: { paddingHorizontal: 14, paddingTop: 12, gap: 8 },
-  yearTab: { height: 34, borderRadius: 50, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#fff', paddingHorizontal: 14, justifyContent: 'center' },
+  yearTab: { height: 42, alignItems: 'center', borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#fff', paddingHorizontal: 14, justifyContent: 'center' },
   yearTabActive: { backgroundColor: PRIMARY, borderColor: PRIMARY },
   yearTabText: { fontSize: 12.5, fontWeight: '800', color: '#334155' },
 
@@ -1334,7 +1335,7 @@ const styles = StyleSheet.create({
   kpiExtra: { fontSize: 10.5, fontWeight: '700', color: RED },
 
   compRow: { paddingHorizontal: 14, paddingTop: 12, gap: 8 },
-  compCard: { minWidth: 120, maxWidth: 200, backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', paddingHorizontal: 12, paddingVertical: 9 },
+  compCard: { backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', paddingHorizontal: 12, paddingVertical: 9 },
   compCardActive: { backgroundColor: PRIMARY, borderColor: PRIMARY },
   compName: { fontSize: 12.5, fontWeight: '900', color: '#0f172a' },
   compCount: { fontSize: 11.5, fontWeight: '700', color: '#334155', marginTop: 2 },

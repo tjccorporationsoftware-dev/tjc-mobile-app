@@ -31,6 +31,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { DateField, formatShortThaiDate, formatShortThaiDateTime, ymdToDate } from '../../components/DateTimeField';
+import AutoGrid from '../../components/AutoGrid';
 import ListPager, { pageCount } from '../../components/ListPager';
 import { useScreenInsets } from '../../components/useScreenInsets';
 import { API_MODULES } from '../../constants/config';
@@ -393,10 +394,10 @@ export default function InstallmentPlansScreen() {
       );
     };
     return (
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.compTabRow}>
+      <AutoGrid style={styles.compTabRow}>
         {tab('all', 'ทุกบริษัท', kpiAll.planCount)}
         {kpiByComp.map((c) => tab(c.key, c.name, c.planCount))}
-      </ScrollView>
+      </AutoGrid>
     );
   }
 
@@ -470,11 +471,11 @@ export default function InstallmentPlansScreen() {
           <View style={[styles.progressFill, { width: `${pct * 100}%`, backgroundColor: GREEN }]} />
         </View>
         {!summaryOpen && (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.quickRow}>
+          <AutoGrid style={styles.quickRow}>
             {quick('pending', 'ค้างชำระ (เจ้า)', kpi.debtorUnits, RED, stateFilter === 'pending', () => setStateFilter(stateFilter === 'pending' ? 'all' : 'pending'))}
             {quick('has_income', 'เงินเข้าแล้ว (งาน)', kpi.plansWithIncome, GREEN, stateFilter === 'has_income', () => setStateFilter(stateFilter === 'has_income' ? 'all' : 'has_income'))}
             {quick('paid_full', 'จ่ายครบตามแผน', plans.filter((p) => (compFilter === 'all' || p.compKey === compFilter) && p.payState === 'paid_full').length, '#7c3aed', stateFilter === 'paid_full', () => setStateFilter(stateFilter === 'paid_full' ? 'all' : 'paid_full'))}
-          </ScrollView>
+          </AutoGrid>
         )}
         {summaryOpen && (
           <>
@@ -1068,8 +1069,8 @@ function ItemCell({ label, value, strong }: { label: string; value: string; stro
 
 const styles = StyleSheet.create({
   quickRow: { gap: 8, paddingTop: 12, paddingBottom: 2 },
-  quickChip: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 50, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#fff', paddingLeft: 12, paddingRight: 5, paddingVertical: 5 },
-  quickChipLabel: { fontSize: 12, fontWeight: '700', color: '#334155' },
+  quickChip: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6, borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 8 },
+  quickChipLabel: { flexShrink: 1, fontSize: 12, fontWeight: '700', color: '#334155' },
   quickChipCount: { minWidth: 22, borderRadius: 11, paddingHorizontal: 6, paddingVertical: 2, alignItems: 'center' },
   quickChipCountText: { color: '#fff', fontSize: 11, fontWeight: '900' },
   summaryToggle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, marginTop: 8, paddingVertical: 6 },
@@ -1100,7 +1101,7 @@ const styles = StyleSheet.create({
   chipText: { color: '#3730a3', fontSize: 11, fontWeight: '700', flexShrink: 1 },
 
   compTabRow: { paddingHorizontal: 14, paddingTop: 12, gap: 8 },
-  compTab: { flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: 240, height: 36, borderRadius: 50, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#fff', paddingHorizontal: 12 },
+  compTab: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6, height: 42, borderRadius: 12, borderWidth: 1, borderColor: '#e2e8f0', backgroundColor: '#fff', paddingHorizontal: 12 },
   compTabActive: { backgroundColor: PRIMARY, borderColor: PRIMARY },
   compTabText: { flexShrink: 1, fontSize: 12, fontWeight: '800', color: '#334155' },
   compTabCount: { minWidth: 20, borderRadius: 10, backgroundColor: '#f1f5f9', paddingHorizontal: 6, paddingVertical: 1, alignItems: 'center' },
