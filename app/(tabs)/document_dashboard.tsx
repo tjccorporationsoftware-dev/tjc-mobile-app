@@ -4538,7 +4538,7 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
               <Ionicons name="folder-open-outline" size={26} color="#cbd5e1" />
               <Text style={styles.emptyText}>ไม่พบเอกสารที่ตรงกับเงื่อนไข</Text>
             </View>
-          ) : null
+          ) : undefined
         }
         // แบ่งหน้าแบบตารางเว็บ หน้าละ PAGE_SIZE — บนจอมีไม่เกิน 1 หน้าเสมอ (เดิมเลื่อนแล้วต่อท้ายสะสมเป็นร้อยรายการ)
         ListFooterComponent={
@@ -4811,7 +4811,7 @@ const styles = StyleSheet.create({
   voidPanelAmountLabel: { color: '#fff', fontSize: 10.5, opacity: 0.8 },
   voidPanelAmountValue: { color: '#fff', fontSize: 15, fontWeight: '800', marginTop: 2 },
 
-  backBtn: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  backBtn: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
 
   // bottom sheet ตัวกรอง
   sheetOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)' },
@@ -4888,7 +4888,7 @@ const styles = StyleSheet.create({
   supplierNameSummary: { fontSize: 14, fontWeight: '800', color: '#0f172a', marginTop: 8 },
   cardSummaryBottomRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 12 },
 
-  detailHeaderBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 8, paddingVertical: 10, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
+  detailHeaderBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
   detailHeaderTitle: { flex: 1, textAlign: 'center', fontSize: 15, fontWeight: '800', color: '#0f172a' },
   detailScrollContent: { padding: 16, paddingBottom: 40 },
   cancelRibbon: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#64748b', marginHorizontal: -13, marginTop: -13, paddingHorizontal: 13, paddingVertical: 6, marginBottom: 10 },

@@ -404,7 +404,7 @@ const CustomAlertModal = ({
 
 export default function CarBookingScreen() {
   const { user } = useAuth();
-  const scrollViewRef = useRef<ScrollView>(null);
+  const scrollViewRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
   const colorScheme = useColorScheme();
 
   // State Hooks
@@ -3335,7 +3335,6 @@ export default function CarBookingScreen() {
       >
         <StatusBar
           barStyle={isDark ? "light-content" : "dark-content"}
-          backgroundColor={themeColors.bg}
         />
         <ScrollView
           ref={scrollViewRef}

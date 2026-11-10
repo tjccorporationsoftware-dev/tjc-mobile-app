@@ -464,10 +464,9 @@ export default function DashboardScreen() {
 
     return (
         <View style={styles.container}>
-            <StatusBar barStyle={isDark ? "light-content" : "dark-content"} backgroundColor="transparent" translucent />
+            <StatusBar barStyle={isDark ? "light-content" : "dark-content"} />
 
             {/* Ambient Background Blobs (Premium Glass Effect) */}
-            {/* RN 0.86 ตัด StyleSheet.absoluteFillObject ออกแล้ว (ได้ undefined) — ใช้ absoluteFill แทน */}
             <View style={StyleSheet.absoluteFill}>
                 <View style={[styles.ambientBlob, { top: -100, left: -50, backgroundColor: 'rgba(59, 130, 246, 0.15)' }]} />
                 <View style={[styles.ambientBlob, { top: 200, right: -100, backgroundColor: 'rgba(168, 85, 247, 0.12)' }]} />

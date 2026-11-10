@@ -2250,7 +2250,7 @@ export default function ProjectDashboardScreen({ onNavigate }: ProjectDashboardS
           {/* โมดัลเต็มจอหัวขาว: ไอคอนแถบสถานะสีเข้มตอนเปิด (ปิดแล้วกลับเป็นสีขาวของแถบหัวน้ำเงิน) */}
           <StatusBar barStyle="dark-content" />
           <View style={styles.canceledHeaderBar}>
-            <TouchableOpacity onPress={close} hitSlop={8} style={{ padding: 4 }}>
+            <TouchableOpacity onPress={close} hitSlop={8} style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}>
               <Ionicons name="chevron-back" size={22} color="#0f172a" />
             </TouchableOpacity>
             <Text style={styles.canceledHeaderTitle}>ประวัติงานยกเลิก (ปี ค.ศ. {selectedYear})</Text>
@@ -4912,8 +4912,8 @@ const styles = StyleSheet.create({
   quickActionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, paddingHorizontal: 10, minHeight: 44 },
   quickActionBtnText: { fontSize: 12, fontWeight: '700', color: '#334155' },
 
-  detailHeaderBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 8, paddingVertical: 10, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
-  detailHeaderBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  detailHeaderBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
+  detailHeaderBtn: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
   detailHeaderTitle: { flex: 1, textAlign: 'center', fontSize: 15, fontWeight: '800', color: '#0f172a' },
   detailScrollContent: { padding: 16, paddingBottom: 40, gap: 8 },
   detailTopCard: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 14, padding: 14 },

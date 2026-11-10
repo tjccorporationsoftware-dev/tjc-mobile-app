@@ -2,10 +2,17 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
 import { Stack, useRouter, useSegments } from "expo-router";
 import React, { createContext, useContext, useEffect, useState } from "react";
-import { ActivityIndicator, View } from "react-native";
+import { ActivityIndicator, LogBox, View } from "react-native";
+import { configureReanimatedLogger, ReanimatedLogLevel } from "react-native-reanimated";
 import { AppLockGate } from "../components/AppLock";
 import { AutoUpdate } from "../components/AutoUpdate";
 import { API_BASE } from "../constants/config";
+
+// เมนูข้าง (react-native-drawer-layout 4.2.12 ล่าสุด) ส่ง dependency array ให้ hook ของ Reanimated 4.7
+// ซึ่งบนมือถือไม่ใช้อยู่แล้ว จึงขึ้นคำเตือนทุกครั้งที่เปิดแอป — ไม่ใช่โค้ดของเรา และไม่มีผลกับการทำงาน
+// ปิดคำเตือนระดับ warn ของ Reanimated (ทั้งในจอแอปและใน terminal) — error ของ Reanimated ยังแสดงตามปกติ
+configureReanimatedLogger({ level: ReanimatedLogLevel.error, strict: false });
+LogBox.ignoreLogs(["[Reanimated] Dependencies should only be used on the web"]);
 
 // ------------------------------------------------------
 // 1. ส่วนจัดการ Auth (รวมไว้ในนี้เลย ไม่ต้องแยกไฟล์)

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-`tjc-mobile-app` — Expo (SDK 54) / React Native / TypeScript app for TJC Group's internal ERP. It is a **thin client over an existing PHP web system**: nearly every screen is a mobile port of a `.php` page, and all business logic, permissions and data live on the server. UI text and code comments are Thai; dates are displayed in Buddhist era (`year + 543`).
+`tjc-mobile-app` — Expo (SDK 58, React Native 0.88) / TypeScript app for TJC Group's internal ERP. It is a **thin client over an existing PHP web system**: nearly every screen is a mobile port of a `.php` page, and all business logic, permissions and data live on the server. UI text and code comments are Thai; dates are displayed in Buddhist era (`year + 543`).
 
 ## Commands
 
