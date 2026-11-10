@@ -83,7 +83,7 @@ const DOCUMENT_API_URL = `${API_MODULES}/document_API_mobile.php`;
 // ====================================================================
 
 // AC = เคลียร์เงินทดรอง (หลายกล่องร้านค้า) — แอปแสดงได้แต่แก้ไขไม่ได้ (ทำที่หน้าเว็บ)
-type DocType = 'PO' | 'AX' | 'AC';
+type DocType = 'PO' | 'AX' | 'PE' | 'AC';   // PE = จ่ายเงินมัดจำ
 type DeptKey = 'warehouse' | 'purchase' | 'accounting';
 type StageFilter = 'all' | 'pending_approve' | 'approved' | 'pending_finance' | 'finance_received' | 'returned' | 'returned_tax' | 'cancelled';
 // ชื่อแผนกฝั่ง API (คีย์ของ tax_pairs / tax_recv_defaults ใน get_list)
@@ -2211,8 +2211,8 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
 
               <SheetGroup icon="document-text" color="#64748b" title="ประเภทเอกสาร">
                 <View style={styles.sheetOptGrid}>
-                  {/* AC = เคลียร์เงินทดรอง (ตัวกรอง PO/AX/AC บนเว็บ :3684) — doc_type กรองฝั่ง API */}
-                  {(['all', 'PO', 'AX', 'AC'] as const).map((t) => (
+                  {/* PE = จ่ายเงินมัดจำ · AC = เคลียร์เงินทดรอง (ตัวกรอง PO/AX/PE/AC บนเว็บ) — doc_type กรองฝั่ง API */}
+                  {(['all', 'PO', 'AX', 'PE', 'AC'] as const).map((t) => (
                     <SheetOption key={t} label={t === 'all' ? 'ทุกประเภท' : t === 'AC' ? 'AC (เคลียร์เงินทดรอง)' : t} active={docTypeFilter === t} onPress={() => setDocTypeFilter(t)} />
                   ))}
                 </View>
@@ -2827,7 +2827,7 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
           color="#4f46e5"
           onClose={() => setAcShops({ visible: false, q: '' })}
         >
-          <Text style={acStyles.shopDoc}>{sd ? `${sd.doc_type} ${(sd.doc_number ?? '').replace(/^(PO|AX|AC)-/, '')}` : ''}</Text>
+          <Text style={acStyles.shopDoc}>{sd ? `${sd.doc_type} ${(sd.doc_number ?? '').replace(/^(PO|AX|PE|AC)-/, '')}` : ''}</Text>
           <TextInput
             style={styles.input}
             placeholder="พิมพ์ค้นหาร้านค้า / หน้างาน..."
@@ -2872,7 +2872,7 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
       <ModalShell visible={acRecv.visible} title={meta ? `📂 ${meta.label}รับใบกำกับ` : ''} color={meta?.color ?? '#4f46e5'} onClose={close}>
         <View style={acStyles.recvSub}>
           <Text style={acStyles.recvSubText}>
-            เคลียร์เงินทดรอง {doc ? `${doc.doc_type} ${(doc.doc_number ?? '').replace(/^(PO|AX|AC)-/, '')}` : ''} · รายการที่ {item?.line_no}: {item?.supplier_name}
+            เคลียร์เงินทดรอง {doc ? `${doc.doc_type} ${(doc.doc_number ?? '').replace(/^(PO|AX|PE|AC)-/, '')}` : ''} · รายการที่ {item?.line_no}: {item?.supplier_name}
           </Text>
         </View>
         {!!receipt && (
@@ -3035,7 +3035,7 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
           </Text>
           <View style={styles.docTypeBadge}>
             <Text style={styles.docTypeBadgeText} numberOfLines={1}>
-              {d.doc_type}-{(d.doc_number ?? '').replace(/^(PO|AX|AC)-/, '')}
+              {d.doc_type}-{(d.doc_number ?? '').replace(/^(PO|AX|PE|AC)-/, '')}
             </Text>
           </View>
         </View>
@@ -3154,7 +3154,7 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
               <Ionicons name="chevron-back" size={22} color="#0f172a" />
             </TouchableOpacity>
             <Text style={styles.detailHeaderTitle} numberOfLines={1}>
-              {d.doc_type}-{(d.doc_number ?? '').replace(/^(PO|AX|AC)-/, '')}
+              {d.doc_type}-{(d.doc_number ?? '').replace(/^(PO|AX|PE|AC)-/, '')}
             </Text>
             {!isCancelled && menuItems.length > 0 ? (
               <TouchableOpacity onPress={() => setMoreMenuOpen(true)} style={styles.backBtn} accessibilityLabel="เมนูเพิ่มเติม">
@@ -3227,7 +3227,7 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
                 </Text>
                 <View style={styles.docTypeBadge}>
                   <Text style={styles.docTypeBadgeText} numberOfLines={1}>
-                    {d.doc_type}-{(d.doc_number ?? '').replace(/^(PO|AX|AC)-/, '')}
+                    {d.doc_type}-{(d.doc_number ?? '').replace(/^(PO|AX|PE|AC)-/, '')}
                   </Text>
                 </View>
               </View>
@@ -3278,7 +3278,7 @@ export default function DocumentDashboardScreen({ onBack }: DocumentDashboardScr
                   {([
                     ['business', 'บริษัท', d.company_display || d.company_shortname || d.company_full_name || '-'],
                     ['calendar', 'วันที่', fmtDateTimeCE(d.created_at)],
-                    ['document-text', 'เอกสาร', `${d.doc_type} ${(d.doc_number ?? '').replace(/^(PO|AX|AC)-/, '')}`],
+                    ['document-text', 'เอกสาร', `${d.doc_type} ${(d.doc_number ?? '').replace(/^(PO|AX|PE|AC)-/, '')}`],
                     ['person', 'ผู้สั่ง/ผู้เปิด', d.ordered_by || '-'],
                     ['location', 'หน้างาน', d.job_site || '-'],
                   ] as const).map(([icon, label, value]) => (

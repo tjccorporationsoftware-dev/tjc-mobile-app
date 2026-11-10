@@ -73,7 +73,7 @@ interface PickedFile {
 // Types
 // ====================================================================
 
-type DocType = 'PO' | 'AX';
+type DocType = 'PO' | 'AX' | 'PE';   // PE = ใบจ่ายเงินมัดจำ (กรอกแบบเดียวกับ PO/AX)
 type AttachmentType = 'ใบสำคัญจ่าย' | 'ใบกำกับภาษี 7%' | 'รอใบกำกับภาษี 7%' | 'ใบเสร็จรับเงิน' | 'ชุดชำระเงิน';
 type WhtRate = 'ไม่มี' | '1%' | '2%' | '3%' | '5%';
 type RecvDept = 'wh' | 'buyer' | 'acc';
@@ -267,7 +267,7 @@ function mapFormFromRaw(raw: any): { form: Partial<FormState>; loaded: LoadedDoc
 
   return {
     form: {
-      docType: raw.doc_type === 'AX' ? 'AX' : 'PO',
+      docType: raw.doc_type === 'AX' || raw.doc_type === 'PE' ? raw.doc_type : 'PO',
       docNumber: String(raw.doc_number ?? ''),
       companyId: raw.company_id ? String(raw.company_id) : '',
       jobSite: String(raw.job_site ?? ''),
@@ -658,6 +658,7 @@ export default function SubmitDocumentScreen({ docId, onBack, onSaved }: SubmitD
         user_id: userId,
         ...(isEditMode && docId ? { edit_doc_id: docId } : {}),
         doc_type: form.docType,
+        doc_type_pe: 1,   // แอปรุ่นนี้เลือก PE ได้ — ไม่มีคีย์นี้ (แอปรุ่นก่อน) เซิร์ฟเวอร์จะคงใบ PE ไว้ ไม่ให้กลายเป็น PO
         doc_number: form.docNumber,
         company_id: form.companyId,
         job_site: form.jobSite,
@@ -769,6 +770,9 @@ export default function SubmitDocumentScreen({ docId, onBack, onSaved }: SubmitD
               </TouchableOpacity>
               <TouchableOpacity style={[styles.docTypeBtn, form.docType === 'AX' && styles.docTypeBtnActive]} onPress={() => set('docType', 'AX')}>
                 <Text style={[styles.docTypeBtnText, form.docType === 'AX' && styles.docTypeBtnTextActive]}>AX (ค่าใช้จ่าย)</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.docTypeBtn, form.docType === 'PE' && styles.docTypeBtnActive]} onPress={() => set('docType', 'PE')}>
+                <Text style={[styles.docTypeBtnText, form.docType === 'PE' && styles.docTypeBtnTextActive]}>PE (จ่ายเงินมัดจำ)</Text>
               </TouchableOpacity>
             </View>
 
