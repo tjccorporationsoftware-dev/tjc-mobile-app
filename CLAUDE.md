@@ -21,7 +21,7 @@ No lint or test runner is configured — there is no `test` script and `jest`/`j
 
 ## Backend wiring
 
-[constants/config.ts](constants/config.ts) is the single switchboard for all network access — every screen imports `API_BASE` / `IMG_BASE_URL` / `API_TASKS_URL` from it and no URL is hardcoded elsewhere. **This file is tracked in git and gets flipped between a LAN dev IP and the production host** (history shows ngrok → wuaze → oo.gd → `192.168.x.x`); the specs in [docs/](docs/) refer to production `https://tjcgroup.tjc.co.th`. Check its current value before debugging "the API is down", and be deliberate about committing changes to it.
+[constants/config.ts](constants/config.ts) is the single switchboard for all network access — every screen imports `API_BASE` / `IMG_BASE_URL` / `API_TASKS_URL` from it and no URL is hardcoded elsewhere. **This file is not in git** — it is in `.gitignore` and was purged from the repo history (12 Nov 2026); each machine keeps its own copy, flipped between a LAN dev IP and the production host. A fresh clone must create it from [constants/config.example.ts](constants/config.example.ts) (placeholder hosts). [.easignore](.easignore) is `.gitignore` minus that line so EAS builds still upload the local `config.ts` — keep the two files in sync. The specs in [docs/](docs/) refer to production `https://tjcgroup.tjc.co.th`. Check its current value before debugging "the API is down", and never commit it.
 
 The PHP backend uses a **single-file action-router** pattern — one file per module, dispatching on `?action=xxx`:
 

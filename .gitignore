@@ -39,3 +39,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# ปลายทาง API เฉพาะเครื่อง — ไม่เก็บใน git (ใช้ constants/config.example.ts เป็นแม่แบบ)
+constants/config.ts
