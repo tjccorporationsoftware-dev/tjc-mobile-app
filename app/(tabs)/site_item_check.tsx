@@ -21,7 +21,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
-import { memo, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ComponentRef, memo, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -29,8 +29,10 @@ import {
   BackHandler,
   FlatList,
   Image,
+  Keyboard,
   Linking,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   Share,
@@ -40,6 +42,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import Animated, { Easing, FadeInDown, FadeOut, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { DateField, TimeField } from '../../components/DateTimeField';
@@ -54,44 +57,57 @@ const SYNC_MS = 2000;
 const AUTO_MS = 1500;
 const LIVE_MS = 700;
 const ROUND_LOCK_TEXT = 'รอบนี้จัดส่งบันทึกส่งแล้ว แก้ไม่ได้';
-const HEAD_KEYS = ['transport', 'driver', 'helper', 'vehicle', 'receiver', 'organizer', 'deliver_at', 'note'] as const;
+// load_at = วันที่ขึ้นของ (ไม่อยู่ในใบส่งของ แก้อย่างเดียวไม่ต้องเขียนใบส่งใหม่ · headDoChanged)
+const HEAD_KEYS = ['transport', 'driver', 'helper', 'vehicle', 'receiver', 'organizer', 'deliver_at', 'load_at', 'note'] as const;
 const EMPTY_TEXT: Record<string, string> = { todo: 'ไม่มีรายการค้างแล้ว', done: 'ยังไม่มีรายการที่ติ๊กครบ', all: 'ไม่มีรายการ' };
 const JOB_STATUS_TEXT: Record<string, string> = { waiting: 'รอจัด', packing: 'กำลังจัด', packed: 'รอขึ้น', loading: 'กำลังขึ้นรถ', loaded: 'ขึ้นครบแล้ว' };
 const STOCK_BLOCKED_TEXT: Record<string, string> = { parts: 'ซื้อเป็นชิ้นส่วน เบิกเองที่หน้าโครงการ', split: 'แยกทุนส่วนประกอบ เบิกเองที่หน้าโครงการ' };
 const SHEET_BASIS =
   'ค้าง = จำนวนตาม ปร. (ติ๊ก 80% ใช้ยอด 80%) หักยอดที่ส่งแล้ว รวมของที่ตีกลับ · ไม่แสดงรายการที่ครบแล้ว · หมายเหตุแสดงบิลตั้งแต่รอบนี้ขึ้นไปที่ยังส่งไม่ครบ · ของส่งคลังแสดงเมื่อคลังรับแล้ว';
 
-// สีชุดเดียวกับหน้าเว็บ (css/site_item_check.css)
+// โทนเดียวกับหน้าแจ้งจัดงาน (site_job_board.tsx): พื้นขาวอมฟ้า การ์ดขาวเงานุ่ม น้ำเงินหลักเข้ากับแถบหัวแอป
 const C = {
-  primary: '#4f46e5',
-  primarySoft: '#eef0ff',
-  text: '#0f172a',
-  muted: '#64748b',
-  line: '#e2e8f0',
-  bg: '#f8fafc',
-  ok: '#047857',
-  okBg: '#dcf5e8',
-  warn: '#a64b06',
-  warnBg: '#fdf1d8',
-  bad: '#b91c1c',
-  badBg: '#fdeaea',
-  info: '#1d4ed8',
-  infoBg: '#e3ebff',
-  live: '#0369a1',
-  liveBg: '#e0f2fe',
+  primary: '#2459EA',
+  primarySoft: '#EEF3FF',
+  primaryLine: '#D3E0FF',
+  text: '#0A1222',
+  soft: '#5A667D',
+  muted: '#8A95AA',
+  faint: '#BCC4D2',
+  line: '#E4E9F2',
+  lineSoft: '#EEF1F7',
+  surface2: '#F6F8FC',
+  track: '#EDF1F7',
+  bg: '#F4F6FB',
+  ok: '#0E9F6E',
+  okBg: '#E9FBF3',
+  warn: '#C2620A',
+  warnBg: '#FFF6E5',
+  bad: '#E8335A',
+  badBg: '#FFF0F3',
+  info: '#0A8BD6',
+  infoBg: '#EAF7FF',
+  live: '#0284C7',
+  liveBg: '#E0F2FE',
 };
-const ROUND_COLOR: Record<number, { c: string; tint: string }> = {
-  1: { c: '#0f8ea1', tint: '#e1f4f7' },
-  2: { c: '#d9650a', tint: '#fdeedd' },
-  3: { c: '#1f8f4e', tint: '#e2f5e9' },
+const BG_GRAD = ['#E8EFFF', '#F2F5FC', '#F4F6FB'] as const;
+// สีรอบ (.r1/.r2/.r3 ของหน้าเว็บ — ฟ้าน้ำทะเล / ส้ม / เขียว) · grad = ป้ายรอบไล่สี
+const ROUND_COLOR: Record<number, { c: string; tint: string; grad: [string, string] }> = {
+  1: { c: '#0891B2', tint: '#E8F7FA', grad: ['#3DD5F3', '#0891B2'] },
+  2: { c: '#EA580C', tint: '#FFF2E8', grad: ['#FFB067', '#F2620F'] },
+  3: { c: '#16A34A', tint: '#E9F8EF', grad: ['#5EE38E', '#16A34A'] },
 };
+// สถานะจัด/ขึ้นของรอบ — ชุดสีเดียวกับแท็บสถานะหน้าแจ้งจัดงาน
 const JOB_STATUS_COLOR: Record<string, { c: string; bg: string }> = {
-  waiting: { c: C.muted, bg: '#f1f5f9' },
-  packing: { c: C.warn, bg: C.warnBg },
+  waiting: { c: C.soft, bg: C.track },
+  packing: { c: '#DB7A00', bg: '#FFF7E6' },
   packed: { c: C.info, bg: C.infoBg },
-  loading: { c: C.primary, bg: C.primarySoft },
+  loading: { c: '#7446F5', bg: '#F4F0FF' },
   loaded: { c: C.ok, bg: C.okBg },
 };
+// เลื่อนก้อนตัวเลือกแบบ ease-out ไม่เด้ง (แบบเดียวกับหน้าแจ้งจัดงาน)
+const SLIDE = { duration: 260, easing: Easing.out(Easing.cubic) };
+const SEG_PAD = 3;
 
 // -------------------- Types --------------------
 
@@ -108,6 +124,18 @@ type Head = Record<(typeof HEAD_KEYS)[number], string>;
 interface Conflict { key: string; round: number; text: string; useTheirs: () => void; still: () => boolean }
 interface DraftMap { items: Record<string, any>; subs: Record<string, any> }
 interface Presence { name: string; since: string }
+/** รับของคืนจากหน้างาน (includes/site_item_check_returns.php ฝั่งเว็บ · รูปแบบเดียวกับ data-returns) */
+interface ReturnItem {
+  id: number; item: number; name: string; unit: string; qty: number; reason: string; status: string; by: string; at: string;
+  target_round: number; target_do: string; do: string; round: number; picked_qty: number; picked_by: string; picked_at: string;
+}
+interface ReturnsState { items: Record<string, number>; waiting: Record<string, number>; list: ReturnItem[]; target: { round: number; do: string } | null }
+const readReturns = (r: any): ReturnsState => ({
+  items: r?.items && typeof r.items === 'object' ? r.items : {},
+  waiting: r?.waiting && typeof r.waiting === 'object' ? r.waiting : {},
+  list: Array.isArray(r?.list) ? r.list : [],
+  target: r?.target && r.target.do ? { round: Number(r.target.round) || 0, do: String(r.target.do) } : null,
+});
 interface Company { name: string; short: string; logo: string; color: string; ink: string; stops: string[] }
 interface ProjectInfo { id: number; code: string; site: string; name: string; customer: string; stock_site: boolean; company: Company | null }
 interface Transport { drivers: string[]; cars: { plate: string; label: string }[]; users: string[] }
@@ -273,6 +301,7 @@ function readHead(raw: any): Head {
   if (head.transport !== 'external') head.transport = 'internal';
   // วันเวลาเทียบกันแค่ระดับนาที (ฐานเก็บวินาที ช่องกรอกไม่มี)
   head.deliver_at = head.deliver_at.replace('T', ' ').slice(0, 16);
+  head.load_at = head.load_at.slice(0, 10);
   if (head.transport === 'external') head.helper = '';
   return head;
 }
@@ -287,7 +316,7 @@ function headSummary(head: Head) {
   return ['รถบริษัท', 'คนขับ ' + (head.driver || '-')].concat(head.helper ? ['คนรถ ' + head.helper] : [], ['ทะเบียน ' + (head.vehicle || '-')]).join(' · ');
 }
 function headMeta(head: Head) {
-  return [head.deliver_at ? 'ส่ง ' + thaiDateTime(head.deliver_at) : '', head.receiver ? 'ผู้รับ ' + head.receiver : '', head.organizer ? 'ผู้จัดงาน ' + head.organizer : '']
+  return [head.load_at ? 'ขึ้นของ ' + thaiDateTime(head.load_at) : '', head.deliver_at ? 'ส่ง ' + thaiDateTime(head.deliver_at) : '', head.receiver ? 'ผู้รับ ' + head.receiver : '', head.organizer ? 'ผู้จัดงาน ' + head.organizer : '']
     .filter(Boolean)
     .join(' · ');
 }
@@ -390,6 +419,7 @@ class Board {
   reloadAsked = false;
   canEditRound = false; // สิทธิ์ปุ่มแก้ไขรอบ (btn_sic_edit_round จาก API)
   editRound = 0; // รอบที่กดแก้ไขอยู่ (0 = แสดงรอบล่าสุดที่แจ้งจัดงาน)
+  returns: ReturnsState = readReturns(null); // รับของคืนจากหน้างาน (page / sync / ผลปุ่ม)
 
   constructor(page: any, hooks: Hooks) {
     this.hooks = hooks;
@@ -414,6 +444,7 @@ class Board {
     this.drafts = { items: page.drafts?.items || {}, subs: page.drafts?.subs || {} };
     this.myDrafts = num(page.my_drafts);
     this.presence = Array.isArray(page.presence) ? page.presence : [];
+    this.returns = readReturns(page.returns);
     this.myPackTouched.clear();
     this.rounds = {};
     ROUNDS.forEach((round) => {
@@ -597,12 +628,17 @@ class Board {
   }
 
   // ---------- ค่าที่กรอกเทียบค่าที่บันทึกแล้ว ----------
-  /** จำนวนเป้าของแถว: ติ๊ก 80% แล้วเหลือ 80% · จำนวนเต็มปัดขึ้น · ต้องตรงกับ sic_target_qty() */
+  /**
+   * จำนวนเป้าของแถว: ติ๊ก 80% แล้วเหลือ 80% · ปัดเศษตามปกติเป็นจำนวนเต็ม ต่ำกว่า .5 ปัดลง .5 ขึ้นไปปัดขึ้น (4 → 3 · 6 → 5 · 7.5 → 6)
+   * ปัดแล้วเกินจำนวน = ปัดลง (1.9 → 1) · ได้ 0 = 1 (0.5 → 1) · ไม่มีทศนิยมเลย · ต้องตรงกับ sic_target_qty()
+   */
   targetQty(row: Row) {
     const qty = row.qty;
     if (!row.p80) return qty;
-    const target = round2(qty * 0.8);
-    return Number.isInteger(qty) ? Math.max(0, Math.ceil(target - 0.000001)) : target;
+    const exact = round2(qty * 0.8);
+    let near = Math.floor(exact + 0.5 + 0.000001);
+    if (near > round2(qty) + 0.000001) near = Math.floor(exact + 0.000001);
+    return near < 1 && qty > 0 ? 1 : Math.max(0, near);
   }
   targetOf(tr: Tr) {
     return tr.isSub ? Number(this.subValues(tr).qty) || 0 : this.targetQty(tr);
@@ -803,10 +839,18 @@ class Board {
   headChanged(round: number) {
     return !sameJson(this.rounds[round].head, this.rounds[round].savedHead);
   }
+  /** หัวใบที่อยู่ในใบส่งของเปลี่ยน (ไม่นับวันที่ขึ้นของ) · เหมือน sic_head_only_load_changed() ฝั่งเซิร์ฟเวอร์ */
+  headDoChanged(round: number) {
+    return !sameJson({ ...this.rounds[round].head, load_at: '' }, { ...this.rounds[round].savedHead, load_at: '' });
+  }
   setHead(round: number, head: Head) {
     this.rounds[round].head = readHead(head);
     this.ctx++;
     this.emit();
+  }
+  /** วันที่ขึ้นของ (กรอกที่กล่องสถานะจัดงาน) แก้หัวรอบ รอกดบันทึก + ยืนยัน */
+  setLoadAt(round: number, ymd: string) {
+    this.setHead(round, { ...this.rounds[round].head, load_at: ymd });
   }
 
   /**
@@ -852,7 +896,7 @@ class Board {
       .filter((line) => line.qty > 0);
   }
   roundTouched(round: number) {
-    return this.headChanged(round) || this.rows.some((row) => normQty(row.load[round - 1]) !== row.savedLoad[round - 1]);
+    return this.headDoChanged(round) || this.rows.some((row) => normQty(row.load[round - 1]) !== row.savedLoad[round - 1]);
   }
   /** เบิกสต๊อกอัตโนมัติของบรรทัด · ต้องตรงกับ sic_stock_need() · null = ไม่เบิกหรือยอดส่งรวมไม่เปลี่ยน */
   stockPlan(row: Row) {
@@ -908,11 +952,10 @@ class Board {
   }
 
   // ---------- เหตุการณ์จากช่องกรอก (table input/change ของหน้าเว็บ) ----------
-  /** พิมพ์ช่องขึ้น: ช่องจัดรอบเดียวกันได้เท่ากัน (ลบขึ้น = ลบจัด) + ส่งค่าค้างให้เครื่องอื่นเห็น */
+  /** พิมพ์ช่องขึ้น: ส่งค่าค้างให้เครื่องอื่นเห็น (ช่องจัดตามตอนกดบันทึก linkPacksForSave) */
   onLoadInput(tr: Tr, round: number, text: string) {
     tr.load[round - 1] = text;
     this.touch(tr);
-    this.linkPack(tr, round, false);
     if (this.liveKey(tr)) this.scheduleLive(tr, LIVE_MS);
     this.emit();
   }
@@ -921,7 +964,6 @@ class Board {
     const norm = normQty(tr.load[round - 1]);
     if (norm !== null) tr.load[round - 1] = norm;
     this.touch(tr);
-    this.linkPack(tr, round, true);
     if (this.liveKey(tr)) this.queueLive(tr);
     this.emit();
   }
@@ -940,13 +982,10 @@ class Board {
     void this.queueAutoSave(tr);
     this.emit();
   }
-  /** ติ๊กขึ้นครบ (เติมจำนวนขึ้นให้) → จัดได้จำนวนเท่ากัน + ติ๊กจัดครบรอบเดียวกัน */
+  /** ติ๊กขึ้นครบ (เติมจำนวนขึ้นให้) · จัดครบ/จำนวนจัดตามตอนกดบันทึก (linkPacksForSave) */
   onLoadTick(tr: Tr, round: number, checked: boolean) {
     this.markPending(tr, round, checked);
-    if (checked && tr.pendingDone === round && tr.pendingPack === 0) tr.pendingPack = round;
     this.touch(tr);
-    this.linkPack(tr, round, true);
-    void this.queueAutoSave(tr);
     if (this.liveKey(tr)) this.queueLive(tr);
     this.emit();
   }
@@ -957,18 +996,45 @@ class Board {
     void this.queueAutoSave(tr);
     this.emit();
   }
-  /** ช่องขึ้นเป็นตัวหลัก: จำนวนขึ้นแล้วช่องจัดรอบเดียวกันได้เท่ากัน (ช่องจัดรอบที่ล็อกไม่แตะ) */
-  linkPack(tr: Tr, round: number, now: boolean) {
-    if (this.isLocked(round)) return;
-    const raw = tr.load[round - 1];
-    const norm = normQty(raw);
-    const value = now && norm !== null ? norm : raw.trim();
-    if (tr.pack[round - 1] === value) return;
-    tr.pack[round - 1] = value;
-    tr.autoFailed = false;
-    this.touch(tr);
-    if (now) void this.queueAutoSave(tr);
-    else this.scheduleAutoSave(tr, AUTO_MS);
+  // ---------- รับของคืนจากหน้างาน (ส่งถึงหน้างานแล้วเกินจำนวน/รายการถูกลบ) ----------
+  /** ของเกินที่ต้องรับกลับของบรรทัด (ยังไม่กด) */
+  returnOver(row: Row) {
+    return round2(row.ids.reduce((sum, id) => sum + num(this.returns.items[String(id)]), 0));
+  }
+  /** รอรับคืนของบรรทัด (กดแล้ว รอคนขับรับ) */
+  returnWaiting(row: Row) {
+    return round2(row.ids.reduce((sum, id) => sum + num(this.returns.waiting[String(id)]), 0));
+  }
+  /** กดรับของคืน / ยกเลิก: เซิร์ฟเวอร์คิดจำนวนใหม่เอง คืนข้อมูลรับคืนชุดใหม่ */
+  async returnAction(action: 'return_request' | 'return_cancel', fields: Record<string, string>) {
+    const data = await this.hooks.api(action, fields);
+    this.returns = readReturns(data.returns);
+    this.ctx++;
+    this.emit();
+  }
+
+  /**
+   * ช่องขึ้นเป็นตัวหลัก: ช่องจัดรอบเดียวกันได้เท่ากับช่องขึ้น (ลบขึ้น = ลบจัด) · ติ๊กขึ้นครบรอบใหม่ = ติ๊กจัดครบด้วย
+   * ทำตอนกดบันทึกเท่านั้น (ผู้ใช้สั่ง 12 พ.ย. 69 เหมือนหน้าเว็บ linkPacksForSave) ช่องจัดลงไปพร้อมชุดบันทึก ไม่บันทึกเองแบบ draft
+   * เฉพาะรอบที่ช่องขึ้นต่างจากค่าที่บันทึกแล้ว · ช่องจัดรอบที่ล็อกไม่แตะ
+   */
+  linkPacksForSave() {
+    this.allTrs().forEach((tr) => {
+      let changed = false;
+      ROUNDS.forEach((round, i) => {
+        if (this.isLocked(round)) return;
+        const value = normQty(tr.load[i]);
+        if (value === null || value === savedLoadOf(tr, i) || normQty(tr.pack[i]) === value) return;
+        tr.pack[i] = value;
+        changed = true;
+      });
+      const done = tr.pendingDone;
+      if (done && done !== savedDone(tr) && tr.pendingPack === 0) {
+        tr.pendingPack = done;
+        changed = true;
+      }
+      if (changed) this.touch(tr);
+    });
   }
   setP80(row: Row, on: boolean) {
     row.p80 = on;
@@ -1663,13 +1729,16 @@ class Board {
       const card = this.rounds[round];
       changes.round_base[round] = card.do;
       if (this.headChanged(round)) changes.rounds[round] = card.head;
+      // วันที่ขึ้นของ (ไม่อยู่ในใบส่ง) บอกแยกบรรทัด · แก้อย่างเดียวไม่แตะใบส่ง
+      if (card.head.load_at !== card.savedHead.load_at)
+        doLines.push({ name: 'วันที่ขึ้นของ รอบ ' + round, where: '', text: card.head.load_at ? thaiDateTime(card.head.load_at) : 'ล้างวันที่ขึ้นของ' });
       if (!this.roundTouched(round)) return;
       const want = this.desiredLines(round);
       const no = card.hasDo ? card.do : '';
       let text = '';
       if (want.length) text = (no ? 'แก้ใบส่ง ' + no : 'ออกใบส่งใหม่') + ' · ' + want.length + ' รายการ · ' + headSummary(card.head);
       else if (no) text = 'ยกเลิกใบส่ง ' + no + ' (ไม่มีของจากคลังในรอบนี้แล้ว)';
-      else if (this.headChanged(round)) text = 'แก้ข้อมูลใบส่ง · ' + headSummary(card.head);
+      else if (this.headDoChanged(round)) text = 'แก้ข้อมูลใบส่ง · ' + headSummary(card.head);
       if (text) doLines.push({ name: 'ใบส่งของ รอบ ' + round, where: '', text });
     });
 
@@ -1784,6 +1853,7 @@ class Board {
 
   /** ส่งทุกการแก้ไขไปบันทึก (รูปก่อน แล้วข้อมูลอื่นครั้งเดียว) คืน { reload, message } · พลาดโยน Error */
   async saveAll(onProgress?: (text: string) => void): Promise<{ reload: boolean; message: string }> {
+    this.linkPacksForSave(); // ทางบันทึกที่ไม่ผ่านหน้าต่างยืนยัน ช่องจัดก็ตามช่องขึ้น
     await this.flushAutoSaves();
     await this.cancelLive();
     const { changes } = this.collectChanges();
@@ -2071,6 +2141,7 @@ class Board {
   /** ใช้ค่าที่บันทึกแล้วชุดใหม่ทั้งหน้า คืน { count, clashes } */
   applySync(data: any) {
     this.syncClashes = 0;
+    if (data.returns) this.returns = readReturns(data.returns); // รับของคืน (ป้ายในการ์ด + กล่องรายการ วาดใหม่ตาม ctx)
     const lines = data.lines || {};
     const subs = data.subs || {};
     let count = 0;
@@ -2272,7 +2343,9 @@ class Board {
 
 // -------------------- ส่วนประกอบหน้าจอ --------------------
 
-function Chip({ text, color = C.muted, bg = '#f1f5f9', icon, bold }: { text: string; color?: string; bg?: string; icon?: keyof typeof Ionicons.glyphMap; bold?: boolean }) {
+type IonName = keyof typeof Ionicons.glyphMap;
+
+function Chip({ text, color = C.soft, bg = C.track, icon, bold }: { text: string; color?: string; bg?: string; icon?: IonName; bold?: boolean }) {
   return (
     <View style={[s.chip, { backgroundColor: bg }]}>
       {!!icon && <Ionicons name={icon} size={11} color={color} />}
@@ -2292,7 +2365,7 @@ function Tick({ on, disabled, color, onPress, label }: { on: boolean; disabled: 
       aria-checked={on}
       hitSlop={6}
     >
-      {on && <Ionicons name="checkmark" size={15} color="#fff" />}
+      {on && <Ionicons name="checkmark" size={17} color="#fff" />}
     </TouchableOpacity>
   );
 }
@@ -2311,6 +2384,125 @@ function CompanyBadge({ company }: { company: Company }) {
     );
   }
   return <View style={[s.company, { backgroundColor: company.color }]}>{label}</View>;
+}
+
+/** ป้ายรอบเล็ก (ไล่สีตามรอบ) */
+function RoundPill({ round, suffix = '' }: { round: number; suffix?: string }) {
+  const rc = ROUND_COLOR[round];
+  return (
+    <LinearGradient colors={rc.grad} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={s.roundPill}>
+      <Text style={s.roundPillText}>
+        รอบ {round}
+        {suffix}
+      </Text>
+    </LinearGradient>
+  );
+}
+
+/** ก้อนเลขรอบสี่เหลี่ยม · off = ยังไม่แจ้งจัดงาน (เทา) */
+function RoundBadge({ round, size = 44, off }: { round: number; size?: number; off?: boolean }) {
+  const rc = ROUND_COLOR[round];
+  const box = { width: size, height: size, borderRadius: Math.round(size * 0.32) };
+  const no = { fontSize: Math.round(size * 0.42), lineHeight: Math.round(size * 0.48) };
+  if (off) {
+    return (
+      <View style={[s.roundBadge, box, s.roundBadgeOff]}>
+        <Text style={[s.roundBadgeSmall, { color: C.muted }]}>รอบ</Text>
+        <Text style={[s.roundBadgeNo, no, { color: C.muted }]}>{round}</Text>
+      </View>
+    );
+  }
+  return (
+    <LinearGradient colors={rc.grad} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={[s.roundBadge, box, { boxShadow: `0 5px 12px ${rc.c}40` }]}>
+      <Text style={s.roundBadgeSmall}>รอบ</Text>
+      <Text style={[s.roundBadgeNo, no]}>{round}</Text>
+    </LinearGradient>
+  );
+}
+
+function Avatar({ name, size = 26 }: { name: string; size?: number }) {
+  return (
+    <View style={[s.avatar, { width: size, height: size, borderRadius: size / 2, backgroundColor: avatarColor(name) }]}>
+      <Text style={[s.avatarText, { fontSize: Math.round(size * 0.44) }]}>{initialOf(name)}</Text>
+    </View>
+  );
+}
+
+/** หัวกล่อง: ไอคอนในกรอบสี + ชื่อ + ส่วนขวา */
+function PanelTitle({ icon, title, right, color = C.primary }: { icon: IonName; title: string; right?: ReactNode; color?: string }) {
+  return (
+    <View style={s.panelHead}>
+      <View style={[s.panelIcon, { backgroundColor: color + '17' }]}>
+        <Ionicons name={icon} size={16} color={color} />
+      </View>
+      <Text style={s.panelTitle}>{title}</Text>
+      {right}
+    </View>
+  );
+}
+
+/** ปุ่มแบ่งช่องเท่ากัน (ค้าง / ครบแล้ว / ทั้งหมด) · ก้อนขาวเลื่อนเรียบ ๆ ไปช่องที่เลือก */
+function Segmented<T extends string>({ options, value, onChange }: { options: { key: T; label: string; count?: number; color?: string }[]; value: T; onChange: (key: T) => void }) {
+  const idx = Math.max(0, options.findIndex((o) => o.key === value));
+  const pos = useSharedValue(idx);
+  const segW = useSharedValue(0);
+  useEffect(() => {
+    pos.value = withTiming(idx, SLIDE);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idx]);
+  const pill = useAnimatedStyle(() => ({ width: segW.value, opacity: segW.value > 0 ? 1 : 0, transform: [{ translateX: pos.value * segW.value }] }));
+  return (
+    <View
+      style={s.seg}
+      accessibilityRole="tablist"
+      onLayout={(e) => {
+        segW.value = (e.nativeEvent.layout.width - SEG_PAD * 2) / options.length;
+      }}
+    >
+      <Animated.View style={[s.segPill, pill]} />
+      {options.map((o) => {
+        const on = o.key === value;
+        const color = o.color || C.primary;
+        return (
+          <TouchableOpacity key={o.key} style={s.segItem} onPress={() => onChange(o.key)} activeOpacity={0.7} accessibilityRole="tab" accessibilityState={{ selected: on }}>
+            <Text style={[s.segText, on && { color: C.text }]} numberOfLines={1}>
+              {o.label}
+            </Text>
+            {o.count !== undefined && (
+              <View style={[s.segCount, on && { backgroundColor: color + '1A' }]}>
+                <Text style={[s.segCountText, on && { color }]}>{o.count}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
+/** ปุ่มคำสั่งของรอบ (ตารางช่องเท่ากัน) */
+function ActTile({ icon, label, onPress, disabled, blocked }: { icon: IonName; label: string; onPress: () => void; disabled?: boolean; blocked?: boolean }) {
+  const off = disabled || blocked;
+  return (
+    <TouchableOpacity style={[s.actTile, disabled && { opacity: 0.45 }]} disabled={disabled} onPress={onPress} activeOpacity={0.7} accessibilityRole="button" accessibilityLabel={label}>
+      <View style={[s.actIcon, off && { backgroundColor: C.track }]}>
+        <Ionicons name={icon} size={17} color={off ? C.muted : C.primary} />
+      </View>
+      <Text style={[s.actText, off && { color: C.muted }]} numberOfLines={1}>
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+/** ป้ายบอกว่าอีกคนกำลังกรอกช่องนี้ (รอบันทึก) */
+function LiveTag({ text }: { text: string }) {
+  return (
+    <View style={s.liveTag}>
+      <View style={s.liveTagDot} />
+      <Text style={s.liveTagText}>{text}</Text>
+    </View>
+  );
 }
 
 interface CardActions {
@@ -2332,9 +2524,21 @@ interface CardActions {
   subQtyDone: (sub: Sub) => void;
   subDelete: (sub: Sub) => void;
   conflict: (tr: Tr, c: Conflict, take: boolean) => void;
+  /** เลื่อนช่องที่เพิ่งโฟกัสให้พ้นคีย์บอร์ด (ช่องของรายการย่อยที่ไม่ได้เรียก focus) */
+  reveal: () => void;
+  /** รับของคืน: บรรทัดที่ส่งเกิน (ไปขึ้นในใบส่งรอบถัดไป) */
+  returnReq: (row: Row) => void;
 }
 
-/** ช่องรอบ 1 รอบ: กล่องจัด (จำนวน + ติ๊กจัดครบ) + กล่องขึ้น (จำนวน + ติ๊กขึ้นครบ + รูป) + สถานะ/ป้าย */
+/** บรรทัดรายละเอียดของรายการรับคืน 1 รายการ (เหมือน renderReturns ของหน้าเว็บ) */
+function returnMeta(r: ReturnItem) {
+  if (r.status === 'found') return 'ส่งถึงหน้างานแล้ว ยังไม่ได้แจ้งรับคืน';
+  if (r.status === 'waiting')
+    return (r.target_round ? 'รอรับคืน · ขึ้นในใบส่งรอบ ' + r.target_round + ' (' + r.target_do + ')' : 'รอรับคืน · รอรอบถัดไป') + (r.by ? ' · แจ้งโดย ' + r.by + ' ' + thaiDateTime(r.at) : '');
+  return 'รับคืนแล้ว รอบ ' + r.round + ' (' + r.do + ') · ' + r.picked_by + ' ' + thaiDateTime(r.picked_at);
+}
+
+/** ช่องรอบ 1 รอบ: หัว (รอบ + สถานะ + ปุ่มรูป) · กล่องจัดของ / ขึ้นรถ (จำนวน + ติ๊กครบ) · ป้ายคนอื่นกรอก · ค่าชนกัน */
 function RoundBox({ b, tr, cell, act, disabledAll }: { b: Board; tr: Tr; cell: ReturnType<Board['roundCells']>[number]; act: CardActions; disabledAll: boolean }) {
   const round = cell.round;
   const rc = ROUND_COLOR[round];
@@ -2343,68 +2547,79 @@ function RoundBox({ b, tr, cell, act, disabledAll }: { b: Board; tr: Tr; cell: R
   const photoDisabled = unsaved || (cell.locked && total === 0);
   const conflicts = tr.conflicts.filter((c) => c.round === round && c.still());
   return (
-    <View style={[s.roundBox, { borderColor: rc.c + '55' }, cell.locked && s.roundBoxLocked]}>
+    <View style={[s.roundBox, { backgroundColor: rc.tint, borderColor: rc.c + '2E' }, cell.locked && s.roundBoxLocked]}>
       <View style={s.roundBoxHead}>
-        <View style={[s.roundTag, { backgroundColor: rc.tint }]}>
-          <Text style={[s.roundTagText, { color: rc.c }]}>รอบ {round}</Text>
-        </View>
+        <RoundPill round={round} />
         {cell.locked && <Ionicons name="lock-closed" size={12} color={C.muted} />}
-        {!!cell.status && <Text style={[s.cellStatus, cell.tone === 'over' && { color: C.bad }, cell.tone === 'done' && { color: C.ok, fontWeight: '800' }]}>{cell.status}</Text>}
+        <Text style={[s.cellStatus, cell.tone === 'over' && { color: C.bad }, cell.tone === 'done' && { color: C.ok, fontWeight: '800' }]} numberOfLines={2}>
+          {cell.status}
+        </Text>
+        <TouchableOpacity
+          style={[s.photoBtn, total > 0 && s.photoBtnOn, b.photoPending(tr, round) && s.photoBtnPending, photoDisabled && { opacity: 0.4 }]}
+          disabled={photoDisabled}
+          onPress={() => act.photo(tr, round)}
+          accessibilityLabel={'รูปจัดของ รอบ ' + round}
+        >
+          <Ionicons name="camera" size={15} color={total > 0 ? '#fff' : C.primary} />
+          <Text style={[s.photoBtnText, total > 0 && { color: '#fff' }]}>{total > 0 ? total + '/' + b.photoMax : 'รูป'}</Text>
+        </TouchableOpacity>
       </View>
       <View style={s.boxPair}>
         <View style={[s.box, cell.flash && s.boxFlash]}>
-          <Text style={s.boxTag}>จัด</Text>
-          <TextInput
-            style={[s.qtyInput, cell.packChanged && s.inputChanged, cell.packInvalid && s.inputInvalid, cell.packLive && s.inputLive, cell.locked && s.inputLocked]}
-            value={tr.pack[round - 1]}
-            onChangeText={(t) => act.packInput(tr, round, t)}
-            onEndEditing={() => act.packCommit(tr, round)}
-            onFocus={() => act.focus(tr.isSub ? tr.parent : tr)}
-            onBlur={() => act.focus(null)}
-            keyboardType="decimal-pad"
-            editable={!cell.locked && !disabledAll}
-            selectTextOnFocus
-            placeholder="-"
-            placeholderTextColor="#cbd5e1"
-            accessibilityLabel={'จำนวนจัดรอบ ' + round + ' ' + trName(tr)}
-          />
-          <Tick on={cell.packTick} disabled={cell.packTickDisabled || disabledAll} color={rc.c} onPress={() => act.packTick(tr, round)} label={'จัดครบรอบ ' + round + ' ' + trName(tr)} />
-          {tr.packState === 'saving' && <ActivityIndicator size="small" color={C.primary} />}
-          {tr.packState === 'saved' && <Ionicons name="checkmark-done" size={14} color={C.ok} />}
+          <View style={s.boxLabelRow}>
+            <Text style={s.boxTag}>จัดของ</Text>
+            {tr.packState === 'saving' && <ActivityIndicator size="small" color={C.primary} style={s.boxSpin} />}
+            {tr.packState === 'saved' && <Ionicons name="checkmark-done" size={14} color={C.ok} />}
+          </View>
+          <View style={s.boxField}>
+            <TextInput
+              style={[s.qtyInput, cell.packChanged && s.inputChanged, cell.packInvalid && s.inputInvalid, cell.packLive && s.inputLive, cell.locked && s.inputLocked]}
+              value={tr.pack[round - 1]}
+              onChangeText={(t) => act.packInput(tr, round, t)}
+              onEndEditing={() => act.packCommit(tr, round)}
+              onFocus={() => act.focus(tr.isSub ? tr.parent : tr)}
+              onBlur={() => act.focus(null)}
+              keyboardType="decimal-pad"
+              editable={!cell.locked && !disabledAll}
+              selectTextOnFocus
+              placeholder="-"
+              placeholderTextColor={C.faint}
+              accessibilityLabel={'จำนวนจัดรอบ ' + round + ' ' + trName(tr)}
+            />
+            <Tick on={cell.packTick} disabled={cell.packTickDisabled || disabledAll} color={rc.c} onPress={() => act.packTick(tr, round)} label={'จัดครบรอบ ' + round + ' ' + trName(tr)} />
+          </View>
         </View>
         <View style={s.box}>
-          <Text style={s.boxTag}>ขึ้น</Text>
-          <TextInput
-            style={[s.qtyInput, cell.loadChanged && s.inputChanged, cell.loadInvalid && s.inputInvalid, cell.live && s.inputLive, cell.locked && s.inputLocked]}
-            value={tr.load[round - 1]}
-            onChangeText={(t) => act.loadInput(tr, round, t)}
-            onEndEditing={() => act.loadCommit(tr, round)}
-            onFocus={() => act.focus(tr.isSub ? tr.parent : tr)}
-            onBlur={() => act.focus(null)}
-            keyboardType="decimal-pad"
-            editable={!cell.locked && !disabledAll}
-            selectTextOnFocus
-            placeholder="-"
-            placeholderTextColor="#cbd5e1"
-            accessibilityLabel={'จำนวนขึ้นรถรอบ ' + round + ' ' + trName(tr)}
-          />
-          <Tick on={cell.loadTick} disabled={cell.loadTickDisabled || disabledAll} color={rc.c} onPress={() => act.loadTick(tr, round)} label={'ขึ้นครบรอบ ' + round + ' ' + trName(tr)} />
-          <TouchableOpacity
-            style={[s.photoBtn, total > 0 && s.photoBtnOn, b.photoPending(tr, round) && s.photoBtnPending, photoDisabled && { opacity: 0.4 }]}
-            disabled={photoDisabled}
-            onPress={() => act.photo(tr, round)}
-            accessibilityLabel={'รูปจัดของ รอบ ' + round}
-          >
-            <Ionicons name="camera" size={15} color={total > 0 ? '#fff' : C.primary} />
-            {total > 0 && <Text style={s.photoBtnN}>{total}</Text>}
-          </TouchableOpacity>
+          <View style={s.boxLabelRow}>
+            <Text style={s.boxTag}>ขึ้นรถ</Text>
+          </View>
+          <View style={s.boxField}>
+            <TextInput
+              style={[s.qtyInput, cell.loadChanged && s.inputChanged, cell.loadInvalid && s.inputInvalid, cell.live && s.inputLive, cell.locked && s.inputLocked]}
+              value={tr.load[round - 1]}
+              onChangeText={(t) => act.loadInput(tr, round, t)}
+              onEndEditing={() => act.loadCommit(tr, round)}
+              onFocus={() => act.focus(tr.isSub ? tr.parent : tr)}
+              onBlur={() => act.focus(null)}
+              keyboardType="decimal-pad"
+              editable={!cell.locked && !disabledAll}
+              selectTextOnFocus
+              placeholder="-"
+              placeholderTextColor={C.faint}
+              accessibilityLabel={'จำนวนขึ้นรถรอบ ' + round + ' ' + trName(tr)}
+            />
+            <Tick on={cell.loadTick} disabled={cell.loadTickDisabled || disabledAll} color={rc.c} onPress={() => act.loadTick(tr, round)} label={'ขึ้นครบรอบ ' + round + ' ' + trName(tr)} />
+          </View>
         </View>
       </View>
-      {!!cell.packTag && <Text style={s.packBy}>{cell.packTag}</Text>}
-      {!!cell.liveTag && <Text style={s.liveBy}>{cell.liveTag}</Text>}
+      {!!cell.packTag && <LiveTag text={cell.packTag} />}
+      {!!cell.liveTag && <LiveTag text={cell.liveTag} />}
       {conflicts.map((c) => (
         <View key={c.key + c.round} style={s.remote}>
-          <Text style={s.remoteText}>{c.text}</Text>
+          <View style={s.remoteHead}>
+            <Ionicons name="git-compare" size={14} color={C.warn} />
+            <Text style={s.remoteText}>{c.text}</Text>
+          </View>
           <View style={s.remoteBtns}>
             <TouchableOpacity style={s.remoteTake} onPress={() => act.conflict(tr, c, true)}>
               <Text style={s.remoteTakeText}>ใช้ค่านี้</Text>
@@ -2450,8 +2665,16 @@ const RowCard = memo(function RowCard({ b, row, shown, noteOnly, act }: { b: Boa
   const rc = row.doneRound ? ROUND_COLOR[row.doneRound] : null;
   const poShow = row.po.length > 4 ? (poOpen ? row.po : row.po.slice(0, 3)) : row.po;
   const inSheet = row.sec !== 'skip' && b.sheetLine(row, b.targetQty(row)) !== null;
+  const retOver = b.returnOver(row); // ส่งถึงหน้างานแล้วเกินจำนวน → รับกลับ
+  const retWait = b.returnWaiting(row); // กดรับคืนแล้ว รอคนขับรับ
+  const hasTags =
+    !!row.skipReason || ids.length > 1 || row.parts.length > 1 || !!row.where || row.namesDiffer || row.multiUnit || !!row.hint || row.otherDo > 0 || !!row.doneText || dirty
+    || retOver > 0 || retWait > 0;
+  const leftTone = left.tone === 'over' ? s.leftOver : left.tone === 'zero' ? s.leftZero : null;
+  const leftColor = left.tone === 'over' ? C.bad : left.tone === 'zero' ? C.ok : C.warn;
   return (
-    <View style={[s.card, rc && { borderLeftColor: rc.c, borderLeftWidth: 4 }, dirty && s.cardDirty]}>
+    <View style={[s.card, dirty && s.cardDirty]}>
+      {rc && <View style={[s.doneStrip, { backgroundColor: rc.c }]} />}
       <View style={s.nameRow}>
         {row.renaming ? (
           <TextInput
@@ -2467,85 +2690,103 @@ const RowCard = memo(function RowCard({ b, row, shown, noteOnly, act }: { b: Boa
           <Text style={s.itemName}>{row.name || '-'}</Text>
         )}
         {row.renaming ? (
-          <TouchableOpacity onPress={() => act.nameDone(row, true)} hitSlop={8} accessibilityLabel="ยกเลิกแก้ชื่อ">
-            <Ionicons name="close-circle" size={20} color={C.muted} />
+          <TouchableOpacity style={s.iconBtn} onPress={() => act.nameDone(row, true)} hitSlop={6} accessibilityLabel="ยกเลิกแก้ชื่อ">
+            <Ionicons name="close" size={17} color={C.soft} />
           </TouchableOpacity>
         ) : (
-          <TouchableOpacity onPress={() => act.rename(row)} hitSlop={8} accessibilityLabel={'แก้ชื่อ ' + row.name}>
-            <Ionicons name="pencil" size={16} color={C.muted} />
+          <TouchableOpacity style={s.iconBtn} onPress={() => act.rename(row)} hitSlop={6} accessibilityLabel={'แก้ชื่อ ' + row.name}>
+            <Ionicons name="pencil" size={14} color={C.soft} />
           </TouchableOpacity>
         )}
       </View>
-      <View style={s.tags}>
-        {!!row.skipReason && <Chip text={row.skipReason} />}
-        {ids.length > 1 && <Chip text={'รวม ' + ids.length + ' รายการ'} color={C.info} bg={C.infoBg} />}
-        {row.parts.length > 1
-          ? row.parts.map(([where, q], i) => <Chip key={i} text={(where !== '' ? where : 'ไม่ระบุที่') + ' ' + fmt(q)} />)
-          : !!row.where && <Chip text={row.where} />}
-        {row.namesDiffer && <Chip text="ชื่อเขียนต่างกันเล็กน้อย" color={C.warn} bg={C.warnBg} />}
-        {row.multiUnit && <Chip text="ชื่อนี้มีหลายหน่วย แยกบรรทัดตามหน่วย" color={C.warn} bg={C.warnBg} />}
-        {!!row.hint && <Chip text={row.hint} color={C.info} bg="#eff6ff" />}
-        {row.otherDo > 0 && <Chip text={'ส่งด้วยใบส่งอื่นแล้ว ' + fmt(row.otherDo)} color={C.warn} bg={C.warnBg} />}
-        {!!row.doneText && <Chip text={row.doneText} color={C.ok} bg={C.okBg} icon="checkmark-circle" />}
-        {dirty && <Chip text="ยังไม่บันทึก" color={C.warn} bg={C.warnBg} bold />}
-      </View>
-      <View style={s.qtyRow}>
-        <Text style={s.qtyLabel}>
-          จำนวน <Text style={s.qtyValue}>{fmt(b.targetQty(row))}</Text> {row.unit || '-'}
-          {row.p80 && <Text style={s.qtyFull}>{'  (เต็ม ' + fmt(row.qty) + ')'}</Text>}
-        </Text>
+      {hasTags && (
+        <View style={s.tags}>
+          {!!row.doneText && <Chip text={row.doneText} color={C.ok} bg={C.okBg} icon="checkmark-circle" bold />}
+          {dirty && <Chip text="ยังไม่บันทึก" color={C.warn} bg={C.warnBg} icon="create" bold />}
+          {!!row.skipReason && <Chip text={row.skipReason} />}
+          {ids.length > 1 && <Chip text={'รวม ' + ids.length + ' รายการ'} color={C.info} bg={C.infoBg} />}
+          {row.parts.length > 1
+            ? row.parts.map(([where, q], i) => <Chip key={i} text={(where !== '' ? where : 'ไม่ระบุที่') + ' ' + fmt(q)} icon="location-outline" />)
+            : !!row.where && <Chip text={row.where} icon="location-outline" />}
+          {row.namesDiffer && <Chip text="ชื่อเขียนต่างกันเล็กน้อย" color={C.warn} bg={C.warnBg} />}
+          {row.multiUnit && <Chip text="ชื่อนี้มีหลายหน่วย แยกบรรทัดตามหน่วย" color={C.warn} bg={C.warnBg} />}
+          {!!row.hint && <Chip text={row.hint} color={C.info} bg={C.infoBg} />}
+          {row.otherDo > 0 && <Chip text={'ส่งด้วยใบส่งอื่นแล้ว ' + fmt(row.otherDo)} color={C.warn} bg={C.warnBg} />}
+          {retOver > 0 && <Chip text={'ส่งเกิน · รับกลับ ' + fmt(retOver) + unitText(row.unit)} color={C.bad} bg={C.badBg} icon="arrow-undo" bold />}
+          {retOver > 0 && (
+            <TouchableOpacity style={s.returnBtn} onPress={() => act.returnReq(row)} accessibilityRole="button" accessibilityLabel={'รับของคืน ' + row.name}>
+              <Ionicons name="arrow-undo" size={13} color={C.bad} />
+              <Text style={s.returnBtnText}>รับของคืน</Text>
+            </TouchableOpacity>
+          )}
+          {retWait > 0 && <Chip text={'รอรับคืน ' + fmt(retWait) + unitText(row.unit)} color={C.info} bg={C.infoBg} icon="time-outline" bold />}
+        </View>
+      )}
+
+      {/* จำนวน · 80% · ค้าง */}
+      <View style={s.stats}>
+        <View style={s.statMain}>
+          <Text style={s.statLabel}>จำนวน{row.p80 ? ' (80%)' : ''}</Text>
+          <Text style={s.statValue}>
+            {fmt(b.targetQty(row))}
+            <Text style={s.statUnit}> {row.unit || '-'}</Text>
+          </Text>
+          {row.p80 && <Text style={s.statSub}>เต็ม {fmt(row.qty)}</Text>}
+        </View>
         <TouchableOpacity style={[s.p80, row.p80 && s.p80On, b.p80Changed(row) && s.p80Changed]} onPress={() => act.p80(row)} accessibilityLabel={'80% ' + row.name}>
           <Ionicons name={row.p80 ? 'checkbox' : 'square-outline'} size={16} color={row.p80 ? C.primary : C.muted} />
           <Text style={[s.p80Text, row.p80 && { color: C.primary }]}>80%</Text>
         </TouchableOpacity>
-        <View style={[s.left, left.tone === 'over' && { backgroundColor: C.badBg }, left.tone === 'zero' && { backgroundColor: C.okBg }]}>
-          <Text style={s.leftLabel}>ค้าง</Text>
-          <Text style={[s.leftValue, left.tone === 'over' && { color: C.bad }, left.tone === 'zero' && { color: C.ok }]}>{left.text}</Text>
+        <View style={[s.leftBox, leftTone]}>
+          <Text style={[s.leftLabel, { color: leftColor }]}>ค้าง</Text>
+          <Text style={[s.leftValue, { color: leftColor }]}>{left.text}</Text>
         </View>
       </View>
+
       {cells.map((cell) => (
         <RoundBox key={cell.round} b={b} tr={row} cell={cell} act={act} disabledAll={b.saving} />
       ))}
-      <View style={s.noteBox}>
-        {noteOnly ? (
-          inSheet ? <BillList b={b} row={row} round={b.latestJobRound()} /> : null
-        ) : (
-          <>
-            {row.back.map(([r, label, q], i) => (
-              <Text key={'r' + i} style={s.backLine}>
-                <Text style={{ fontWeight: '800' }}>{label + ' ' + fmt(q) + unitText(row.unit)}</Text> จากรอบ {r}
-              </Text>
-            ))}
-            {poShow.map((po, i) => (
-              <View key={i} style={s.poLine}>
-                <Text style={s.poNo}>{po.no}</Text>
-                <Text style={[s.poCond, po.tone === 'site' ? { color: C.ok } : po.tone === 'wait' ? { color: C.warn } : po.tone === 'wh' ? { color: C.info } : { color: C.muted }]}>{po.cond}</Text>
-                <Text style={s.poQty}>{po.qty_text}</Text>
-              </View>
-            ))}
-            {row.po.length > 4 && (
-              <TouchableOpacity onPress={() => setPoOpen((o) => !o)}>
-                <Text style={s.poMore}>{poOpen ? 'ซ่อนบิล' : 'อีก ' + (row.po.length - 3) + ' บิล'}</Text>
-              </TouchableOpacity>
-            )}
-          </>
-        )}
-        <TextInput
-          style={[s.noteInput, b.noteChanged(row) && s.inputChanged]}
-          value={row.note}
-          onChangeText={(t) => act.note(row, t)}
-          onFocus={() => act.focus(row)}
-          onBlur={() => act.focus(null)}
-          placeholder="เพิ่มหมายเหตุ"
-          placeholderTextColor="#94a3b8"
-          maxLength={5000}
-          multiline
-          accessibilityLabel={'หมายเหตุ ' + row.name}
-        />
-      </View>
+
+      {noteOnly ? (
+        inSheet ? <BillList b={b} row={row} round={b.latestJobRound()} /> : null
+      ) : row.back.length > 0 || poShow.length > 0 ? (
+        <View style={s.poBox}>
+          {row.back.map(([r, label, q], i) => (
+            <Text key={'r' + i} style={s.backLine}>
+              <Text style={{ fontWeight: '800' }}>{label + ' ' + fmt(q) + unitText(row.unit)}</Text> จากรอบ {r}
+            </Text>
+          ))}
+          {poShow.map((po, i) => (
+            <View key={i} style={s.poLine}>
+              <Text style={s.poNo}>{po.no}</Text>
+              <Text style={[s.poCond, po.tone === 'site' ? { color: C.ok } : po.tone === 'wait' ? { color: C.warn } : po.tone === 'wh' ? { color: C.info } : { color: C.muted }]}>{po.cond}</Text>
+              <Text style={s.poQty}>{po.qty_text}</Text>
+            </View>
+          ))}
+          {row.po.length > 4 && (
+            <TouchableOpacity onPress={() => setPoOpen((o) => !o)} style={s.poMoreBtn}>
+              <Text style={s.poMore}>{poOpen ? 'ซ่อนบิล' : 'อีก ' + (row.po.length - 3) + ' บิล'}</Text>
+              <Ionicons name={poOpen ? 'chevron-up' : 'chevron-down'} size={13} color={C.primary} />
+            </TouchableOpacity>
+          )}
+        </View>
+      ) : null}
+
+      <TextInput
+        style={[s.noteInput, b.noteChanged(row) && s.inputChanged]}
+        value={row.note}
+        onChangeText={(t) => act.note(row, t)}
+        onFocus={() => act.focus(row)}
+        onBlur={() => act.focus(null)}
+        placeholder="เพิ่มหมายเหตุ"
+        placeholderTextColor={C.muted}
+        maxLength={5000}
+        multiline
+        accessibilityLabel={'หมายเหตุ ' + row.name}
+      />
       <TouchableOpacity style={s.addSub} onPress={() => act.addSub(row)} disabled={b.saving}>
-        <Ionicons name="add" size={14} color={C.primary} />
-        <Text style={s.addSubText}>รายการย่อย</Text>
+        <Ionicons name="add-circle-outline" size={16} color={C.primary} />
+        <Text style={s.addSubText}>เพิ่มรายการย่อย</Text>
       </TouchableOpacity>
     </View>
   );
@@ -2559,75 +2800,83 @@ const SubCard = memo(function SubCard({ b, sub, shown, act }: { b: Board; sub: S
   const held = b.subHeld(sub);
   const changed = (key: keyof SubSaved) => saved !== null && JSON.stringify(v[key]) !== JSON.stringify(saved[key]);
   const disabled = sub.deleted || b.saving;
+  const leftTone = left.tone === 'over' ? s.leftOver : left.tone === 'zero' ? s.leftZero : null;
+  const leftColor = left.tone === 'over' ? C.bad : left.tone === 'zero' ? C.ok : C.warn;
   return (
-    <View style={[s.subCard, sub.deleted && s.subDeleted, b.subChanged(sub) && s.cardDirty]}>
-      <View style={s.subHead}>
-        <Ionicons name="return-down-forward" size={16} color={C.muted} />
-        <TextInput
-          style={[s.subName, changed('name') && s.inputChanged, v.name === '' && s.inputInvalid]}
-          value={sub.name}
-          onChangeText={(t) => act.subField(sub, 'name', t)}
-          editable={!disabled}
-          maxLength={255}
-          placeholder="ชื่อรายการย่อย เช่น หลอด LED T8 *"
-          placeholderTextColor="#94a3b8"
-          accessibilityLabel="ชื่อรายการย่อย"
-        />
-        <TouchableOpacity
-          style={[s.subDel, held && { opacity: 0.4 }]}
-          disabled={held || b.saving}
-          onPress={() => act.subDelete(sub)}
-          accessibilityLabel={held ? ROUND_LOCK_TEXT : sub.deleted ? 'ยกเลิกการลบ' : 'ลบรายการย่อย'}
-        >
-          <Ionicons name={sub.deleted ? 'arrow-undo' : 'trash'} size={16} color={C.bad} />
-        </TouchableOpacity>
-      </View>
-      <View style={s.tags}>
-        <Chip text="รายการย่อย" color={C.info} bg={C.infoBg} />
-        {!!sub.doneText && <Chip text={sub.doneText} color={C.ok} bg={C.okBg} icon="checkmark-circle" />}
-        {b.isNewSub(sub) && <Chip text="ยังไม่บันทึก" color={C.warn} bg={C.warnBg} bold />}
-        {sub.deleted && <Chip text="จะลบตอนบันทึก" color={C.bad} bg={C.badBg} bold />}
-      </View>
-      <View style={s.subQtyRow}>
-        <TextInput
-          style={[s.subQty, changed('qty') && s.inputChanged, !v.qty && s.inputInvalid]}
-          value={sub.qty}
-          onChangeText={(t) => act.subField(sub, 'qty', t)}
-          onEndEditing={() => act.subQtyDone(sub)}
-          editable={!disabled}
-          keyboardType="decimal-pad"
-          placeholder="จำนวน *"
-          placeholderTextColor="#94a3b8"
-          accessibilityLabel="จำนวนรายการย่อย"
-        />
-        <TextInput
-          style={[s.subUnit, changed('unit') && s.inputChanged]}
-          value={sub.unit}
-          onChangeText={(t) => act.subField(sub, 'unit', t)}
-          editable={!disabled}
-          maxLength={50}
-          placeholder="หน่วย"
-          placeholderTextColor="#94a3b8"
-          accessibilityLabel="หน่วยรายการย่อย"
-        />
-        <View style={[s.left, left.tone === 'over' && { backgroundColor: C.badBg }, left.tone === 'zero' && { backgroundColor: C.okBg }]}>
-          <Text style={s.leftLabel}>ค้าง</Text>
-          <Text style={[s.leftValue, left.tone === 'over' && { color: C.bad }, left.tone === 'zero' && { color: C.ok }]}>{left.text}</Text>
+    <View style={s.subWrap}>
+      <View style={s.subConnector} />
+      <View style={[s.subCard, sub.deleted && s.subDeleted, b.subChanged(sub) && s.cardDirty]}>
+        <View style={s.subHead}>
+          <TextInput
+            style={[s.subName, changed('name') && s.inputChanged, v.name === '' && s.inputInvalid]}
+            value={sub.name}
+            onChangeText={(t) => act.subField(sub, 'name', t)}
+            onFocus={act.reveal}
+            editable={!disabled}
+            maxLength={255}
+            placeholder="ชื่อรายการย่อย เช่น หลอด LED T8 *"
+            placeholderTextColor={C.muted}
+            accessibilityLabel="ชื่อรายการย่อย"
+          />
+          <TouchableOpacity
+            style={[s.subDel, held && { opacity: 0.4 }]}
+            disabled={held || b.saving}
+            onPress={() => act.subDelete(sub)}
+            accessibilityLabel={held ? ROUND_LOCK_TEXT : sub.deleted ? 'ยกเลิกการลบ' : 'ลบรายการย่อย'}
+          >
+            <Ionicons name={sub.deleted ? 'arrow-undo' : 'trash-outline'} size={16} color={C.bad} />
+          </TouchableOpacity>
         </View>
+        <View style={s.tags}>
+          <Chip text="รายการย่อย" color={C.info} bg={C.infoBg} icon="return-down-forward" />
+          {!!sub.doneText && <Chip text={sub.doneText} color={C.ok} bg={C.okBg} icon="checkmark-circle" bold />}
+          {b.isNewSub(sub) && <Chip text="ยังไม่บันทึก" color={C.warn} bg={C.warnBg} icon="create" bold />}
+          {sub.deleted && <Chip text="จะลบตอนบันทึก" color={C.bad} bg={C.badBg} icon="trash" bold />}
+        </View>
+        <View style={s.subQtyRow}>
+          <TextInput
+            style={[s.subQty, changed('qty') && s.inputChanged, !v.qty && s.inputInvalid]}
+            value={sub.qty}
+            onChangeText={(t) => act.subField(sub, 'qty', t)}
+            onEndEditing={() => act.subQtyDone(sub)}
+            onFocus={act.reveal}
+            editable={!disabled}
+            keyboardType="decimal-pad"
+            placeholder="จำนวน *"
+            placeholderTextColor={C.muted}
+            accessibilityLabel="จำนวนรายการย่อย"
+          />
+          <TextInput
+            style={[s.subUnit, changed('unit') && s.inputChanged]}
+            value={sub.unit}
+            onChangeText={(t) => act.subField(sub, 'unit', t)}
+            onFocus={act.reveal}
+            editable={!disabled}
+            maxLength={50}
+            placeholder="หน่วย"
+            placeholderTextColor={C.muted}
+            accessibilityLabel="หน่วยรายการย่อย"
+          />
+          <View style={[s.leftBox, leftTone]}>
+            <Text style={[s.leftLabel, { color: leftColor }]}>ค้าง</Text>
+            <Text style={[s.leftValue, { color: leftColor }]}>{left.text}</Text>
+          </View>
+        </View>
+        {cells.map((cell) => (
+          <RoundBox key={cell.round} b={b} tr={sub} cell={cell} act={act} disabledAll={disabled} />
+        ))}
+        <TextInput
+          style={[s.noteInput, changed('note') && s.inputChanged]}
+          value={sub.note}
+          onChangeText={(t) => act.note(sub, t)}
+          onFocus={act.reveal}
+          editable={!disabled}
+          maxLength={1000}
+          placeholder="เพิ่มหมายเหตุ"
+          placeholderTextColor={C.muted}
+          accessibilityLabel="หมายเหตุรายการย่อย"
+        />
       </View>
-      {cells.map((cell) => (
-        <RoundBox key={cell.round} b={b} tr={sub} cell={cell} act={act} disabledAll={disabled} />
-      ))}
-      <TextInput
-        style={[s.noteInput, changed('note') && s.inputChanged]}
-        value={sub.note}
-        onChangeText={(t) => act.note(sub, t)}
-        editable={!disabled}
-        maxLength={1000}
-        placeholder="เพิ่มหมายเหตุ"
-        placeholderTextColor="#94a3b8"
-        accessibilityLabel="หมายเหตุรายการย่อย"
-      />
     </View>
   );
 });
@@ -2639,7 +2888,7 @@ function SheetModal({ visible, onClose, children, title, sub, insetsTop, insetsB
     <Modal visible={visible} transparent animationType="slide" statusBarTranslucent navigationBarTranslucent onRequestClose={onClose}>
       <View style={s.overlay}>
         <TouchableOpacity style={{ height: insetsTop + 30 }} activeOpacity={1} onPress={onClose} accessibilityLabel="ปิด" />
-        <View style={[s.sheet, { paddingBottom: 10 + insetsBottom }]}>
+        <View style={[s.sheet, { paddingBottom: 12 + insetsBottom }]}>
           <View style={s.grip} />
           <View style={s.sheetHead}>
             <View style={{ flex: 1 }}>
@@ -2647,7 +2896,7 @@ function SheetModal({ visible, onClose, children, title, sub, insetsTop, insetsB
               {!!sub && <Text style={s.sheetSub}>{sub}</Text>}
             </View>
             <TouchableOpacity onPress={onClose} style={s.closeBtn} hitSlop={8} accessibilityLabel="ปิด">
-              <Ionicons name="close" size={20} color="#475569" />
+              <Ionicons name="close" size={20} color={C.soft} />
             </TouchableOpacity>
           </View>
           <View style={{ flex: 1 }}>{children}</View>
@@ -2673,26 +2922,27 @@ function ChoiceModal({ visible, title, options, value, onPick, onClose, allowEmp
         <View style={s.picker}>
           <View style={s.pickerHead}>
             <Text style={s.pickerTitle}>{title}</Text>
-            <TouchableOpacity onPress={onClose} hitSlop={8}>
-              <Ionicons name="close" size={20} color={C.muted} />
+            <TouchableOpacity onPress={onClose} hitSlop={8} style={s.closeBtnSm}>
+              <Ionicons name="close" size={18} color={C.soft} />
             </TouchableOpacity>
           </View>
           {searchable && (
             <View style={s.pickerSearch}>
-              <Ionicons name="search" size={14} color="#94a3b8" />
-              <TextInput value={q} onChangeText={setQ} placeholder="ค้นหา..." placeholderTextColor="#94a3b8" style={s.pickerSearchInput} />
+              <Ionicons name="search" size={15} color={C.muted} />
+              <TextInput value={q} onChangeText={setQ} placeholder="ค้นหา..." placeholderTextColor={C.muted} style={s.pickerSearchInput} />
             </View>
           )}
           <ScrollView style={{ maxHeight: 380 }} keyboardShouldPersistTaps="handled">
             {allowEmpty !== undefined && (
               <TouchableOpacity style={[s.pickerOption, value === '' && s.pickerOptionOn]} onPress={() => onPick('')}>
                 <Text style={[s.pickerOptionText, value === '' && { color: C.primary, fontWeight: '800' }]}>{allowEmpty}</Text>
+                {value === '' && <Ionicons name="checkmark-circle" size={18} color={C.primary} />}
               </TouchableOpacity>
             )}
             {list.map((o) => (
               <TouchableOpacity key={o.value} style={[s.pickerOption, value === o.value && s.pickerOptionOn]} onPress={() => onPick(o.value)}>
                 <Text style={[s.pickerOptionText, value === o.value && { color: C.primary, fontWeight: '800' }]}>{o.label}</Text>
-                {value === o.value && <Ionicons name="checkmark" size={16} color={C.primary} />}
+                {value === o.value && <Ionicons name="checkmark-circle" size={18} color={C.primary} />}
               </TouchableOpacity>
             ))}
             {!list.length && <Text style={s.emptySmall}>ไม่พบรายการ</Text>}
@@ -2895,6 +3145,53 @@ export default function SiteItemCheckScreen() {
     }, [])
   );
 
+  // ---------- คีย์บอร์ด: ช่องที่กำลังพิมพ์ต้องไม่โดนบัง ----------
+  // คีย์บอร์ดขึ้น = ซ่อนแถบบันทึก (เดิมโผล่ทับช่องตรงขอบคีย์บอร์ดทันทีที่พิมพ์) · เว้นท้ายรายการเท่าส่วนที่คีย์บอร์ดทับ
+  // แล้วเลื่อนช่องที่โฟกัสขึ้นมาให้พ้นคีย์บอร์ด (ใช้ได้ทั้ง Android ที่ระบบย่อจอเอง/ไม่ย่อ และ iOS)
+  const listRef = useRef<FlatList<ListItem>>(null);
+  const listBoxRef = useRef<ComponentRef<typeof View>>(null);
+  const scrollYRef = useRef(0);
+  const kbTopRef = useRef(0); // ขอบบนคีย์บอร์ด (พิกัดบนจอ) · 0 = คีย์บอร์ดไม่ได้ขึ้น
+  const [kbOpen, setKbOpen] = useState(false);
+  const [kbPad, setKbPad] = useState(0);
+
+  const reveal = useCallback(() => {
+    const kbTop = kbTopRef.current;
+    const input = TextInput.State.currentlyFocusedInput() as any;
+    const box = listBoxRef.current;
+    // ช่องในป๊อปอัป (ข้อมูลใบส่ง ฯลฯ) ไม่ต้องเลื่อนรายการข้างหลัง
+    if (!kbTop || !input?.measureInWindow || !box || modalOpenRef.current) return;
+    box.measureInWindow((_bx, by, _bw, bh) => {
+      const visibleBottom = Math.min(by + bh, kbTop) - 24; // เว้นใต้ช่องไว้นิด ให้เห็นปุ่มติ๊กข้าง ๆ ชัด
+      input.measureInWindow((_ix: number, iy: number, _iw: number, ih: number) => {
+        const over = iy + ih - visibleBottom;
+        if (over > 0) listRef.current?.scrollToOffset({ offset: scrollYRef.current + over, animated: true });
+      });
+    });
+  }, []);
+
+  useEffect(() => {
+    const ios = Platform.OS === 'ios';
+    const show = Keyboard.addListener(ios ? 'keyboardWillShow' : 'keyboardDidShow', (e) => {
+      const kbTop = e.endCoordinates.screenY;
+      kbTopRef.current = kbTop;
+      setKbOpen(true);
+      listBoxRef.current?.measureInWindow((_x, y, _w, h) => {
+        setKbPad(Math.max(0, Math.round(y + h - kbTop)));
+        setTimeout(reveal, ios ? 30 : 80);
+      });
+    });
+    const hide = Keyboard.addListener(ios ? 'keyboardWillHide' : 'keyboardDidHide', () => {
+      kbTopRef.current = 0;
+      setKbOpen(false);
+      setKbPad(0);
+    });
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, [reveal]);
+
   function requestProject(pid: number) {
     const board = boardRef.current;
     const go = () => {
@@ -2937,7 +3234,12 @@ export default function SiteItemCheckScreen() {
       packTick: (tr, round) => with_((bd) => bd.onPackTick(tr, round, tr.pendingPack !== round)),
       photo: (tr, round) => with_((bd) => onPhotoButton(bd, tr, round)),
       note: (tr, text) => with_((bd) => bd.setNote(tr, text)),
-      focus: (row) => setFocusRow(row),
+      focus: (row) => {
+        setFocusRow(row);
+        // คีย์บอร์ดเปิดค้างอยู่แล้วกดย้ายไปช่องอื่น (ไม่มี keyboardDidShow ใหม่) = เลื่อนหาช่องเอง
+        if (row) setTimeout(reveal, 60);
+      },
+      reveal: () => setTimeout(reveal, 60),
       p80: (row) => with_((bd) => bd.setP80(row, !row.p80)),
       rename: (row) => with_((bd) => bd.openRename(row)),
       name: (row, text) => with_((bd) => bd.setName(row, text)),
@@ -2953,9 +3255,28 @@ export default function SiteItemCheckScreen() {
           bd.touch(tr);
           bd.emit();
         }),
+      returnReq: (row) =>
+        with_((bd) => void runReturn(bd, 'return_request', { ids: row.ids.filter((id) => num(bd.returns.items[String(id)]) > 0).join(',') })),
     };
   }
   const act = actRef.current;
+
+  // ---------- รับของคืนจากหน้างาน ----------
+  async function runReturn(bd: Board, action: 'return_request' | 'return_cancel', fields: Record<string, string>) {
+    try {
+      await bd.returnAction(action, fields);
+      const target = bd.returns.target;
+      bd.hooks.toast(action === 'return_cancel' ? 'ยกเลิกรอรับคืนแล้ว' : 'แจ้งรับของคืนแล้ว · ' + (target ? 'ขึ้นในใบส่งรอบ ' + target.round : 'รอรอบถัดไป'));
+    } catch (err: any) {
+      bd.hooks.toast(err?.message || 'บันทึกไม่สำเร็จ', true);
+    }
+  }
+  function askCancelReturn(bd: Board, r: ReturnItem) {
+    Alert.alert('ยกเลิกรอรับคืน?', r.name + ' ' + fmt(r.qty) + unitText(r.unit), [
+      { text: 'ไม่ใช่', style: 'cancel' },
+      { text: 'ยกเลิกรอรับคืน', style: 'destructive', onPress: () => void runReturn(bd, 'return_cancel', { id: String(r.id) }) },
+    ]);
+  }
 
   // ---------- รูปจัดของ ----------
   async function pickImages(camera: boolean, room: number): Promise<PhotoAdd[]> {
@@ -3027,6 +3348,8 @@ export default function SiteItemCheckScreen() {
   // ---------- บันทึก ----------
   function openConfirm() {
     if (!b) return;
+    b.linkPacksForSave(); // ช่องจัดตามช่องขึ้นตอนกดบันทึก (หน้าต่างยืนยันเห็นช่องจัดด้วย)
+    b.emit();
     const result = b.collectChanges();
     if (!result.lines.length) return;
     b.confirmOpen = true;
@@ -3243,18 +3566,23 @@ export default function SiteItemCheckScreen() {
   if (loading && !b) {
     return (
       <View style={s.center}>
+        <LinearGradient colors={BG_GRAD} locations={[0, 0.4, 1]} style={StyleSheet.absoluteFill} pointerEvents="none" />
         <ActivityIndicator size="large" color={C.primary} />
+        <Text style={s.centerHint}>กำลังโหลดหน้างาน...</Text>
       </View>
     );
   }
   if (!projectId) {
     return (
       <SafeAreaView style={s.safe} edges={['left', 'right']}>
+        <LinearGradient colors={BG_GRAD} locations={[0, 0.4, 1]} style={StyleSheet.absoluteFill} pointerEvents="none" />
         <View style={s.center}>
-          <Ionicons name="clipboard-outline" size={40} color="#cbd5e1" />
-          <Text style={s.errorText}>เลือกหน้างานที่จะเช็คของส่ง</Text>
+          <View style={[s.centerIcon, { backgroundColor: C.primarySoft }]}>
+            <Ionicons name="clipboard-outline" size={32} color={C.primary} />
+          </View>
+          <Text style={s.centerTitle}>เลือกหน้างานที่จะเช็คของส่ง</Text>
           <TouchableOpacity style={s.primaryBtn} onPress={openPicker}>
-            <Ionicons name="swap-horizontal" size={15} color="#fff" />
+            <Ionicons name="swap-horizontal" size={16} color="#fff" />
             <Text style={s.primaryBtnText}>เลือกหน้างาน</Text>
           </TouchableOpacity>
         </View>
@@ -3265,11 +3593,15 @@ export default function SiteItemCheckScreen() {
   if (!b) {
     return (
       <SafeAreaView style={s.safe} edges={['left', 'right']}>
+        <LinearGradient colors={BG_GRAD} locations={[0, 0.4, 1]} style={StyleSheet.absoluteFill} pointerEvents="none" />
         <View style={s.center}>
-          <Ionicons name="cloud-offline-outline" size={36} color="#cbd5e1" />
+          <View style={[s.centerIcon, { backgroundColor: C.badBg }]}>
+            <Ionicons name="cloud-offline-outline" size={32} color={C.bad} />
+          </View>
+          <Text style={s.centerTitle}>โหลดข้อมูลไม่สำเร็จ</Text>
           <Text style={s.errorText}>{loadError || 'โหลดข้อมูลไม่สำเร็จ'}</Text>
           <TouchableOpacity style={s.primaryBtn} onPress={() => loadPage(projectId)}>
-            <Ionicons name="refresh" size={14} color="#fff" />
+            <Ionicons name="refresh" size={15} color="#fff" />
             <Text style={s.primaryBtnText}>ลองใหม่</Text>
           </TouchableOpacity>
         </View>
@@ -3288,217 +3620,351 @@ export default function SiteItemCheckScreen() {
     const users = board.presence.filter((u) => u && u.name);
     if (me && !users.some((u) => u.name === me)) users.unshift({ name: me, since: '' });
     users.sort((x, y) => Number(y.name === me) - Number(x.name === me));
+    const liveText = board.syncOk ? 'อัปเดตสด' : board.syncFails >= 2 ? 'ขาดการเชื่อมต่อ' : 'กำลังเชื่อมต่อ';
+    const anyJob = ROUNDS.some((r) => board.rounds[r].jobOn);
     return (
       <View>
-        <View style={s.backs}>
-          <TouchableOpacity
-            style={s.boardBack}
-            onPress={() => {
-              const go = () => router.push('/site_job_board' as never);
-              if (board.saveBar().dirty) openLeave(go);
-              else go();
-            }}
-          >
-            <Ionicons name="megaphone" size={14} color={C.primary} />
-            <Text style={s.boardBackText}>กลับหน้าแจ้งจัดงาน</Text>
-          </TouchableOpacity>
-        </View>
-        <View style={s.headCard}>
-          <View style={s.headTop}>
-            <View style={s.headIcon}>
-              <Ionicons name="clipboard" size={20} color={C.primary} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={s.headTitle}>เช็คของส่ง</Text>
-              <Text style={s.headCustomer}>{p.customer}</Text>
-            </View>
+        {/* หัวหน้า: หน้างาน + ความคืบหน้า + คนที่กำลังใช้ */}
+        <View style={s.hero}>
+          <View style={s.heroTop}>
+            <TouchableOpacity
+              style={s.backChip}
+              onPress={() => {
+                const go = () => router.push('/site_job_board' as never);
+                if (board.saveBar().dirty) openLeave(go);
+                else go();
+              }}
+              accessibilityLabel="กลับหน้าแจ้งจัดงาน"
+            >
+              <Ionicons name="arrow-back" size={15} color={C.primary} />
+              <Text style={s.backChipText}>แจ้งจัดงาน</Text>
+            </TouchableOpacity>
+            <View style={{ flex: 1 }} />
             {hasItems && (
-              <View style={[s.liveBadge, !board.syncOk && s.liveBadgeOff]}>
-                <View style={[s.liveDot, { backgroundColor: board.syncOk ? '#10b981' : '#94a3b8' }]} />
-                <Text style={[s.liveBadgeText, !board.syncOk && { color: C.muted }]}>
-                  {board.syncOk ? 'อัปเดตอัตโนมัติ' : board.syncFails >= 2 ? 'ขาดการเชื่อมต่อ' : 'กำลังเชื่อมต่อ'}
-                </Text>
+              <View style={[s.livePill, !board.syncOk && s.livePillOff]}>
+                <View style={[s.liveDot, { backgroundColor: board.syncOk ? '#10B981' : C.faint }]} />
+                <Text style={[s.livePillText, !board.syncOk && { color: C.muted }]}>{liveText}</Text>
               </View>
             )}
           </View>
-          <View style={s.headProject}>
-            {p.company && <CompanyBadge company={p.company} />}
-            <TouchableOpacity style={s.codeBtn} onPress={openPicker} accessibilityLabel="เลือกหน้างานอื่น">
-              <Text style={s.codeBtnText}>หน้างาน {p.site}</Text>
-              <Ionicons name="chevron-down" size={13} color={C.primary} />
-            </TouchableOpacity>
-          </View>
-          <Text style={s.headName}>{p.name}</Text>
-          <TouchableOpacity
-            style={s.shareBtn}
-            onPress={() => {
-              const url = API_BASE + '/site_item_check.php?project_id=' + p.id;
-              const title = 'เช็คของส่ง หน้างาน ' + p.site;
-              void Share.share({ message: title + ' (ล็อกอินก่อนเข้า)\n' + url, title });
-            }}
-          >
-            <Ionicons name="link" size={14} color={C.muted} />
-            <Text style={s.shareText}>ส่งลิงก์หน้านี้ (หน้าเว็บ ผู้รับต้องล็อกอินก่อน)</Text>
-          </TouchableOpacity>
-        </View>
 
-        <View style={s.presence}>
-          <Ionicons name="people" size={15} color={C.primary} />
-          <Text style={s.presenceTitle}>
-            กำลังใช้หน้านี้ <Text style={{ fontWeight: '900' }}>{users.length}</Text> คน
-          </Text>
-          <View style={s.presenceList}>
-            {users.map((u) => {
-              const mine = u.name === me;
-              return (
-                <View key={u.name} style={[s.presenceUser, mine && s.presenceMe]}>
-                  <View style={[s.avatar, { backgroundColor: avatarColor(u.name) }]}>
-                    <Text style={s.avatarText}>{initialOf(u.name)}</Text>
+          <View style={s.heroProject}>
+            <TouchableOpacity style={s.codeBtn} onPress={openPicker} accessibilityLabel="เลือกหน้างานอื่น">
+              <Text style={s.codeKicker}>หน้างาน</Text>
+              <Text style={s.codeText}>{p.site}</Text>
+              <Ionicons name="chevron-down" size={14} color={C.primary} />
+            </TouchableOpacity>
+            {p.company && <CompanyBadge company={p.company} />}
+          </View>
+          <Text style={s.heroName}>{p.name}</Text>
+          {!!p.customer && <Text style={s.heroCustomer}>{p.customer}</Text>}
+
+          {hasItems && (
+            <View style={s.progress}>
+              <View style={s.progressTop}>
+                <Text style={s.progressLabel}>ส่งครบแล้ว</Text>
+                <Text style={s.progressPct}>
+                  {counts.pct.toFixed(2)}
+                  <Text style={s.progressPctUnit}>%</Text>
+                </Text>
+              </View>
+              <View style={s.sumBar}>
+                {ROUNDS.map((round) => (
+                  <View key={round} style={{ width: `${counts.all ? (counts.perRound[round - 1] / counts.all) * 100 : 0}%`, backgroundColor: ROUND_COLOR[round].c }} />
+                ))}
+              </View>
+              <View style={s.legend}>
+                {ROUNDS.filter((round) => counts.perRound[round - 1] > 0).map((round) => (
+                  <View key={round} style={s.legendItem}>
+                    <View style={[s.legendDot, { backgroundColor: ROUND_COLOR[round].c }]} />
+                    <Text style={s.legendText}>
+                      รอบ {round} · {counts.perRound[round - 1]}
+                    </Text>
                   </View>
-                  <Text style={s.presenceName} numberOfLines={1}>
-                    {u.name}
-                  </Text>
-                  {mine && <Text style={s.presenceTag}>คุณ</Text>}
+                ))}
+              </View>
+              <View style={s.statRow}>
+                <View style={s.statTile}>
+                  <Text style={[s.statTileNum, { color: C.warn }]}>{counts.todo}</Text>
+                  <Text style={s.statTileLabel}>ค้าง</Text>
                 </View>
-              );
-            })}
+                <View style={s.statTile}>
+                  <Text style={[s.statTileNum, { color: C.ok }]}>{counts.done}</Text>
+                  <Text style={s.statTileLabel}>ครบแล้ว</Text>
+                </View>
+                <View style={s.statTile}>
+                  <Text style={s.statTileNum}>{counts.all}</Text>
+                  <Text style={s.statTileLabel}>ทั้งหมด</Text>
+                </View>
+              </View>
+            </View>
+          )}
+
+          <View style={s.heroFoot}>
+            <View style={s.avatarStack}>
+              {users.slice(0, 4).map((u, i) => (
+                <View key={u.name} style={[s.stackItem, i > 0 && { marginLeft: -9 }, { zIndex: 10 - i }]}>
+                  <Avatar name={u.name} size={28} />
+                </View>
+              ))}
+              {users.length > 4 && (
+                <View style={[s.stackItem, s.stackMore, { marginLeft: -9 }]}>
+                  <Text style={s.stackMoreText}>+{users.length - 4}</Text>
+                </View>
+              )}
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={s.presenceTitle}>กำลังใช้หน้านี้ {users.length} คน</Text>
+              <Text style={s.presenceNames} numberOfLines={1}>
+                {users.map((u) => (u.name === me ? 'คุณ' : u.name)).join(' · ')}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={s.shareBtn}
+              onPress={() => {
+                const url = API_BASE + '/site_item_check.php?project_id=' + p.id;
+                const title = 'เช็คของส่ง หน้างาน ' + p.site;
+                void Share.share({ message: title + ' (ล็อกอินก่อนเข้า)\n' + url, title });
+              }}
+              accessibilityLabel="ส่งลิงก์หน้านี้ (หน้าเว็บ ผู้รับต้องล็อกอินก่อน)"
+            >
+              <Ionicons name="share-social-outline" size={15} color={C.primary} />
+              <Text style={s.shareText}>ส่งลิงก์</Text>
+            </TouchableOpacity>
           </View>
         </View>
 
         {board.extraPending > 0 && (
           <View style={s.notice}>
-            <Text style={s.noticeTitle}>
-              <Ionicons name="hourglass" size={13} color={C.warn} /> สินค้านอก ปร. รออนุมัติ {board.extraPending} รายการ
+            <View style={s.noticeIcon}>
+              <Ionicons name="hourglass" size={15} color={C.warn} />
+            </View>
+            <View style={{ flex: 1, gap: 2 }}>
+              <Text style={s.noticeTitle}>สินค้านอก ปร. รออนุมัติ {board.extraPending} รายการ</Text>
+              <Text style={s.noticeText}>ยังไม่ขึ้นในหน้านี้ จะขึ้นเมื่อผู้จัดการหรือผู้บริหารอนุมัติที่หน้าตรวจสอบต้นทุน</Text>
+            </View>
+          </View>
+        )}
+
+        {/* รับของคืนจากหน้างาน: รายการที่ลบแล้ว (ส่งไปแล้ว) / รอรับคืน / รับคืนแล้ว · ซ่อนเมื่อไม่มี */}
+        {board.returns.list.length > 0 && (
+          <View style={s.returnPanel}>
+            <View style={s.returnHead}>
+              <Ionicons name="arrow-undo" size={16} color={C.bad} />
+              <Text style={s.returnTitle}>รับของคืนจากหน้างาน</Text>
+            </View>
+            <Text style={s.returnTarget}>
+              {board.returns.target
+                ? 'รอรับคืนจะขึ้นในใบส่งรอบ ' + board.returns.target.round + ' (' + board.returns.target.do + ')'
+                : 'ยังไม่มีใบส่งรอบถัดไป · รอรับคืนจะขึ้นเมื่อออกใบส่งรอบถัดไป'}
             </Text>
-            <Text style={s.noticeText}>ยังไม่ขึ้นในหน้านี้ จะขึ้นเมื่อผู้จัดการหรือผู้บริหารอนุมัติที่หน้าตรวจสอบต้นทุน</Text>
+            {board.returns.list.map((r) => (
+              <View key={r.id} style={[s.returnItem, r.status === 'picked' && { opacity: 0.65 }]}>
+                <View style={{ flex: 1, gap: 4 }}>
+                  <View style={s.returnLine}>
+                    <Text style={s.returnName}>{r.name}</Text>
+                    <Text style={[s.returnQty, r.status === 'picked' && { color: C.ok }]}>{fmt(r.status === 'picked' ? r.picked_qty : r.qty) + unitText(r.unit)}</Text>
+                    <Chip text={r.reason === 'deleted' ? 'ลบรายการแล้ว' : 'แก้จำนวนลด'} color={r.reason === 'deleted' ? C.warn : C.info} bg={r.reason === 'deleted' ? C.warnBg : C.infoBg} />
+                  </View>
+                  <Text style={s.returnMeta}>{returnMeta(r)}</Text>
+                </View>
+                {r.status === 'found' && (
+                  <TouchableOpacity style={s.returnBtn} onPress={() => void runReturn(board, 'return_request', { found: String(r.id) })} accessibilityRole="button" accessibilityLabel={'รับของคืน ' + r.name}>
+                    <Ionicons name="arrow-undo" size={13} color={C.bad} />
+                    <Text style={s.returnBtnText}>รับของคืน</Text>
+                  </TouchableOpacity>
+                )}
+                {r.status === 'waiting' && (
+                  <TouchableOpacity onPress={() => askCancelReturn(board, r)} hitSlop={8} accessibilityRole="button" accessibilityLabel={'ยกเลิกรอรับคืน ' + r.name}>
+                    <Text style={s.returnCancel}>ยกเลิก</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            ))}
           </View>
         )}
 
         {!hasItems ? (
-          <Text style={s.emptyPage}>โครงการนี้ยังไม่มีรายการสินค้า</Text>
+          <View style={s.emptyPage}>
+            <View style={[s.centerIcon, { backgroundColor: C.track }]}>
+              <Ionicons name="file-tray-outline" size={30} color={C.muted} />
+            </View>
+            <Text style={s.emptyPageText}>โครงการนี้ยังไม่มีรายการสินค้า</Text>
+          </View>
         ) : (
           <>
-            <View style={s.summary}>
-              <View style={s.sumHead}>
-                <Text style={s.sumTitle}>ส่งครบแล้ว</Text>
-                <Text style={s.sumPct}>{counts.pct.toFixed(2)}%</Text>
-              </View>
-              <View style={s.sumBar}>
-                {ROUNDS.map((round) => (
-                  <View key={round} style={{ width: (counts.all ? (counts.perRound[round - 1] / counts.all) * 100 : 0) + '%', backgroundColor: ROUND_COLOR[round].c }} />
-                ))}
-              </View>
-              <View style={s.sumList}>
-                <Text style={[s.sumItem, { color: C.bad }]}>ค้าง {counts.todo}</Text>
-                <Text style={[s.sumItem, { color: C.ok }]}>ครบแล้ว {counts.done}</Text>
-                <Text style={s.sumItem}>ทั้งหมด {counts.all}</Text>
-              </View>
-            </View>
-
             {/* สถานะจัดงาน: กดแจ้งจัดงานรายรอบ ค้างไว้จนกดบันทึก + ยืนยัน */}
-            <View style={s.jobBox}>
-              <View style={s.jobHead}>
-                <Ionicons name="megaphone" size={16} color={C.primary} />
-                <Text style={s.jobTitle}>สถานะจัดงาน</Text>
-                <Text style={[s.jobStatus, ROUNDS.some((r) => board.rounds[r].jobOn) && { color: C.ok }]}>{board.jobStatusText()}</Text>
-              </View>
+            <View style={s.panel}>
+              <PanelTitle
+                icon="megaphone"
+                title="สถานะจัดงาน"
+                right={
+                  <Text style={[s.panelRight, anyJob && { color: C.ok }]} numberOfLines={1}>
+                    {board.jobStatusText()}
+                  </Text>
+                }
+              />
               {roundView.jobRows.filter((jr) => jr.visible).map(({ round, edit }) => {
                 const card = board.rounds[round];
+                const rc = ROUND_COLOR[round];
                 const changed = board.jobChanged(round);
                 const show = card.jobOn && !changed;
                 const prog = show ? board.roundProgress(round) : null;
                 const pc = prog ? JOB_STATUS_COLOR[prog.status] : null;
                 const isShown = round === roundView.shown;
+                // วันที่ขึ้นของ: กรอกที่กล่องสถานะจัดงาน (ผู้ใช้สั่ง 12 พ.ย. 69) · รอบที่คนขับยืนยันแล้ว/ไม่มีสิทธิ์แก้ไขรอบเก่า แก้ไม่ได้ (เซิร์ฟเวอร์กันซ้ำ)
+                const loadLocked = card.locked || (!board.canEditRound && round !== roundView.current);
+                const loadChanged = card.head.load_at !== card.savedHead.load_at;
                 return (
-                  <View key={round} style={s.jobRow}>
-                  <TouchableOpacity
-                    style={[
-                      s.jobBtn,
-                      { flex: 1 },
-                      card.jobOn && { borderColor: ROUND_COLOR[round].c, backgroundColor: ROUND_COLOR[round].tint },
-                      isShown && { borderLeftWidth: 5, borderLeftColor: ROUND_COLOR[round].c },
-                      changed && s.jobChanged,
-                    ]}
-                    onPress={() => board.toggleJob(round)}
-                    disabled={board.saving}
-                    accessibilityState={{ checked: card.jobOn }}
-                  >
-                    <View style={[s.roundTag, { backgroundColor: '#fff' }]}>
-                      <Text style={[s.roundTagText, { color: ROUND_COLOR[round].c }]}>รอบ {round}</Text>
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={s.jobState}>{card.jobOn ? 'แจ้งจัดงานแล้ว' : 'ยังไม่แจ้ง'}</Text>
-                      <Text style={s.jobMeta} numberOfLines={2}>
-                        {board.jobMeta(round)}
-                      </Text>
-                      {prog && pc && (
-                        <View style={[s.jobProg, { backgroundColor: pc.bg }]}>
-                          <Text style={[s.jobProgLabel, { color: pc.c }]}>{JOB_STATUS_TEXT[prog.status]}</Text>
-                          <Text style={[s.jobProgCount, { color: pc.c }]}>{prog.total === 0 ? 'ไม่มีรายการค้าง' : 'จัดแล้ว ' + prog.packed + '/' + prog.total}</Text>
-                          {prog.total > 0 && prog.status !== 'loaded' && (
-                            <>
-                              <View style={s.jobBar}>
-                                <View style={{ width: Math.round((prog.packed / prog.total) * 100) + '%', backgroundColor: pc.c, height: '100%', borderRadius: 3 }} />
+                  <View key={round} style={{ gap: 6 }}>
+                  <View style={s.jobRow}>
+                    <TouchableOpacity
+                      style={[s.jobBtn, card.jobOn && { backgroundColor: rc.tint, borderColor: rc.c + '40' }, isShown && { borderColor: rc.c, borderWidth: 1.5 }, changed && s.jobChanged]}
+                      onPress={() => board.toggleJob(round)}
+                      disabled={board.saving}
+                      activeOpacity={0.75}
+                      accessibilityState={{ checked: card.jobOn }}
+                    >
+                      <RoundBadge round={round} size={42} off={!card.jobOn} />
+                      <View style={{ flex: 1, gap: 1 }}>
+                        <Text style={[s.jobState, card.jobOn && { color: rc.c }]}>{card.jobOn ? 'แจ้งจัดงานแล้ว' : 'ยังไม่แจ้งจัดงาน'}</Text>
+                        <Text style={s.jobMeta} numberOfLines={2}>
+                          {board.jobMeta(round)}
+                        </Text>
+                        {prog && pc && (
+                          <View style={s.jobProg}>
+                            <View style={s.jobProgTop}>
+                              <View style={[s.jobProgPill, { backgroundColor: pc.bg }]}>
+                                <Text style={[s.jobProgLabel, { color: pc.c }]}>{JOB_STATUS_TEXT[prog.status]}</Text>
                               </View>
-                              <Text style={[s.jobProgCount, { color: pc.c }]}>ค้างขึ้น {prog.left} รายการ</Text>
-                            </>
-                          )}
-                        </View>
-                      )}
-                    </View>
-                    <Ionicons
-                      name={card.jobSaved ? 'lock-closed' : card.jobOn ? 'checkmark-circle' : 'ellipse-outline'}
-                      size={card.jobSaved ? 18 : 22}
-                      color={card.jobOn ? ROUND_COLOR[round].c : '#cbd5e1'}
-                      accessibilityLabel={card.jobSaved ? 'แจ้งแล้ว ยกเลิกไม่ได้' : undefined}
-                    />
-                  </TouchableOpacity>
-                  {edit && (
-                    <TouchableOpacity style={s.jobEdit} onPress={() => board.setEditRound(round)} accessibilityLabel={'แก้ไขรอบ ' + round}>
-                      <Ionicons name="pencil" size={14} color={C.primary} />
-                      <Text style={s.jobEditText}>แก้ไข</Text>
+                              <Text style={s.jobProgCount}>{prog.total === 0 ? 'ไม่มีรายการค้าง' : 'จัดแล้ว ' + prog.packed + '/' + prog.total}</Text>
+                            </View>
+                            {prog.total > 0 && prog.status !== 'loaded' && (
+                              <>
+                                <View style={s.jobBar}>
+                                  <View style={{ width: `${Math.round((prog.packed / prog.total) * 100)}%`, backgroundColor: pc.c, height: '100%', borderRadius: 3 }} />
+                                </View>
+                                <Text style={s.jobProgLeft}>ค้างขึ้น {prog.left} รายการ</Text>
+                              </>
+                            )}
+                          </View>
+                        )}
+                      </View>
+                      <Ionicons
+                        name={card.jobSaved ? 'lock-closed' : card.jobOn ? 'checkmark-circle' : 'ellipse-outline'}
+                        size={card.jobSaved ? 18 : 24}
+                        color={card.jobOn ? rc.c : C.faint}
+                        accessibilityLabel={card.jobSaved ? 'แจ้งแล้ว ยกเลิกไม่ได้' : undefined}
+                      />
                     </TouchableOpacity>
-                  )}
+                    {edit && (
+                      <TouchableOpacity style={s.jobEdit} onPress={() => board.setEditRound(round)} accessibilityLabel={'แก้ไขรอบ ' + round}>
+                        <Ionicons name="pencil" size={14} color={C.primary} />
+                        <Text style={s.jobEditText}>แก้ไข</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                  <View style={[s.jobLoadField, loadChanged && s.jobLoadChanged, loadLocked && { opacity: 0.6 }]}>
+                    <Ionicons name="cube-outline" size={15} color={C.info} />
+                    <Text style={s.jobLoadText}>วันที่ขึ้นของ</Text>
+                    <View style={{ flex: 1 }}>
+                      <DateField value={card.head.load_at} onChange={(ymd) => board.setLoadAt(round, ymd)} placeholder="เลือกวันที่" disabled={loadLocked} />
+                    </View>
+                    {!!card.head.load_at && !loadLocked && (
+                      <TouchableOpacity onPress={() => board.setLoadAt(round, '')} hitSlop={8} accessibilityLabel={'ล้างวันที่ขึ้นของ รอบ ' + round}>
+                        <Ionicons name="close-circle" size={19} color={C.faint} />
+                      </TouchableOpacity>
+                    )}
+                  </View>
                   </View>
                 );
               })}
               {roundView.editing > 0 && (
                 <View style={s.jobView}>
+                  <Ionicons name="eye-outline" size={15} color={C.warn} />
                   <Text style={s.jobViewText}>กำลังแก้รอบ {roundView.editing} (ซ่อนรอบอื่น)</Text>
                   <TouchableOpacity onPress={() => board.setEditRound(0)} accessibilityLabel="กลับรอบล่าสุด">
                     <Text style={s.jobViewBack}>{roundView.current ? 'กลับรอบ ' + roundView.current + ' (ล่าสุด)' : 'ซ่อนรอบนี้'}</Text>
                   </TouchableOpacity>
                 </View>
               )}
-              <Text style={s.jobHint}>
-                <Ionicons name="print" size={11} color={C.muted} /> แจ้งจัดงานแล้วบันทึก จึงพิมพ์ใบเช็คของรอบนั้นได้
-              </Text>
+              <View style={s.hintRow}>
+                <Ionicons name="information-circle-outline" size={14} color={C.muted} />
+                <Text style={s.hintText}>แจ้งจัดงานแล้วบันทึก จึงพิมพ์ใบเช็คของรอบนั้นได้</Text>
+              </View>
             </View>
 
+            {/* รอบที่แสดง: ใบส่ง + ข้อมูลขนส่ง + ปุ่มคำสั่ง */}
             {ROUNDS.filter((round) => round === roundView.shown).map((round) => {
               const card = board.rounds[round];
               const head = card.head;
-              const rc = ROUND_COLOR[round];
               const ready = board.sheetReady(round);
+              const meta = headMeta(head);
+              const tiles: ReactNode[] = [
+                <ActTile
+                  key="head"
+                  icon="car"
+                  label="ข้อมูลใบส่ง"
+                  disabled={card.locked}
+                  onPress={() => {
+                    setHeadRound(round);
+                    setHeadDraft({ ...card.head });
+                  }}
+                />,
+                <ActTile
+                  key="sheet"
+                  icon="list"
+                  label="ใบเช็คของ"
+                  blocked={!ready}
+                  onPress={() => {
+                    if (board.sheetReady(round)) setSheetRound(round);
+                    else showToast(board.sheetBlockText(round));
+                  }}
+                />,
+                <ActTile key="who" icon="people" label="ผู้จัดของ" onPress={() => loadWho(round)} />,
+              ];
+              if (card.hasDo) {
+                tiles.push(
+                  <ActTile
+                    key="print"
+                    icon="print"
+                    label="พิมพ์ใบส่ง"
+                    onPress={() => Linking.openURL(API_BASE + '/print_delivery_note.php?doc_no=' + encodeURIComponent(card.do)).catch(() => showToast('เปิดหน้าเว็บไม่ได้'))}
+                  />,
+                  <ActTile key="driver" icon="clipboard" label="หน้าคนขับ" onPress={() => router.push({ pathname: '/DriverConfirmItems', params: { do_no: card.do } } as never)} />
+                );
+              }
+              const tileRows: ReactNode[][] = [];
+              for (let i = 0; i < tiles.length; i += 3) tileRows.push(tiles.slice(i, i + 3));
               return (
-                <View key={round} style={[s.roundCard, { borderTopColor: rc.c }, board.headChanged(round) && s.cardDirty, card.locked && s.roundCardLocked]}>
-                  <View style={s.roundCardTop}>
-                    <View style={[s.roundTag, { backgroundColor: rc.tint }]}>
-                      <Text style={[s.roundTagText, { color: rc.c }]}>
+                <View key={round} style={[s.panel, board.headChanged(round) && s.cardDirty, card.locked && s.panelLocked]}>
+                  <View style={s.rcTop}>
+                    <RoundBadge round={round} size={44} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.rcTitle}>
                         รอบ {round}
                         {round === 3 ? ' (สุดท้าย)' : ''}
                       </Text>
+                      <Text style={s.rcSub}>
+                        ครบ <Text style={{ fontWeight: '900', color: C.text }}>{counts.perRound[round - 1]}</Text> รายการ
+                      </Text>
                     </View>
-                    <Text style={s.roundCount}>
-                      ครบ <Text style={{ fontWeight: '900' }}>{counts.perRound[round - 1]}</Text> รายการ
-                    </Text>
+                    {card.locked && (
+                      <View style={[s.statePill, { backgroundColor: C.track }]}>
+                        <Ionicons name="lock-closed" size={11} color={C.soft} />
+                        <Text style={[s.statePillText, { color: C.soft }]}>ล็อกแล้ว</Text>
+                      </View>
+                    )}
                   </View>
-                  <View style={s.doLine}>
-                    <Ionicons name="document-text" size={14} color={C.muted} />
+
+                  <View style={s.doBox}>
+                    <Ionicons name="document-text-outline" size={16} color={C.soft} />
                     {card.hasDo ? (
                       <>
                         <Text style={s.doNo}>ใบส่ง {card.do}</Text>
-                        <Text style={[s.doState, card.locked ? { color: C.ok } : { color: C.warn }]}>{card.locked ? 'คนขับยืนยันรับของแล้ว' : 'รอคนขับยืนยัน'}</Text>
+                        <View style={[s.statePill, { backgroundColor: card.locked ? C.okBg : C.warnBg }]}>
+                          <Text style={[s.statePillText, { color: card.locked ? C.ok : C.warn }]}>{card.locked ? 'คนขับยืนยันรับของแล้ว' : 'รอคนขับยืนยัน'}</Text>
+                        </View>
                       </>
                     ) : card.missing ? (
                       <Text style={[s.doState, { color: C.bad }]}>ใบส่ง {card.do} ถูกลบไปแล้ว</Text>
@@ -3508,87 +3974,78 @@ export default function SiteItemCheckScreen() {
                   </View>
                   {card.source === 'adopted' && <Text style={s.roundNote}>ดึงจากใบส่งที่เปิดไว้ก่อน จะผูกเข้ารอบนี้เมื่อกดบันทึก</Text>}
                   {card.mismatch && <Text style={[s.roundNote, { color: C.bad }]}>จำนวนในใบส่งไม่ตรงกับหน้านี้ (มีคนแก้จากที่อื่น) ถ้าบันทึกรอบนี้ ใบส่งจะถูกแก้ตามหน้านี้</Text>}
-                  <Text style={s.headSummary}>{headSummary(head)}</Text>
-                  {!!headMeta(head) && <Text style={s.headMetaText}>{headMeta(head)}</Text>}
-                  <View style={s.roundBtns}>
-                    <TouchableOpacity
-                      style={[s.smallBtn, card.locked && { opacity: 0.45 }]}
-                      disabled={card.locked}
-                      onPress={() => {
-                        setHeadRound(round);
-                        setHeadDraft({ ...card.head });
-                      }}
-                    >
-                      <Ionicons name="car" size={13} color={C.primary} />
-                      <Text style={s.smallBtnText}>ข้อมูลใบส่ง</Text>
-                    </TouchableOpacity>
-                    {card.hasDo && (
-                      <>
-                        <TouchableOpacity style={s.smallBtn} onPress={() => Linking.openURL(API_BASE + '/print_delivery_note.php?doc_no=' + encodeURIComponent(card.do)).catch(() => showToast('เปิดหน้าเว็บไม่ได้'))}>
-                          <Ionicons name="print" size={13} color={C.primary} />
-                          <Text style={s.smallBtnText}>พิมพ์ใบส่ง</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={s.smallBtn} onPress={() => router.push({ pathname: '/DriverConfirmItems', params: { do_no: card.do } } as never)}>
-                          <Ionicons name="clipboard" size={13} color={C.primary} />
-                          <Text style={s.smallBtnText}>หน้าคนขับ</Text>
-                        </TouchableOpacity>
-                      </>
+
+                  <View style={s.infoBox}>
+                    <View style={s.infoLine}>
+                      <Ionicons name="car-outline" size={15} color={C.muted} />
+                      <Text style={s.infoText}>{headSummary(head)}</Text>
+                    </View>
+                    {!!meta && (
+                      <View style={s.infoLine}>
+                        <Ionicons name="calendar-outline" size={15} color={C.muted} />
+                        <Text style={[s.infoText, { color: C.soft, fontWeight: '500' }]}>{meta}</Text>
+                      </View>
                     )}
-                    <TouchableOpacity
-                      style={[s.smallBtn, !ready && s.smallBtnBlocked]}
-                      onPress={() => {
-                        if (board.sheetReady(round)) setSheetRound(round);
-                        else showToast(board.sheetBlockText(round));
-                      }}
-                    >
-                      <Ionicons name="list" size={13} color={ready ? C.primary : C.muted} />
-                      <Text style={[s.smallBtnText, !ready && { color: C.muted }]}>ใบเช็คของ</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={s.smallBtn} onPress={() => loadWho(round)}>
-                      <Ionicons name="person" size={13} color={C.primary} />
-                      <Text style={s.smallBtnText}>ผู้จัดของ</Text>
-                    </TouchableOpacity>
                   </View>
-                  {!!card.printed && <Text style={s.printed}>พิมพ์รายการแล้ว {card.printed}</Text>}
+
+                  <View style={{ gap: 8 }}>
+                    {tileRows.map((rowTiles, i) => (
+                      <View key={i} style={s.actRow}>
+                        {rowTiles}
+                        {Array.from({ length: 3 - rowTiles.length }).map((_, k) => (
+                          <View key={'pad' + k} style={{ flex: 1 }} />
+                        ))}
+                      </View>
+                    ))}
+                  </View>
+                  {!!card.printed && (
+                    <View style={s.printedRow}>
+                      <Ionicons name="checkmark-circle" size={14} color={C.ok} />
+                      <Text style={s.printed}>พิมพ์รายการแล้ว {card.printed}</Text>
+                    </View>
+                  )}
                 </View>
               );
             })}
 
             {board.others.length > 0 && (
               <View style={s.notice}>
-                <Text style={s.noticeTitle}>ใบส่งของอื่นของโครงการนี้</Text>
-                <Text style={s.noticeText}>(เกิน 3 รอบ จึงไม่อยู่ในรอบไหน จำนวนในใบเหล่านี้ไม่ได้นับในช่องรอบ)</Text>
-                {board.others.map((o) => (
-                  <Text key={o.no} style={s.noticeText}>
-                    {o.no} · {o.lines} รายการ · {o.confirmed ? 'คนขับยืนยันแล้ว' : 'รอคนขับยืนยัน'}
-                  </Text>
-                ))}
+                <View style={s.noticeIcon}>
+                  <Ionicons name="documents-outline" size={15} color={C.warn} />
+                </View>
+                <View style={{ flex: 1, gap: 2 }}>
+                  <Text style={s.noticeTitle}>ใบส่งของอื่นของโครงการนี้</Text>
+                  <Text style={s.noticeText}>(เกิน 3 รอบ จึงไม่อยู่ในรอบไหน จำนวนในใบเหล่านี้ไม่ได้นับในช่องรอบ)</Text>
+                  {board.others.map((o) => (
+                    <Text key={o.no} style={s.noticeText}>
+                      {o.no} · {o.lines} รายการ · {o.confirmed ? 'คนขับยืนยันแล้ว' : 'รอคนขับยืนยัน'}
+                    </Text>
+                  ))}
+                </View>
               </View>
             )}
 
+            {/* แท็บ + ค้นหา + ตัวกรอง */}
+            <View style={s.toolsHead}>
+              <Text style={s.toolsTitle}>รายการของ</Text>
+              {roundView.shown > 0 && <RoundPill round={roundView.shown} suffix=" ที่แสดง" />}
+            </View>
             <View style={s.tools}>
-              <View style={s.tabs}>
-                {(['todo', 'done', 'all'] as const).map((t) => (
-                  <TouchableOpacity key={t} style={[s.tab, tab === t && s.tabOn]} onPress={() => setTab(t)} aria-selected={tab === t}>
-                    <Text style={[s.tabText, tab === t && { color: '#fff' }]}>
-                      {t === 'todo' ? 'ค้าง' : t === 'done' ? 'ครบแล้ว' : 'ทั้งหมด'} {t === 'todo' ? counts.todo : t === 'done' ? counts.done : counts.all}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
+              <Segmented
+                options={[
+                  { key: 'todo', label: 'ค้าง', count: counts.todo, color: C.warn },
+                  { key: 'done', label: 'ครบแล้ว', count: counts.done, color: C.ok },
+                  { key: 'all', label: 'ทั้งหมด', count: counts.all, color: C.primary },
+                ]}
+                value={tab}
+                onChange={setTab}
+              />
               <View style={s.searchBox}>
-                <Ionicons name="search" size={15} color="#94a3b8" />
-                <TextInput
-                  value={search}
-                  onChangeText={setSearch}
-                  placeholder="ค้นหาชื่อรายการ เช่น ข้องอ"
-                  placeholderTextColor="#94a3b8"
-                  style={s.searchInput}
-                  autoCorrect={false}
-                />
+                <Ionicons name="search" size={16} color={C.muted} />
+                <TextInput value={search} onChangeText={setSearch} placeholder="ค้นหาชื่อรายการ เช่น ข้องอ" placeholderTextColor={C.muted} style={s.searchInput} autoCorrect={false} />
                 {!!search && (
                   <TouchableOpacity onPress={() => setSearch('')} hitSlop={8} accessibilityLabel="ล้างคำค้นหา">
-                    <Ionicons name="close-circle" size={16} color="#cbd5e1" />
+                    <Ionicons name="close-circle" size={17} color={C.faint} />
                   </TouchableOpacity>
                 )}
               </View>
@@ -3605,7 +4062,12 @@ export default function SiteItemCheckScreen() {
                 </TouchableOpacity>
               </View>
             </View>
-            {!!view!.sumText && <Text style={s.searchSum}>{view!.sumText}</Text>}
+            {!!view!.sumText && (
+              <View style={s.searchSum}>
+                <Ionicons name="search-circle" size={16} color={C.info} />
+                <Text style={s.searchSumText}>{view!.sumText}</Text>
+              </View>
+            )}
           </>
         )}
       </View>
@@ -3616,23 +4078,30 @@ export default function SiteItemCheckScreen() {
     if (sec === 'extra') {
       return (
         <View style={s.secHead}>
-          <Text style={s.secTitle}>
-            <Ionicons name="cube" size={14} color={C.warn} /> รายการนอก ปร.
-          </Text>
-          <Text style={s.secText}>
-            ครบ {counts.extraDone} จาก {counts.extraAll} แถว · แยกไว้ ไม่นับใน % เพราะอาจซ้ำกับรายการด้านบน
-          </Text>
+          <View style={[s.secIcon, { backgroundColor: C.warnBg }]}>
+            <Ionicons name="cube" size={15} color={C.warn} />
+          </View>
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text style={s.secTitle}>รายการนอก ปร.</Text>
+            <Text style={s.secText}>
+              ครบ {counts.extraDone} จาก {counts.extraAll} แถว · แยกไว้ ไม่นับใน % เพราะอาจซ้ำกับรายการด้านบน
+            </Text>
+          </View>
         </View>
       );
     }
     return (
       <View style={s.secHead}>
-        <Text style={s.secTitle}>
-          <Ionicons name="eye-off" size={14} color={C.muted} /> ไม่นับเป็นของ
-        </Text>
-        <Text style={s.secText}>{counts.skipAll} แถว เช่น หัวข้อ งานรื้อถอน งานบริการ รายการรวมค่าแรง และรายการที่ไม่มีราคากลาง/ทุน</Text>
-        <TouchableOpacity onPress={() => setSkipOpen((o) => !o)}>
-          <Text style={s.secToggle}>{skipOpen ? 'ซ่อน' : 'แสดง'}</Text>
+        <View style={[s.secIcon, { backgroundColor: C.track }]}>
+          <Ionicons name="eye-off" size={15} color={C.soft} />
+        </View>
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text style={s.secTitle}>ไม่นับเป็นของ</Text>
+          <Text style={s.secText}>{counts.skipAll} แถว เช่น หัวข้อ งานรื้อถอน งานบริการ รายการรวมค่าแรง และรายการที่ไม่มีราคากลาง/ทุน</Text>
+        </View>
+        <TouchableOpacity style={s.secToggle} onPress={() => setSkipOpen((o) => !o)}>
+          <Text style={s.secToggleText}>{skipOpen ? 'ซ่อน' : 'แสดง'}</Text>
+          <Ionicons name={skipOpen ? 'chevron-up' : 'chevron-down'} size={13} color={C.primary} />
         </TouchableOpacity>
       </View>
     );
@@ -3661,11 +4130,11 @@ export default function SiteItemCheckScreen() {
         insetsBottom={insets.bottom}
         footer={
           <View style={s.sheetActions}>
-            <TouchableOpacity style={[s.btn, s.btnOutline]} onPress={closeConfirm} disabled={!!busyText}>
-              <Text style={[s.btnText, { color: '#334155' }]}>กลับไปแก้</Text>
+            <TouchableOpacity style={[s.btn, s.btnGhost]} onPress={closeConfirm} disabled={!!busyText}>
+              <Text style={[s.btnText, { color: C.text }]}>กลับไปแก้</Text>
             </TouchableOpacity>
             <TouchableOpacity style={[s.btn, s.btnPrimary, !!busyText && { opacity: 0.7 }]} onPress={() => doSave()} disabled={!!busyText}>
-              {busyText ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="checkmark" size={16} color="#fff" />}
+              {busyText ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="checkmark" size={17} color="#fff" />}
               <Text style={[s.btnText, { color: '#fff' }]}>{busyText || 'ยืนยันบันทึก'}</Text>
             </TouchableOpacity>
           </View>
@@ -3691,15 +4160,17 @@ export default function SiteItemCheckScreen() {
         <View style={s.pickerOverlay}>
           <View style={s.picker}>
             <View style={{ alignItems: 'center', gap: 6 }}>
-              <Ionicons name="warning" size={30} color={C.warn} />
+              <View style={[s.centerIcon, { backgroundColor: C.warnBg, width: 60, height: 60, borderRadius: 22 }]}>
+                <Ionicons name="warning" size={28} color={C.warn} />
+              </View>
               <Text style={s.pickerTitle}>ยังไม่ได้บันทึก</Text>
               <Text style={s.leaveText}>แก้ไข {lines.length} รายการ ยังไม่ได้บันทึก ถ้าออกตอนนี้สิ่งที่แก้จะหายไป</Text>
             </View>
-            <ScrollView style={{ maxHeight: 220, marginTop: 8 }}>
+            <ScrollView style={{ maxHeight: 220, marginTop: 10 }}>
               <ChangeList lines={lines} />
             </ScrollView>
             {!!leave.error && <Text style={s.leaveError}>{leave.error}</Text>}
-            <View style={{ gap: 8, marginTop: 10 }}>
+            <View style={{ gap: 8, marginTop: 12 }}>
               <TouchableOpacity
                 style={[s.btn, s.btnPrimary, (!!leave.error || !!busyText) && { opacity: 0.5 }]}
                 disabled={!!leave.error || !!busyText}
@@ -3726,11 +4197,11 @@ export default function SiteItemCheckScreen() {
                   go();
                 }}
               >
-                <Ionicons name="exit" size={16} color="#fff" />
+                <Ionicons name="exit-outline" size={16} color="#fff" />
                 <Text style={[s.btnText, { color: '#fff' }]}>ออกโดยไม่บันทึก</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[s.btn, s.btnOutline]} disabled={!!busyText} onPress={() => setLeave(null)}>
-                <Text style={[s.btnText, { color: '#334155' }]}>ยกเลิก อยู่หน้านี้ต่อ</Text>
+              <TouchableOpacity style={[s.btn, s.btnGhost]} disabled={!!busyText} onPress={() => setLeave(null)}>
+                <Text style={[s.btnText, { color: C.text }]}>ยกเลิก อยู่หน้านี้ต่อ</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -3765,8 +4236,8 @@ export default function SiteItemCheckScreen() {
         insetsBottom={insets.bottom}
         footer={
           <View style={s.sheetActions}>
-            <TouchableOpacity style={[s.btn, s.btnOutline]} onPress={close}>
-              <Text style={[s.btnText, { color: '#334155' }]}>ยกเลิก</Text>
+            <TouchableOpacity style={[s.btn, s.btnGhost]} onPress={close}>
+              <Text style={[s.btnText, { color: C.text }]}>ยกเลิก</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[s.btn, s.btnPrimary]}
@@ -3779,13 +4250,14 @@ export default function SiteItemCheckScreen() {
                   receiver: d.receiver.trim(),
                   organizer: d.organizer.trim(),
                   deliver_at: d.deliver_at.replace('T', ' '),
+                  load_at: d.load_at,
                   note: d.note.trim(),
                 };
                 b.setHead(headRound, head);
                 close();
               }}
             >
-              <Ionicons name="checkmark" size={16} color="#fff" />
+              <Ionicons name="checkmark" size={17} color="#fff" />
               <Text style={[s.btnText, { color: '#fff' }]}>ตกลง</Text>
             </TouchableOpacity>
           </View>
@@ -3800,7 +4272,8 @@ export default function SiteItemCheckScreen() {
                 style={[s.segmentBtn, d.transport === t && s.segmentOn]}
                 onPress={() => set(t === d.transport ? {} : { transport: t, driver: '', vehicle: '', helper: '' })}
               >
-                <Text style={[s.segmentText, d.transport === t && { color: '#fff' }]}>{t === 'internal' ? 'รถบริษัท' : 'รถนอก / ขนส่ง'}</Text>
+                <Ionicons name={t === 'internal' ? 'business-outline' : 'cube-outline'} size={15} color={d.transport === t ? C.primary : C.muted} />
+                <Text style={[s.segmentText, d.transport === t && { color: C.primary }]}>{t === 'internal' ? 'รถบริษัท' : 'รถนอก / ขนส่ง'}</Text>
               </TouchableOpacity>
             ))}
           </View>
@@ -3810,20 +4283,23 @@ export default function SiteItemCheckScreen() {
                 คนขับ <Text style={{ color: C.bad }}>*</Text>
               </Text>
               <TouchableOpacity style={s.selectBox} onPress={() => setChoice('driver')}>
+                <Ionicons name="person-outline" size={15} color={C.muted} />
                 <Text style={[s.selectText, !d.driver && s.placeholder]}>{d.driver || 'เลือกคนขับ'}</Text>
-                <Ionicons name="chevron-down" size={14} color={C.muted} />
+                <Ionicons name="chevron-down" size={15} color={C.muted} />
               </TouchableOpacity>
               <Text style={s.formLabel}>คนรถ</Text>
               <TouchableOpacity style={s.selectBox} onPress={() => setChoice('helper')}>
+                <Ionicons name="people-outline" size={15} color={C.muted} />
                 <Text style={[s.selectText, !d.helper && s.placeholder]}>{d.helper || 'ไม่มี'}</Text>
-                <Ionicons name="chevron-down" size={14} color={C.muted} />
+                <Ionicons name="chevron-down" size={15} color={C.muted} />
               </TouchableOpacity>
               <Text style={s.formLabel}>
                 รถ <Text style={{ color: C.bad }}>*</Text>
               </Text>
               <TouchableOpacity style={s.selectBox} onPress={() => setChoice('vehicle')}>
+                <Ionicons name="car-outline" size={15} color={C.muted} />
                 <Text style={[s.selectText, !d.vehicle && s.placeholder]}>{d.vehicle ? carLabel(d.vehicle) : 'เลือกรถ'}</Text>
-                <Ionicons name="chevron-down" size={14} color={C.muted} />
+                <Ionicons name="chevron-down" size={15} color={C.muted} />
               </TouchableOpacity>
             </>
           ) : (
@@ -3831,22 +4307,34 @@ export default function SiteItemCheckScreen() {
               <Text style={s.formLabel}>
                 ชื่อคนขับหรือขนส่ง <Text style={{ color: C.bad }}>*</Text>
               </Text>
-              <TextInput style={s.textField} value={d.driver} onChangeText={(t) => set({ driver: t })} maxLength={255} placeholder="เช่น ส่งแฟลช" placeholderTextColor="#94a3b8" />
+              <TextInput style={s.textField} value={d.driver} onChangeText={(t) => set({ driver: t })} maxLength={255} placeholder="เช่น ส่งแฟลช" placeholderTextColor={C.muted} />
               <Text style={s.formLabel}>ทะเบียนรถ / เลขพัสดุ</Text>
-              <TextInput style={s.textField} value={d.vehicle} onChangeText={(t) => set({ vehicle: t })} maxLength={100} placeholder="ไม่บังคับ" placeholderTextColor="#94a3b8" />
+              <TextInput style={s.textField} value={d.vehicle} onChangeText={(t) => set({ vehicle: t })} maxLength={100} placeholder="ไม่บังคับ" placeholderTextColor={C.muted} />
             </>
           )}
           <Text style={s.formLabel}>ผู้จัดงาน</Text>
           <TouchableOpacity style={s.selectBox} onPress={() => setChoice('organizer')}>
-            <Ionicons name="person" size={14} color={C.muted} />
+            <Ionicons name="person" size={15} color={C.muted} />
             <Text style={[s.selectText, !d.organizer && s.placeholder]}>{d.organizer || 'เลือก/พิมพ์ชื่อ'}</Text>
             {!!d.organizer && (
               <TouchableOpacity onPress={() => set({ organizer: '' })} hitSlop={8} accessibilityLabel="ล้างชื่อผู้จัดงาน">
-                <Ionicons name="close-circle" size={16} color="#cbd5e1" />
+                <Ionicons name="close-circle" size={17} color={C.faint} />
               </TouchableOpacity>
             )}
           </TouchableOpacity>
           {!!d.organizer && !staffSet.has(d.organizer) && <Text style={s.fieldHint}>ไม่อยู่ในรายชื่อพนักงาน จะบันทึกตามที่พิมพ์</Text>}
+          {/* วันที่ขึ้นของ: แจ้งทีมจัดของว่าขึ้นรถวันไหน (หน้าแจ้งจัดงาน/สถานะจัดงาน/ใบเช็คของ) ไม่อยู่ในใบส่งของ */}
+          <Text style={s.formLabel}>วันที่ขึ้นของ</Text>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <View style={{ flex: 1 }}>
+              <DateField value={d.load_at} onChange={(ymd) => set({ load_at: ymd })} placeholder="เลือกวันที่ขึ้นของ" />
+            </View>
+            {!!d.load_at && (
+              <TouchableOpacity onPress={() => set({ load_at: '' })} style={{ justifyContent: 'center' }} accessibilityLabel="ล้างวันที่ขึ้นของ">
+                <Ionicons name="close-circle" size={19} color={C.faint} />
+              </TouchableOpacity>
+            )}
+          </View>
           <Text style={s.formLabel}>วันเวลาส่ง</Text>
           <View style={{ flexDirection: 'row', gap: 8 }}>
             <View style={{ flex: 3 }}>
@@ -3857,14 +4345,14 @@ export default function SiteItemCheckScreen() {
             </View>
             {!!d.deliver_at && (
               <TouchableOpacity onPress={() => set({ deliver_at: '' })} style={{ justifyContent: 'center' }} accessibilityLabel="ล้างวันเวลาส่ง">
-                <Ionicons name="close-circle" size={18} color="#cbd5e1" />
+                <Ionicons name="close-circle" size={19} color={C.faint} />
               </TouchableOpacity>
             )}
           </View>
           <Text style={s.formLabel}>ผู้รับหน้างาน</Text>
-          <TextInput style={s.textField} value={d.receiver} onChangeText={(t) => set({ receiver: t })} maxLength={100} placeholder="เช่น ช่าง A, โฟร์แมน B" placeholderTextColor="#94a3b8" />
+          <TextInput style={s.textField} value={d.receiver} onChangeText={(t) => set({ receiver: t })} maxLength={100} placeholder="เช่น ช่าง A, โฟร์แมน B" placeholderTextColor={C.muted} />
           <Text style={s.formLabel}>หมายเหตุใบส่ง</Text>
-          <TextInput style={[s.textField, { minHeight: 64, textAlignVertical: 'top' }]} value={d.note} onChangeText={(t) => set({ note: t })} maxLength={2000} multiline />
+          <TextInput style={[s.textField, { minHeight: 72, textAlignVertical: 'top' }]} value={d.note} onChangeText={(t) => set({ note: t })} maxLength={2000} multiline />
         </ScrollView>
         <ChoiceModal
           visible={choice === 'driver' || choice === 'helper'}
@@ -3912,16 +4400,16 @@ export default function SiteItemCheckScreen() {
     const lines = b.checkLines();
     let number = 0;
     let section = 'goods';
-    const meta = [head.deliver_at ? 'วันที่ส่ง ' + thaiDateTime(head.deliver_at) : '', head.driver ? headSummary(head) : '', head.organizer ? 'ผู้จัดงาน ' + head.organizer : ''].filter(Boolean).join(' · ');
+    const meta = [head.load_at ? 'วันที่ขึ้นของ ' + thaiDateTime(head.load_at) : '', head.deliver_at ? 'วันที่ส่ง ' + thaiDateTime(head.deliver_at) : '', head.driver ? headSummary(head) : '', head.organizer ? 'ผู้จัดงาน ' + head.organizer : ''].filter(Boolean).join(' · ');
     const subCount = lines.filter((l) => l.isSub).length;
     const rowsOut: ReactNode[] = [];
     lines.forEach((line, idx) => {
       if (line.sec !== section) {
         section = line.sec;
         rowsOut.push(
-          <Text key={'sec' + idx} style={s.sheetSec}>
-            รายการนอก ปร.
-          </Text>
+          <View key={'sec' + idx} style={s.sheetSecWrap}>
+            <Text style={s.sheetSec}>รายการนอก ปร.</Text>
+          </View>
         );
       }
       const tr = line.tr;
@@ -3930,7 +4418,7 @@ export default function SiteItemCheckScreen() {
       const detail = line.isSub ? (line.parentName ? 'ย่อยของ ' + line.parentName : '') : (tr as Row).partsText;
       const unit = line.isSub ? (tr as Sub).unit.trim() : (tr as Row).unit;
       rowsOut.push(
-        <View key={'l' + idx} style={[s.sheetRow, line.isSub && { backgroundColor: '#fafbff' }]}>
+        <View key={'l' + idx} style={[s.sheetRow, line.isSub && { backgroundColor: '#FAFBFE' }]}>
           <Text style={s.sheetNo}>{line.isSub ? '' : number}</Text>
           <View style={{ flex: 1 }}>
             <Text style={s.sheetName}>
@@ -3958,8 +4446,8 @@ export default function SiteItemCheckScreen() {
         insetsBottom={insets.bottom}
         footer={
           <View style={s.sheetActions}>
-            <TouchableOpacity style={[s.btn, s.btnOutline]} onPress={() => setSheetRound(0)}>
-              <Text style={[s.btnText, { color: '#334155' }]}>ปิด</Text>
+            <TouchableOpacity style={[s.btn, s.btnGhost]} onPress={() => setSheetRound(0)}>
+              <Text style={[s.btnText, { color: C.text }]}>ปิด</Text>
             </TouchableOpacity>
             <TouchableOpacity style={[s.btn, s.btnPrimary, !lines.length && { opacity: 0.5 }]} disabled={!lines.length} onPress={() => printSheet(round)}>
               <Ionicons name="print" size={16} color="#fff" />
@@ -3969,7 +4457,10 @@ export default function SiteItemCheckScreen() {
         }
       >
         <ScrollView contentContainerStyle={{ paddingBottom: 12 }}>
-          <Text style={s.sheetBasis}>{SHEET_BASIS}</Text>
+          <View style={s.basis}>
+            <Ionicons name="information-circle-outline" size={15} color={C.muted} />
+            <Text style={s.basisText}>{SHEET_BASIS}</Text>
+          </View>
           <View style={s.sheetTableHead}>
             <Text style={[s.sheetTh, { width: 28 }]}>#</Text>
             <Text style={[s.sheetTh, { flex: 1 }]}>รายการ / หมายเหตุ</Text>
@@ -4045,25 +4536,29 @@ export default function SiteItemCheckScreen() {
         {bar?.show && <Text style={s.sheetDirty}>มีค่าที่ยังไม่บันทึก ตารางนี้แสดงเฉพาะที่บันทึกแล้ว</Text>}
         <ScrollView contentContainerStyle={{ paddingBottom: 16 }}>
           {who.loading ? (
-            <Text style={s.emptySmall}>กำลังโหลด...</Text>
+            <View style={{ alignItems: 'center', paddingTop: 24, gap: 8 }}>
+              <ActivityIndicator color={C.primary} />
+              <Text style={s.emptySmall}>กำลังโหลด...</Text>
+            </View>
           ) : who.error ? (
             <Text style={[s.emptySmall, { color: C.bad }]}>{who.error}</Text>
           ) : !shown.length ? (
             <Text style={s.emptySmall}>รอบนี้ยังไม่มีใครบันทึก</Text>
           ) : (
             shown.map((line, i) => (
-              <View key={line.key} style={[s.whoRow, line.sub && { backgroundColor: '#fafbff' }]}>
+              <View key={line.key} style={[s.whoRow, line.sub && { backgroundColor: '#FAFBFE' }]}>
                 <Text style={s.whoName}>
-                  {i + 1}. {line.sub ? '↳ ' : ''}
+                  <Text style={s.whoNo}>{i + 1}. </Text>
+                  {line.sub ? '↳ ' : ''}
                   {line.name}
                 </Text>
                 <View style={s.whoBoxes}>
                   <View style={s.whoBox}>
-                    <Text style={s.whoBoxHead}>จัด</Text>
+                    <Text style={s.whoBoxHead}>จัดของ</Text>
                     {boxCell(line, 'pack')}
                   </View>
                   <View style={s.whoBox}>
-                    <Text style={s.whoBoxHead}>ขึ้น</Text>
+                    <Text style={s.whoBoxHead}>ขึ้นรถ</Text>
                     {boxCell(line, 'load')}
                   </View>
                 </View>
@@ -4163,7 +4658,7 @@ export default function SiteItemCheckScreen() {
           {!locked &&
             Array.from({ length: Math.max(0, b.photoMax - total) }).map((_, i) => (
               <TouchableOpacity key={'slot' + i} style={[s.photoTile, s.photoSlot]} disabled={full} onPress={() => addPhotos(b, tr, round, false)}>
-                <Ionicons name="add" size={22} color={C.muted} />
+                <Ionicons name="add" size={24} color={C.muted} />
                 <Text style={s.photoCap}>เพิ่มรูป</Text>
               </TouchableOpacity>
             ))}
@@ -4201,10 +4696,10 @@ export default function SiteItemCheckScreen() {
     const canceled = pick.list.filter((p: any) => p.cancel).length;
     return (
       <SheetModal visible onClose={() => setPick(null)} title="เลือกหน้างาน" insetsTop={insets.top} insetsBottom={insets.bottom}>
-        <View style={{ paddingHorizontal: 14, gap: 8 }}>
+        <View style={{ paddingHorizontal: 16, gap: 10, paddingBottom: 6 }}>
           <View style={s.searchBox}>
-            <Ionicons name="search" size={15} color="#94a3b8" />
-            <TextInput value={pick.q} onChangeText={(q) => setPick((p) => (p ? { ...p, q } : p))} placeholder="พิมพ์เลขหน้างาน, หน่วยงาน หรือชื่อโครงการ..." placeholderTextColor="#94a3b8" style={s.searchInput} />
+            <Ionicons name="search" size={16} color={C.muted} />
+            <TextInput value={pick.q} onChangeText={(q) => setPick((p) => (p ? { ...p, q } : p))} placeholder="พิมพ์เลขหน้างาน, หน่วยงาน หรือชื่อโครงการ..." placeholderTextColor={C.muted} style={s.searchInput} />
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
             {[''].concat(coNames).map((co) => (
@@ -4217,7 +4712,7 @@ export default function SiteItemCheckScreen() {
           </ScrollView>
           {canceled > 0 && (
             <TouchableOpacity style={s.pickCancel} onPress={() => setPick((p) => (p ? { ...p, cancel: !p.cancel } : p))}>
-              <Ionicons name={pick.cancel ? 'checkbox' : 'square-outline'} size={16} color={C.primary} />
+              <Ionicons name={pick.cancel ? 'checkbox' : 'square-outline'} size={17} color={C.primary} />
               <Text style={s.pickCancelText}>แสดงงานที่ยกเลิก ({canceled})</Text>
             </TouchableOpacity>
           )}
@@ -4243,11 +4738,10 @@ export default function SiteItemCheckScreen() {
                     if (!cur) requestProject(p.id);
                   }}
                 >
-                  <View style={s.pickCode}>
-                    <Text style={s.pickCodeText}>{p.code}</Text>
-                    {cur && <Text style={s.pickCur}>เปิดอยู่</Text>}
+                  <View style={[s.pickCode, cur && { backgroundColor: C.primary }]}>
+                    <Text style={[s.pickCodeText, cur && { color: '#fff' }]}>{p.code}</Text>
                   </View>
-                  <View style={{ flex: 1 }}>
+                  <View style={{ flex: 1, gap: 1 }}>
                     <Text style={s.pickCus} numberOfLines={1}>
                       {p.cus || 'ไม่ระบุหน่วยงาน'}
                     </Text>
@@ -4255,6 +4749,7 @@ export default function SiteItemCheckScreen() {
                       {p.co ? '[' + p.co + '] ' : ''}
                       {p.name}
                     </Text>
+                    {cur && <Text style={s.pickCur}>เปิดอยู่</Text>}
                   </View>
                   <Text style={[s.pickStatus, p.cancel && { color: C.bad }]} numberOfLines={2}>
                     {p.st}
@@ -4270,42 +4765,63 @@ export default function SiteItemCheckScreen() {
 
   return (
     <SafeAreaView style={s.safe} edges={['left', 'right']}>
+      <LinearGradient colors={BG_GRAD} locations={[0, 0.4, 1]} style={StyleSheet.absoluteFill} pointerEvents="none" />
+      <View ref={listBoxRef} collapsable={false} style={{ flex: 1 }}>
       <FlatList
+        ref={listRef}
+        onScroll={(e) => {
+          scrollYRef.current = e.nativeEvent.contentOffset.y;
+        }}
+        scrollEventThrottle={16}
         data={hasItems ? view!.items : []}
         keyExtractor={(item) => item.key}
         renderItem={renderItem}
         extraData={b.ctx}
         ListHeaderComponent={renderHeader()}
-        ListEmptyComponent={hasItems && view!.emptyText ? <Text style={s.emptyList}>{view!.emptyText}</Text> : undefined}
-        contentContainerStyle={{ paddingBottom: (bar?.show ? 150 : 40) + insets.bottom }}
+        ListEmptyComponent={
+          hasItems && view!.emptyText ? (
+            <View style={s.emptyList}>
+              <Ionicons name={tab === 'todo' && !search ? 'checkmark-done-circle-outline' : 'search-outline'} size={34} color={C.faint} />
+              <Text style={s.emptyListText}>{view!.emptyText}</Text>
+            </View>
+          ) : undefined
+        }
+        contentContainerStyle={{ paddingTop: 12, paddingBottom: (bar?.show && !kbOpen ? 170 : 40) + insets.bottom + kbPad }}
         keyboardShouldPersistTaps="handled"
         removeClippedSubviews={false}
         initialNumToRender={12}
         windowSize={9}
       />
+      </View>
 
-      {bar?.show && (
-        <View style={[s.saveBar, { paddingBottom: 10 + insets.bottom }, bar.problems.length > 0 && { borderTopColor: C.bad }]}>
-          <Text style={[s.saveMsg, bar.problems.length > 0 && { color: C.bad }]}>
-            <Ionicons name="alert-circle" size={13} color={bar.problems.length ? C.bad : C.warn} /> {bar.message}
-          </Text>
+      {/* ซ่อนตอนคีย์บอร์ดขึ้น (ไม่ให้ทับช่องที่กำลังพิมพ์) · ปิดคีย์บอร์ดแล้วกลับมา */}
+      {bar?.show && !kbOpen && (
+        <Animated.View
+          entering={FadeInDown.duration(220)}
+          exiting={FadeOut.duration(160)}
+          style={[s.saveBar, { bottom: 10 + insets.bottom }, bar.problems.length > 0 && s.saveBarBad]}
+        >
+          <View style={s.saveMsgRow}>
+            <Ionicons name={bar.problems.length ? 'alert-circle' : 'create'} size={17} color={bar.problems.length ? C.bad : C.warn} />
+            <Text style={[s.saveMsg, bar.problems.length > 0 && { color: C.bad }]}>{bar.message}</Text>
+          </View>
           {!!bar.syncNote && <Text style={s.syncNote}>{bar.syncNote}</Text>}
           <View style={s.saveActions}>
-            <TouchableOpacity style={[s.btn, s.btnOutline]} onPress={askDiscard} disabled={b.saving}>
-              <Text style={[s.btnText, { color: '#334155' }]}>ยกเลิกการแก้ไข</Text>
+            <TouchableOpacity style={[s.btn, s.btnGhost]} onPress={askDiscard} disabled={b.saving}>
+              <Text style={[s.btnText, { color: C.text }]}>ยกเลิกการแก้ไข</Text>
             </TouchableOpacity>
             <TouchableOpacity style={[s.btn, s.btnPrimary, !bar.canSave && { opacity: 0.5 }]} onPress={openConfirm} disabled={!bar.canSave}>
               <Ionicons name="save" size={16} color="#fff" />
               <Text style={[s.btnText, { color: '#fff' }]}>บันทึก</Text>
             </TouchableOpacity>
           </View>
-        </View>
+        </Animated.View>
       )}
 
       {!!toast && (
-        <View style={[s.toast, { bottom: (bar?.show ? 150 : 24) + insets.bottom }]} pointerEvents="none">
+        <Animated.View key={toast.id} entering={FadeInDown.duration(200)} exiting={FadeOut.duration(160)} style={[s.toast, { bottom: kbOpen ? kbPad + 12 : (bar?.show ? 170 : 24) + insets.bottom }]} pointerEvents="none">
           <Text style={s.toastText}>{toast.text}</Text>
-        </View>
+        </Animated.View>
       )}
 
       {renderConfirm()}
@@ -4335,7 +4851,7 @@ export default function SiteItemCheckScreen() {
 
 function ChangeList({ lines }: { lines: ChangeLine[] }) {
   return (
-    <ScrollView contentContainerStyle={{ paddingHorizontal: 14, paddingBottom: 10, gap: 8 }}>
+    <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 10, gap: 8 }}>
       {lines.map((line, i) => (
         <View key={i} style={s.changeItem}>
           <Text style={s.changeName}>{line.name}</Text>
@@ -4392,28 +4908,28 @@ function OrganizerModal({ visible, staff, value, onPick, onClose }: { visible: b
         <View style={s.picker}>
           <View style={s.pickerHead}>
             <Text style={s.pickerTitle}>ผู้จัดงาน</Text>
-            <TouchableOpacity onPress={onClose} hitSlop={8}>
-              <Ionicons name="close" size={20} color={C.muted} />
+            <TouchableOpacity onPress={onClose} hitSlop={8} style={s.closeBtnSm}>
+              <Ionicons name="close" size={18} color={C.soft} />
             </TouchableOpacity>
           </View>
           <View style={s.pickerSearch}>
-            <Ionicons name="person" size={14} color="#94a3b8" />
-            <TextInput value={q} onChangeText={setQ} placeholder="พิมพ์ค้นหาชื่อ" placeholderTextColor="#94a3b8" style={s.pickerSearchInput} maxLength={255} autoFocus />
+            <Ionicons name="person" size={15} color={C.muted} />
+            <TextInput value={q} onChangeText={setQ} placeholder="พิมพ์ค้นหาชื่อ" placeholderTextColor={C.muted} style={s.pickerSearchInput} maxLength={255} autoFocus />
           </View>
           <Text style={s.comboHead}>{key ? (matches.length ? 'พบ ' + matches.length + ' คน' : 'ไม่พบในรายชื่อพนักงาน') : 'รายชื่อพนักงาน ' + staff.length + ' คน'}</Text>
           <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled">
             {matches.slice(0, 200).map((name) => (
               <TouchableOpacity key={name} style={[s.pickerOption, name === value && s.pickerOptionOn]} onPress={() => onPick(name)}>
-                <View style={[s.avatar, { backgroundColor: avatarColor(name) }]}>
-                  <Text style={s.avatarText}>{initialOf(name)}</Text>
-                </View>
+                <Avatar name={name} size={28} />
                 <Text style={[s.pickerOptionText, name === value && { color: C.primary, fontWeight: '800' }]}>{name}</Text>
-                {name === value && <Ionicons name="checkmark" size={16} color={C.primary} />}
+                {name === value && <Ionicons name="checkmark-circle" size={18} color={C.primary} />}
               </TouchableOpacity>
             ))}
             {!!query && !staff.includes(query) && (
               <TouchableOpacity style={s.pickerOption} onPress={() => onPick(query)}>
-                <Ionicons name="pencil" size={14} color={C.muted} />
+                <View style={[s.avatar, { width: 28, height: 28, borderRadius: 14, backgroundColor: C.track }]}>
+                  <Ionicons name="pencil" size={13} color={C.soft} />
+                </View>
                 <View style={{ flex: 1 }}>
                   <Text style={s.pickerOptionText}>ใช้ชื่อ “{query}”</Text>
                   <Text style={s.fieldHint}>ไม่อยู่ในรายชื่อพนักงาน</Text>
@@ -4432,7 +4948,7 @@ function sheetHtml(b: Board, round: number) {
   const esc = (v: string) => v.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
   const card = b.rounds[round];
   const head = card.head;
-  const meta = [head.deliver_at ? 'วันที่ส่ง ' + thaiDateTime(head.deliver_at) : '', head.driver ? headSummary(head) : '', head.organizer ? 'ผู้จัดงาน ' + head.organizer : ''].filter(Boolean).join(' · ');
+  const meta = [head.load_at ? 'วันที่ขึ้นของ ' + thaiDateTime(head.load_at) : '', head.deliver_at ? 'วันที่ส่ง ' + thaiDateTime(head.deliver_at) : '', head.driver ? headSummary(head) : '', head.organizer ? 'ผู้จัดงาน ' + head.organizer : ''].filter(Boolean).join(' · ');
   let number = 0;
   let section = 'goods';
   const rows = b
@@ -4473,291 +4989,387 @@ function sheetHtml(b: Board, round: number) {
 
 // -------------------- Styles --------------------
 
+const TABULAR = { fontVariant: ['tabular-nums' as const] };
+const CARD_SHADOW = '0 1px 2px rgba(30,45,90,0.04), 0 8px 22px rgba(30,45,90,0.07)';
+
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: C.bg },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 10, backgroundColor: C.bg },
-  errorText: { color: '#475569', fontSize: 13.5, textAlign: 'center', lineHeight: 20 },
-  primaryBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: C.primary, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10 },
-  primaryBtnText: { color: '#fff', fontSize: 13, fontWeight: '800' },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 28, gap: 10, backgroundColor: C.bg },
+  centerIcon: { width: 76, height: 76, borderRadius: 26, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
+  centerTitle: { fontSize: 16.5, fontWeight: '800', color: C.text, textAlign: 'center' },
+  centerHint: { fontSize: 13, color: C.muted, fontWeight: '600' },
+  errorText: { color: C.soft, fontSize: 13.5, textAlign: 'center', lineHeight: 20 },
+  primaryBtn: { flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: C.primary, borderRadius: 14, paddingHorizontal: 20, paddingVertical: 12, marginTop: 6, boxShadow: '0 8px 18px rgba(36,89,234,0.28)' },
+  primaryBtnText: { color: '#fff', fontSize: 14, fontWeight: '800' },
 
-  backs: { flexDirection: 'row', paddingHorizontal: 12, paddingTop: 10 },
-  boardBack: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderColor: C.primary, backgroundColor: C.primarySoft, borderRadius: 50, paddingHorizontal: 12, paddingVertical: 6 },
-  boardBackText: { color: C.primary, fontSize: 12.5, fontWeight: '800' },
-  headCard: { margin: 12, marginBottom: 8, backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: C.line, padding: 12, gap: 6 },
-  headTop: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  headIcon: { width: 38, height: 38, borderRadius: 10, backgroundColor: C.primarySoft, alignItems: 'center', justifyContent: 'center' },
-  headTitle: { fontSize: 17, fontWeight: '900', color: C.text },
-  headCustomer: { fontSize: 12.5, color: '#475569', marginTop: 1 },
-  headProject: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 2 },
-  headName: { fontSize: 13.5, color: C.text, fontWeight: '700', lineHeight: 20 },
-  company: { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3, maxWidth: '100%' },
-  companyText: { fontSize: 11.5, fontWeight: '900' },
-  codeBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: C.primarySoft, borderRadius: 7, paddingHorizontal: 9, paddingVertical: 4 },
-  codeBtnText: { color: C.primary, fontSize: 12.5, fontWeight: '900' },
-  shareBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', paddingVertical: 4 },
-  shareText: { fontSize: 11.5, color: C.muted, fontWeight: '600' },
-  liveBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 50, backgroundColor: '#ecfdf5', paddingHorizontal: 9, paddingVertical: 5 },
-  liveBadgeOff: { backgroundColor: '#f1f5f9' },
+  // หัวหน้า
+  hero: { marginHorizontal: 12, marginBottom: 12, backgroundColor: '#fff', borderRadius: 24, borderWidth: 1, borderColor: '#EDF0F7', padding: 16, gap: 8, boxShadow: CARD_SHADOW },
+  heroTop: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 2 },
+  backChip: { flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 50, backgroundColor: C.primarySoft, paddingLeft: 9, paddingRight: 12, paddingVertical: 6 },
+  backChipText: { color: C.primary, fontSize: 12.5, fontWeight: '800' },
+  livePill: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 50, backgroundColor: '#E9FBF3', paddingHorizontal: 10, paddingVertical: 5 },
+  livePillOff: { backgroundColor: C.track },
   liveDot: { width: 7, height: 7, borderRadius: 4 },
-  liveBadgeText: { fontSize: 10.5, fontWeight: '800', color: C.ok },
+  livePillText: { fontSize: 11, fontWeight: '800', color: C.ok },
+  heroProject: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
+  codeBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: C.primarySoft, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5 },
+  codeKicker: { color: C.muted, fontSize: 11.5, fontWeight: '700' },
+  codeText: { color: C.primary, fontSize: 14, fontWeight: '900', letterSpacing: 0.2, ...TABULAR },
+  company: { borderRadius: 7, paddingHorizontal: 8, paddingVertical: 4, maxWidth: '100%' },
+  companyText: { fontSize: 11.5, fontWeight: '900', letterSpacing: 0.3 },
+  heroName: { fontSize: 17, color: C.text, fontWeight: '800', lineHeight: 24 },
+  heroCustomer: { fontSize: 13, color: C.soft, lineHeight: 19, marginTop: -4 },
 
-  presence: { marginHorizontal: 12, marginBottom: 8, backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: C.line, padding: 10, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
-  presenceTitle: { fontSize: 12.5, color: C.text },
-  presenceList: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, width: '100%' },
-  presenceUser: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#f8fafc', borderRadius: 50, borderWidth: 1, borderColor: C.line, paddingLeft: 3, paddingRight: 9, paddingVertical: 3, maxWidth: '100%' },
-  presenceMe: { borderColor: C.primary, backgroundColor: C.primarySoft },
-  presenceName: { fontSize: 12, color: C.text, flexShrink: 1 },
-  presenceTag: { fontSize: 10, fontWeight: '900', color: C.primary },
-  avatar: { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
-  avatarText: { color: '#fff', fontSize: 11, fontWeight: '900' },
+  progress: { backgroundColor: C.surface2, borderRadius: 18, borderWidth: 1, borderColor: C.lineSoft, padding: 12, gap: 9, marginTop: 4 },
+  progressTop: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' },
+  progressLabel: { fontSize: 13, fontWeight: '800', color: C.soft },
+  progressPct: { fontSize: 24, fontWeight: '900', color: C.primary, ...TABULAR },
+  progressPctUnit: { fontSize: 14, fontWeight: '800' },
+  sumBar: { height: 10, borderRadius: 5, backgroundColor: '#E3E8F1', flexDirection: 'row', overflow: 'hidden' },
+  legend: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  legendDot: { width: 8, height: 8, borderRadius: 4 },
+  legendText: { fontSize: 11.5, color: C.soft, fontWeight: '600' },
+  statRow: { flexDirection: 'row', gap: 8 },
+  statTile: { flex: 1, alignItems: 'center', backgroundColor: '#fff', borderRadius: 12, paddingVertical: 8, borderWidth: 1, borderColor: C.lineSoft },
+  statTileNum: { fontSize: 18, fontWeight: '900', color: C.text, ...TABULAR },
+  statTileLabel: { fontSize: 11.5, color: C.muted, fontWeight: '700', marginTop: 1 },
 
-  notice: { marginHorizontal: 12, marginBottom: 8, backgroundColor: C.warnBg, borderRadius: 12, padding: 10, gap: 3 },
-  noticeTitle: { fontSize: 12.5, fontWeight: '900', color: C.warn },
-  noticeText: { fontSize: 12, color: '#7c2d12', lineHeight: 18 },
-  emptyPage: { textAlign: 'center', color: C.muted, fontSize: 14, padding: 30 },
+  heroFoot: { flexDirection: 'row', alignItems: 'center', gap: 10, borderTopWidth: 1, borderTopColor: C.lineSoft, paddingTop: 12, marginTop: 4 },
+  avatarStack: { flexDirection: 'row', alignItems: 'center' },
+  stackItem: { borderRadius: 16, borderWidth: 2, borderColor: '#fff' },
+  stackMore: { width: 32, height: 32, borderRadius: 16, backgroundColor: C.track, alignItems: 'center', justifyContent: 'center' },
+  stackMoreText: { fontSize: 11, fontWeight: '800', color: C.soft },
+  presenceTitle: { fontSize: 12.5, color: C.text, fontWeight: '800' },
+  presenceNames: { fontSize: 11.5, color: C.muted, marginTop: 1 },
+  shareBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 50, borderWidth: 1, borderColor: C.primaryLine, paddingHorizontal: 11, paddingVertical: 7 },
+  shareText: { fontSize: 12, color: C.primary, fontWeight: '800' },
+  avatar: { alignItems: 'center', justifyContent: 'center' },
+  avatarText: { color: '#fff', fontWeight: '800' },
 
-  summary: { marginHorizontal: 12, marginBottom: 8, backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: C.line, padding: 12, gap: 8 },
-  sumHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  sumTitle: { fontSize: 13, fontWeight: '800', color: C.text },
-  sumPct: { fontSize: 20, fontWeight: '900', color: C.primary },
-  sumBar: { height: 9, borderRadius: 5, backgroundColor: '#eef2f7', flexDirection: 'row', overflow: 'hidden' },
-  sumList: { flexDirection: 'row', gap: 14 },
-  sumItem: { fontSize: 12.5, fontWeight: '800', color: C.text },
+  notice: { flexDirection: 'row', gap: 10, marginHorizontal: 12, marginBottom: 12, backgroundColor: C.warnBg, borderRadius: 16, borderWidth: 1, borderColor: '#FBE3BC', padding: 12 },
+  noticeIcon: { width: 30, height: 30, borderRadius: 10, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
+  noticeTitle: { fontSize: 13, fontWeight: '800', color: C.warn },
+  // รับของคืนจากหน้างาน
+  returnPanel: { marginHorizontal: 12, marginBottom: 12, backgroundColor: '#fff', borderRadius: 18, borderWidth: 1, borderColor: '#F8C9D3', borderLeftWidth: 4, borderLeftColor: C.bad, padding: 12, gap: 8 },
+  returnHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  returnTitle: { fontSize: 14, fontWeight: '800', color: C.bad },
+  returnTarget: { fontSize: 12, color: C.soft },
+  returnItem: { flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderColor: C.line, borderRadius: 12, padding: 10 },
+  returnLine: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
+  returnName: { fontSize: 13, fontWeight: '700', color: C.text },
+  returnQty: { fontSize: 13, fontWeight: '800', color: C.bad },
+  returnMeta: { fontSize: 11.5, color: C.soft },
+  returnBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999, borderWidth: 1, borderColor: C.bad, backgroundColor: '#fff' },
+  returnBtnText: { fontSize: 12, fontWeight: '800', color: C.bad },
+  returnCancel: { fontSize: 12.5, fontWeight: '700', color: C.primary, textDecorationLine: 'underline' },
+  noticeText: { fontSize: 12, color: '#7C4A12', lineHeight: 18 },
+  emptyPage: { alignItems: 'center', gap: 6, padding: 30 },
+  emptyPageText: { color: C.soft, fontSize: 14, fontWeight: '700' },
 
-  jobBox: { marginHorizontal: 12, marginBottom: 8, backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: C.line, padding: 12, gap: 8 },
-  jobHead: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
-  jobTitle: { fontSize: 13.5, fontWeight: '900', color: C.text },
-  jobStatus: { fontSize: 12, fontWeight: '700', color: C.muted },
-  jobBtn: { flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderColor: C.line, borderRadius: 12, padding: 10, backgroundColor: '#fff' },
-  jobChanged: { borderStyle: 'dashed', borderColor: C.warn },
-  jobRow: { flexDirection: 'row', alignItems: 'stretch', gap: 6 },
-  jobEdit: { flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderColor: C.primary, backgroundColor: C.primarySoft, borderRadius: 12, paddingHorizontal: 10 },
-  jobEditText: { fontSize: 12.5, fontWeight: '800', color: C.primary },
-  jobView: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 10, backgroundColor: C.warnBg, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8 },
+  // กล่องหลัก
+  panel: { marginHorizontal: 12, marginBottom: 12, backgroundColor: '#fff', borderRadius: 22, borderWidth: 1, borderColor: '#EDF0F7', padding: 14, gap: 10, boxShadow: CARD_SHADOW },
+  panelLocked: { backgroundColor: '#FBFCFE' },
+  panelHead: { flexDirection: 'row', alignItems: 'center', gap: 9 },
+  panelIcon: { width: 32, height: 32, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  panelTitle: { fontSize: 15, fontWeight: '800', color: C.text },
+  panelRight: { flex: 1, textAlign: 'right', fontSize: 12, fontWeight: '700', color: C.muted },
+
+  jobRow: { flexDirection: 'row', alignItems: 'stretch', gap: 8 },
+  jobBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: C.line, borderRadius: 16, padding: 10, backgroundColor: '#fff' },
+  jobChanged: { borderStyle: 'dashed', borderColor: C.warn, borderWidth: 1.5 },
+  jobEdit: { alignItems: 'center', justifyContent: 'center', gap: 2, borderRadius: 16, backgroundColor: C.primarySoft, paddingHorizontal: 12 },
+  jobEditText: { fontSize: 11.5, fontWeight: '800', color: C.primary },
+  jobView: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, backgroundColor: C.warnBg, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 9 },
   jobViewText: { fontSize: 12.5, fontWeight: '800', color: C.warn },
   jobViewBack: { fontSize: 12.5, fontWeight: '900', color: C.primary, textDecorationLine: 'underline' },
-  jobState: { fontSize: 13, fontWeight: '900', color: C.text },
-  jobMeta: { fontSize: 11.5, color: C.muted, marginTop: 1 },
-  jobProg: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 5, marginTop: 6 },
-  jobProgLabel: { fontSize: 12, fontWeight: '900' },
-  jobProgCount: { fontSize: 11.5, fontWeight: '700' },
-  jobBar: { flexGrow: 1, minWidth: 50, height: 6, borderRadius: 3, backgroundColor: '#ffffffb3', overflow: 'hidden' },
-  jobHint: { fontSize: 11, color: C.muted },
+  jobState: { fontSize: 13.5, fontWeight: '800', color: C.text },
+  jobMeta: { fontSize: 11.5, color: C.muted, lineHeight: 16 },
+  // ช่องวันที่ขึ้นของใต้ปุ่มรอบ (กล่องสถานะจัดงาน)
+  jobLoadField: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.infoBg },
+  jobLoadChanged: { borderColor: C.warn, backgroundColor: C.warnBg },
+  jobLoadText: { fontSize: 12.5, fontWeight: '800', color: C.info },
+  jobProg: { gap: 6, marginTop: 7 },
+  jobProgTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  jobProgPill: { borderRadius: 50, paddingHorizontal: 9, paddingVertical: 2 },
+  jobProgLabel: { fontSize: 11.5, fontWeight: '800' },
+  jobProgCount: { fontSize: 11.5, fontWeight: '700', color: C.soft, ...TABULAR },
+  jobBar: { height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.85)', overflow: 'hidden' },
+  jobProgLeft: { fontSize: 11, fontWeight: '700', color: C.soft },
+  hintRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  hintText: { flex: 1, fontSize: 11.5, color: C.muted },
 
-  roundCard: { marginHorizontal: 12, marginBottom: 8, backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: C.line, borderTopWidth: 4, padding: 12, gap: 6 },
-  roundCardLocked: { backgroundColor: '#f8fafc' },
-  roundCardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  roundTag: { borderRadius: 7, paddingHorizontal: 8, paddingVertical: 2 },
-  roundTagText: { fontSize: 12, fontWeight: '900' },
-  roundCount: { fontSize: 12, color: C.muted },
-  doLine: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
-  doNo: { fontSize: 12.5, fontWeight: '900', color: C.text },
-  doState: { fontSize: 12, fontWeight: '700', color: C.muted },
+  rcTop: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  rcTitle: { fontSize: 16, fontWeight: '800', color: C.text },
+  rcSub: { fontSize: 12, color: C.muted, marginTop: 1 },
+  statePill: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 50, paddingHorizontal: 9, paddingVertical: 3 },
+  statePillText: { fontSize: 11, fontWeight: '800' },
+  doBox: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, backgroundColor: C.surface2, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10 },
+  doNo: { fontSize: 13, fontWeight: '900', color: C.text, ...TABULAR },
+  doState: { fontSize: 12.5, fontWeight: '700', color: C.muted },
   roundNote: { fontSize: 11.5, color: C.warn, lineHeight: 17 },
-  headSummary: { fontSize: 12.5, color: C.text, fontWeight: '600' },
-  headMetaText: { fontSize: 11.5, color: C.muted },
-  roundBtns: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 2 },
-  smallBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderColor: '#c7d2fe', borderRadius: 8, paddingHorizontal: 9, paddingVertical: 7, backgroundColor: '#fff' },
-  smallBtnBlocked: { borderColor: C.line, backgroundColor: '#f8fafc' },
-  smallBtnText: { fontSize: 12, fontWeight: '800', color: C.primary },
-  printed: { fontSize: 11.5, color: C.ok, fontWeight: '700' },
+  infoBox: { gap: 7, paddingHorizontal: 2 },
+  infoLine: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  infoText: { flex: 1, fontSize: 12.5, color: C.text, fontWeight: '600', lineHeight: 18 },
+  actRow: { flexDirection: 'row', gap: 8 },
+  actTile: { flex: 1, alignItems: 'center', gap: 6, borderRadius: 16, borderWidth: 1, borderColor: C.lineSoft, backgroundColor: C.surface2, paddingVertical: 11, paddingHorizontal: 4 },
+  actIcon: { width: 36, height: 36, borderRadius: 12, backgroundColor: C.primarySoft, alignItems: 'center', justifyContent: 'center' },
+  actText: { fontSize: 12, fontWeight: '800', color: C.text },
+  printedRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  printed: { fontSize: 12, color: C.ok, fontWeight: '700' },
 
-  tools: { marginHorizontal: 12, marginTop: 4, gap: 8 },
-  tabs: { flexDirection: 'row', gap: 6 },
-  tab: { flex: 1, alignItems: 'center', borderWidth: 1, borderColor: C.line, borderRadius: 10, paddingVertical: 9, backgroundColor: '#fff' },
-  tabOn: { backgroundColor: C.primary, borderColor: C.primary },
-  tabText: { fontSize: 12.5, fontWeight: '800', color: '#334155' },
-  searchBox: { height: 40, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#fff', borderWidth: 1, borderColor: C.line, borderRadius: 10, paddingHorizontal: 10 },
-  searchInput: { flex: 1, color: C.text, fontSize: 13, padding: 0 },
-  toolRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  toolBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderColor: '#c7d2fe', borderRadius: 8, paddingHorizontal: 9, paddingVertical: 7, backgroundColor: '#fff' },
+  // รายการของ: หัว + แท็บ + ค้นหา
+  toolsHead: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 16, marginTop: 6, marginBottom: 8 },
+  toolsTitle: { flex: 1, fontSize: 17, fontWeight: '800', color: C.text },
+  tools: { marginHorizontal: 12, gap: 10 },
+  seg: { flexDirection: 'row', height: 44, padding: SEG_PAD, borderRadius: 15, backgroundColor: '#E8EDF5' },
+  segPill: { position: 'absolute', top: SEG_PAD, bottom: SEG_PAD, left: SEG_PAD, borderRadius: 12, backgroundColor: '#fff', boxShadow: '0 1px 2px rgba(30,45,90,0.08), 0 4px 10px rgba(30,45,90,0.10)' },
+  segItem: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  segText: { fontSize: 13, fontWeight: '800', color: C.muted },
+  segCount: { minWidth: 22, alignItems: 'center', borderRadius: 50, backgroundColor: 'rgba(255,255,255,0.7)', paddingHorizontal: 6, paddingVertical: 1 },
+  segCountText: { fontSize: 11.5, fontWeight: '900', color: C.soft, ...TABULAR },
+  searchBox: { height: 46, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#fff', borderWidth: 1, borderColor: C.line, borderRadius: 14, paddingHorizontal: 12 },
+  searchInput: { flex: 1, minWidth: 0, color: C.text, fontSize: 14, padding: 0 },
+  toolRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  toolBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 50, borderWidth: 1, borderColor: C.primaryLine, paddingHorizontal: 12, paddingVertical: 7, backgroundColor: '#fff' },
   toolBtnOn: { backgroundColor: C.primary, borderColor: C.primary },
-  toolBtnText: { fontSize: 12, fontWeight: '700', color: C.primary },
-  searchSum: { marginHorizontal: 14, marginTop: 8, fontSize: 12, color: C.info, fontWeight: '600', lineHeight: 18 },
-  emptyList: { textAlign: 'center', color: C.muted, fontSize: 13, padding: 30 },
+  toolBtnText: { fontSize: 12, fontWeight: '800', color: C.primary },
+  searchSum: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginHorizontal: 12, marginTop: 10, backgroundColor: C.infoBg, borderRadius: 12, padding: 10 },
+  searchSumText: { flex: 1, fontSize: 12, color: '#075C8F', fontWeight: '600', lineHeight: 18 },
+  emptyList: { alignItems: 'center', gap: 8, padding: 36 },
+  emptyListText: { textAlign: 'center', color: C.soft, fontSize: 13.5, fontWeight: '600' },
   emptySmall: { textAlign: 'center', color: C.muted, fontSize: 12.5, padding: 18 },
 
-  secHead: { marginHorizontal: 12, marginTop: 14, backgroundColor: '#fff', borderRadius: 10, borderWidth: 1, borderColor: C.line, padding: 10, gap: 3 },
-  secTitle: { fontSize: 13.5, fontWeight: '900', color: C.text },
+  secHead: { flexDirection: 'row', alignItems: 'center', gap: 10, marginHorizontal: 12, marginTop: 18, marginBottom: 2, backgroundColor: '#fff', borderRadius: 16, borderWidth: 1, borderColor: C.lineSoft, padding: 12 },
+  secIcon: { width: 32, height: 32, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  secTitle: { fontSize: 14, fontWeight: '800', color: C.text },
   secText: { fontSize: 11.5, color: C.muted, lineHeight: 17 },
-  secToggle: { fontSize: 12.5, fontWeight: '900', color: C.primary, marginTop: 2 },
+  secToggle: { flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 50, backgroundColor: C.primarySoft, paddingHorizontal: 11, paddingVertical: 6 },
+  secToggleText: { fontSize: 12, fontWeight: '800', color: C.primary },
 
-  card: { marginHorizontal: 12, marginTop: 10, backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: C.line, padding: 11, gap: 8 },
-  cardDirty: { borderColor: '#f59e0b', borderStyle: 'dashed' },
-  nameRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  itemName: { flex: 1, fontSize: 14.5, fontWeight: '800', color: C.text, lineHeight: 21 },
-  nameInput: { flex: 1, borderWidth: 1, borderColor: C.line, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 6, fontSize: 14, color: C.text, backgroundColor: '#fff' },
-  tags: { flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
-  chip: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2, maxWidth: '100%' },
-  chipText: { fontSize: 11, fontWeight: '600', flexShrink: 1 },
-  qtyRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
-  qtyLabel: { fontSize: 12.5, color: C.muted, flexShrink: 1 },
-  qtyValue: { fontSize: 15, fontWeight: '900', color: C.text },
-  qtyFull: { fontSize: 11.5, color: C.muted },
-  p80: { flexDirection: 'row', alignItems: 'center', gap: 3, borderWidth: 1, borderColor: C.line, borderRadius: 8, paddingHorizontal: 7, paddingVertical: 4 },
-  p80On: { borderColor: C.primary, backgroundColor: C.primarySoft },
-  p80Changed: { borderColor: '#f59e0b', borderStyle: 'dashed' },
+  // การ์ดรายการ
+  card: { marginHorizontal: 12, marginTop: 12, backgroundColor: '#fff', borderRadius: 20, borderWidth: 1, borderColor: '#EDF0F7', padding: 14, gap: 11, boxShadow: CARD_SHADOW },
+  cardDirty: { borderColor: '#F5B94A', borderWidth: 1.5, boxShadow: '0 0 0 3px rgba(245,158,11,0.10), 0 8px 22px rgba(30,45,90,0.07)' },
+  doneStrip: { position: 'absolute', left: 0, top: 16, bottom: 16, width: 4, borderTopRightRadius: 3, borderBottomRightRadius: 3 },
+  nameRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  itemName: { flex: 1, fontSize: 15.5, fontWeight: '800', color: C.text, lineHeight: 22 },
+  iconBtn: { width: 32, height: 32, borderRadius: 11, backgroundColor: C.track, alignItems: 'center', justifyContent: 'center' },
+  nameInput: { flex: 1, minWidth: 0, borderWidth: 1.5, borderColor: C.primaryLine, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 8, fontSize: 14.5, color: C.text, backgroundColor: '#fff' },
+  tags: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 50, paddingHorizontal: 9, paddingVertical: 3, maxWidth: '100%' },
+  chipText: { fontSize: 11.5, fontWeight: '700', flexShrink: 1 },
+
+  stats: { flexDirection: 'row', alignItems: 'stretch', gap: 8 },
+  statMain: { flex: 1, backgroundColor: C.surface2, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 8, justifyContent: 'center' },
+  statLabel: { fontSize: 11, color: C.muted, fontWeight: '700' },
+  statValue: { fontSize: 18, fontWeight: '900', color: C.text, ...TABULAR },
+  statUnit: { fontSize: 12.5, fontWeight: '700', color: C.soft },
+  statSub: { fontSize: 11, color: C.muted, ...TABULAR },
+  p80: { alignItems: 'center', justifyContent: 'center', gap: 2, borderRadius: 14, borderWidth: 1, borderColor: C.line, paddingHorizontal: 12, backgroundColor: '#fff' },
+  p80On: { borderColor: C.primaryLine, backgroundColor: C.primarySoft },
+  p80Changed: { borderColor: '#F5B94A', borderStyle: 'dashed' },
   p80Text: { fontSize: 12, fontWeight: '800', color: C.muted },
-  left: { marginLeft: 'auto', flexDirection: 'row', alignItems: 'baseline', gap: 4, backgroundColor: C.warnBg, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
-  leftLabel: { fontSize: 11, color: C.muted, fontWeight: '700' },
-  leftValue: { fontSize: 14, fontWeight: '900', color: C.warn },
+  leftBox: { minWidth: 82, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: C.warnBg, paddingHorizontal: 10, paddingVertical: 8 },
+  leftOver: { backgroundColor: C.badBg },
+  leftZero: { backgroundColor: C.okBg },
+  leftLabel: { fontSize: 11, fontWeight: '800' },
+  leftValue: { fontSize: 17, fontWeight: '900', ...TABULAR },
 
-  roundBox: { borderWidth: 1, borderRadius: 10, padding: 8, gap: 6, backgroundColor: '#fcfdff' },
-  roundBoxLocked: { backgroundColor: '#f1f5f9' },
-  roundBoxHead: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
-  cellStatus: { flexShrink: 1, fontSize: 11.5, color: '#475569', fontWeight: '600' },
-  boxPair: { flexDirection: 'row', gap: 8 },
-  box: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 8, paddingVertical: 2 },
-  boxFlash: { backgroundColor: C.liveBg },
-  boxTag: { fontSize: 11.5, fontWeight: '800', color: C.muted, width: 22 },
-  qtyInput: { flex: 1, minWidth: 0, height: 38, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, paddingHorizontal: 6, fontSize: 14.5, fontWeight: '800', color: C.text, textAlign: 'center', backgroundColor: '#fff' },
-  inputChanged: { borderColor: '#f59e0b', backgroundColor: '#fffbeb' },
-  inputInvalid: { borderColor: C.bad, backgroundColor: C.badBg },
-  inputLive: { borderColor: '#38bdf8', backgroundColor: C.liveBg },
-  inputLocked: { backgroundColor: '#e2e8f0', color: C.muted },
-  tick: { width: 28, height: 28, borderRadius: 7, borderWidth: 1.5, borderColor: '#94a3b8', alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' },
-  tickDisabled: { opacity: 0.35 },
-  photoBtn: { minWidth: 32, height: 32, borderRadius: 8, borderWidth: 1, borderColor: '#c7d2fe', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 2, paddingHorizontal: 4, backgroundColor: '#fff' },
+  // ช่องรอบ
+  roundBox: { borderWidth: 1, borderRadius: 16, padding: 10, gap: 9 },
+  roundBoxLocked: { backgroundColor: C.track, borderColor: C.line },
+  roundBoxHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  roundPill: { borderRadius: 50, paddingHorizontal: 10, paddingVertical: 3 },
+  roundPillText: { fontSize: 11.5, fontWeight: '800', color: '#fff' },
+  roundBadge: { alignItems: 'center', justifyContent: 'center' },
+  roundBadgeOff: { backgroundColor: C.track, borderWidth: 1, borderColor: C.line },
+  roundBadgeSmall: { fontSize: 9.5, fontWeight: '700', lineHeight: 12, color: 'rgba(255,255,255,0.9)' },
+  roundBadgeNo: { fontWeight: '900', color: '#fff', ...TABULAR },
+  cellStatus: { flex: 1, fontSize: 12, color: C.soft, fontWeight: '600' },
+  photoBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, height: 32, borderRadius: 50, borderWidth: 1, borderColor: C.primaryLine, paddingHorizontal: 10, backgroundColor: '#fff' },
   photoBtnOn: { backgroundColor: C.primary, borderColor: C.primary },
-  photoBtnPending: { borderColor: '#f59e0b', borderStyle: 'dashed' },
-  photoBtnN: { color: '#fff', fontSize: 11, fontWeight: '900' },
-  packBy: { fontSize: 11, color: C.live, fontWeight: '700' },
-  liveBy: { fontSize: 11, color: C.live, fontWeight: '700' },
-  remote: { borderWidth: 1, borderColor: '#f59e0b', backgroundColor: '#fffbeb', borderRadius: 8, padding: 7, gap: 6 },
-  remoteText: { fontSize: 12, color: C.warn, fontWeight: '800' },
-  remoteBtns: { flexDirection: 'row', gap: 6 },
-  remoteTake: { backgroundColor: C.warn, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6 },
-  remoteTakeText: { color: '#fff', fontSize: 12, fontWeight: '800' },
-  remoteKeep: { borderWidth: 1, borderColor: C.warn, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6 },
-  remoteKeepText: { color: C.warn, fontSize: 12, fontWeight: '800' },
+  photoBtnPending: { borderColor: '#F5B94A', borderStyle: 'dashed' },
+  photoBtnText: { fontSize: 11.5, fontWeight: '800', color: C.primary, ...TABULAR },
+  boxPair: { flexDirection: 'row', gap: 8 },
+  box: { flex: 1, backgroundColor: '#fff', borderRadius: 13, padding: 8, gap: 6 },
+  boxFlash: { backgroundColor: C.liveBg },
+  boxLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 5, minHeight: 16 },
+  boxTag: { fontSize: 11.5, fontWeight: '800', color: C.soft },
+  boxSpin: { transform: [{ scale: 0.7 }], height: 14 },
+  boxField: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  qtyInput: { flex: 1, minWidth: 0, height: 42, borderWidth: 1.5, borderColor: C.line, borderRadius: 11, paddingHorizontal: 6, fontSize: 16, fontWeight: '800', color: C.text, textAlign: 'center', backgroundColor: C.surface2 },
+  inputChanged: { borderColor: '#F5B94A', backgroundColor: '#FFFBEB' },
+  inputInvalid: { borderColor: C.bad, backgroundColor: C.badBg },
+  inputLive: { borderColor: '#38BDF8', backgroundColor: C.liveBg },
+  inputLocked: { backgroundColor: C.track, color: C.muted },
+  tick: { width: 34, height: 34, borderRadius: 11, borderWidth: 1.5, borderColor: '#C3CBD8', alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' },
+  tickDisabled: { opacity: 0.35 },
+  liveTag: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  liveTagDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.live },
+  liveTagText: { flex: 1, fontSize: 11.5, color: C.live, fontWeight: '700' },
+  remote: { borderWidth: 1, borderColor: '#F5B94A', backgroundColor: '#FFFBEB', borderRadius: 12, padding: 9, gap: 8 },
+  remoteHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
+  remoteText: { flex: 1, fontSize: 12, color: C.warn, fontWeight: '800', lineHeight: 17 },
+  remoteBtns: { flexDirection: 'row', gap: 8 },
+  remoteTake: { flex: 1, alignItems: 'center', backgroundColor: C.warn, borderRadius: 10, paddingVertical: 8 },
+  remoteTakeText: { color: '#fff', fontSize: 12.5, fontWeight: '800' },
+  remoteKeep: { flex: 1, alignItems: 'center', borderWidth: 1, borderColor: C.warn, borderRadius: 10, paddingVertical: 8, backgroundColor: '#fff' },
+  remoteKeepText: { color: C.warn, fontSize: 12.5, fontWeight: '800' },
 
-  noteBox: { gap: 4 },
+  // บิล / หมายเหตุ / รายการย่อย
+  poBox: { gap: 6, backgroundColor: C.surface2, borderRadius: 14, padding: 10 },
   backLine: { fontSize: 12, color: C.bad },
-  poLine: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
-  poNo: { fontSize: 12, fontWeight: '900', color: C.text },
+  poLine: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
+  poNo: { fontSize: 12, fontWeight: '900', color: C.text, ...TABULAR },
   poCond: { fontSize: 11.5, fontWeight: '700' },
-  poQty: { fontSize: 11.5, color: '#475569' },
+  poQty: { marginLeft: 'auto', fontSize: 11.5, color: C.soft, fontWeight: '600' },
+  poMoreBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start' },
   poMore: { fontSize: 12, color: C.primary, fontWeight: '800' },
-  noteInput: { borderWidth: 1, borderColor: C.line, borderRadius: 8, paddingHorizontal: 9, paddingVertical: 7, fontSize: 13, color: C.text, backgroundColor: '#fff', minHeight: 38 },
-  billList: { gap: 3, backgroundColor: '#f8fafc', borderRadius: 8, padding: 7 },
+  noteInput: { borderWidth: 1, borderColor: C.lineSoft, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 9, fontSize: 13.5, color: C.text, backgroundColor: C.surface2, minHeight: 42 },
+  billList: { gap: 4, backgroundColor: C.surface2, borderRadius: 12, padding: 9 },
   billBack: { fontSize: 11.5, color: C.bad },
   billLine: { fontSize: 11.5, color: C.text, lineHeight: 17 },
-  addSub: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', borderWidth: 1, borderColor: '#c7d2fe', borderStyle: 'dashed', borderRadius: 8, paddingHorizontal: 9, paddingVertical: 5 },
-  addSubText: { fontSize: 12, fontWeight: '800', color: C.primary },
+  addSub: { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start', paddingVertical: 2 },
+  addSubText: { fontSize: 12.5, fontWeight: '800', color: C.primary },
 
-  subCard: { marginLeft: 28, marginRight: 12, marginTop: 6, backgroundColor: '#fafbff', borderRadius: 12, borderWidth: 1, borderColor: C.line, padding: 10, gap: 7 },
+  subWrap: { marginLeft: 30, marginRight: 12, marginTop: 8 },
+  subConnector: { position: 'absolute', left: -16, top: -10, width: 14, height: 38, borderLeftWidth: 2, borderBottomWidth: 2, borderColor: '#D5DCE8', borderBottomLeftRadius: 10 },
+  subCard: { backgroundColor: '#fff', borderRadius: 18, borderWidth: 1, borderColor: '#EDF0F7', padding: 12, gap: 9, boxShadow: '0 1px 2px rgba(30,45,90,0.04), 0 4px 12px rgba(30,45,90,0.05)' },
   subDeleted: { opacity: 0.55, borderColor: C.bad },
-  subHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  subName: { flex: 1, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 6, fontSize: 13.5, color: C.text, backgroundColor: '#fff' },
-  subDel: { width: 34, height: 34, borderRadius: 8, borderWidth: 1, borderColor: '#fecaca', alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' },
-  subQtyRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  subQty: { width: 90, height: 36, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, paddingHorizontal: 8, fontSize: 13.5, color: C.text, backgroundColor: '#fff', textAlign: 'center' },
-  subUnit: { width: 80, height: 36, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 8, paddingHorizontal: 8, fontSize: 13, color: C.text, backgroundColor: '#fff' },
+  subHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  subName: { flex: 1, minWidth: 0, height: 42, borderWidth: 1.5, borderColor: C.line, borderRadius: 11, paddingHorizontal: 10, fontSize: 14, color: C.text, backgroundColor: C.surface2 },
+  subDel: { width: 38, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: C.badBg },
+  subQtyRow: { flexDirection: 'row', alignItems: 'stretch', gap: 8 },
+  subQty: { flex: 1, minWidth: 0, height: 44, borderWidth: 1.5, borderColor: C.line, borderRadius: 11, paddingHorizontal: 8, fontSize: 14.5, fontWeight: '700', color: C.text, backgroundColor: C.surface2, textAlign: 'center' },
+  subUnit: { width: 84, height: 44, borderWidth: 1.5, borderColor: C.line, borderRadius: 11, paddingHorizontal: 8, fontSize: 13.5, color: C.text, backgroundColor: C.surface2, textAlign: 'center' },
 
-  saveBar: { position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: '#fff', borderTopWidth: 2, borderTopColor: '#f59e0b', paddingHorizontal: 12, paddingTop: 10, gap: 6, elevation: 12, shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 8 },
-  saveMsg: { fontSize: 12.5, fontWeight: '700', color: C.warn, lineHeight: 18 },
+  // แถบบันทึก + แจ้งเตือน
+  saveBar: {
+    position: 'absolute',
+    left: 10,
+    right: 10,
+    backgroundColor: '#fff',
+    borderRadius: 22,
+    borderWidth: 1.5,
+    borderColor: '#F5B94A',
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 12,
+    gap: 9,
+    boxShadow: '0 -2px 8px rgba(30,45,90,0.06), 0 14px 32px rgba(30,45,90,0.20)',
+  },
+  saveBarBad: { borderColor: C.bad },
+  saveMsgRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 7 },
+  saveMsg: { flex: 1, fontSize: 13, fontWeight: '700', color: C.warn, lineHeight: 19 },
   syncNote: { fontSize: 11.5, color: C.live, fontWeight: '700' },
-  saveActions: { flexDirection: 'row', gap: 8 },
-  btn: { flex: 1, minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 10, borderWidth: 1, paddingHorizontal: 10 },
-  btnPrimary: { backgroundColor: C.primary, borderColor: C.primary },
-  btnOutline: { backgroundColor: '#fff', borderColor: '#c7d2fe' },
+  saveActions: { flexDirection: 'row', gap: 10 },
+  btn: { flex: 1, minHeight: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderRadius: 14, borderWidth: 1.5, paddingHorizontal: 10 },
+  btnPrimary: { backgroundColor: C.primary, borderColor: C.primary, boxShadow: '0 8px 18px rgba(36,89,234,0.28)' },
+  btnOutline: { backgroundColor: '#fff', borderColor: C.primaryLine },
+  btnGhost: { backgroundColor: C.track, borderColor: C.track },
   btnDanger: { backgroundColor: C.bad, borderColor: C.bad },
-  btnText: { fontSize: 13.5, fontWeight: '800' },
-  toast: { position: 'absolute', left: 16, right: 16, backgroundColor: '#0f172aee', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 11 },
+  btnText: { fontSize: 14, fontWeight: '800' },
+  toast: { position: 'absolute', left: 20, right: 20, backgroundColor: 'rgba(10,18,34,0.92)', borderRadius: 16, paddingHorizontal: 16, paddingVertical: 12, boxShadow: '0 10px 26px rgba(10,18,34,0.25)' },
   toastText: { color: '#fff', fontSize: 13, fontWeight: '600', lineHeight: 19, textAlign: 'center' },
 
-  overlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.45)' },
-  sheet: { flex: 1, backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, overflow: 'hidden' },
-  grip: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: '#cbd5e1', marginTop: 8 },
-  sheetHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 8 },
-  sheetTitle: { fontSize: 16, fontWeight: '900', color: C.text },
-  sheetSub: { fontSize: 12, color: '#475569', marginTop: 3, lineHeight: 18 },
-  closeBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center' },
-  sheetActions: { flexDirection: 'row', gap: 8, paddingHorizontal: 14, paddingTop: 10, borderTopWidth: 1, borderTopColor: C.line },
-  changeItem: { borderWidth: 1, borderColor: C.line, borderRadius: 10, padding: 9, gap: 2 },
-  changeName: { fontSize: 13, fontWeight: '900', color: C.text },
+  // ป๊อปอัปแบบแผ่นล่าง
+  overlay: { flex: 1, backgroundColor: 'rgba(8,14,30,0.55)' },
+  sheet: { flex: 1, backgroundColor: '#fff', borderTopLeftRadius: 28, borderTopRightRadius: 28, overflow: 'hidden' },
+  grip: { alignSelf: 'center', width: 42, height: 5, borderRadius: 3, backgroundColor: '#D5DBE5', marginTop: 9 },
+  sheetHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 10 },
+  sheetTitle: { fontSize: 17, fontWeight: '800', color: C.text },
+  sheetSub: { fontSize: 12, color: C.soft, marginTop: 3, lineHeight: 18 },
+  closeBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: C.track, alignItems: 'center', justifyContent: 'center' },
+  closeBtnSm: { width: 32, height: 32, borderRadius: 16, backgroundColor: C.track, alignItems: 'center', justifyContent: 'center' },
+  sheetActions: { flexDirection: 'row', gap: 10, paddingHorizontal: 16, paddingTop: 12, borderTopWidth: 1, borderTopColor: C.lineSoft },
+  changeItem: { backgroundColor: C.surface2, borderRadius: 14, padding: 11, gap: 2 },
+  changeName: { fontSize: 13.5, fontWeight: '800', color: C.text },
   changeWhere: { fontSize: 11, color: C.muted },
-  changeText: { fontSize: 12.5, color: '#334155', lineHeight: 18 },
-  leaveText: { fontSize: 13, color: '#334155', textAlign: 'center', lineHeight: 19 },
+  changeText: { fontSize: 12.5, color: C.soft, lineHeight: 18 },
+  leaveText: { fontSize: 13, color: C.soft, textAlign: 'center', lineHeight: 19 },
   leaveError: { fontSize: 12.5, color: C.bad, fontWeight: '700', marginTop: 8 },
 
-  form: { paddingHorizontal: 14, paddingBottom: 20, gap: 6 },
-  formLabel: { fontSize: 12.5, fontWeight: '800', color: '#334155', marginTop: 6 },
-  segment: { flexDirection: 'row', gap: 6 },
-  segmentBtn: { flex: 1, alignItems: 'center', borderWidth: 1, borderColor: C.line, borderRadius: 10, paddingVertical: 10 },
-  segmentOn: { backgroundColor: C.primary, borderColor: C.primary },
-  segmentText: { fontSize: 13, fontWeight: '800', color: '#334155' },
-  selectBox: { minHeight: 42, flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 10, paddingHorizontal: 10, backgroundColor: '#fff' },
-  selectText: { flex: 1, fontSize: 13.5, color: C.text },
-  placeholder: { color: '#94a3b8' },
-  textField: { minHeight: 42, borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, fontSize: 13.5, color: C.text, backgroundColor: '#fff' },
+  form: { paddingHorizontal: 16, paddingBottom: 20, gap: 7 },
+  formLabel: { fontSize: 12.5, fontWeight: '800', color: C.soft, marginTop: 8 },
+  segment: { flexDirection: 'row', gap: 4, padding: 4, borderRadius: 14, backgroundColor: '#E8EDF5' },
+  segmentBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 11, paddingVertical: 10 },
+  segmentOn: { backgroundColor: '#fff', boxShadow: '0 1px 2px rgba(30,45,90,0.08), 0 4px 10px rgba(30,45,90,0.10)' },
+  segmentText: { fontSize: 13.5, fontWeight: '800', color: C.muted },
+  selectBox: { minHeight: 46, flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1.5, borderColor: C.line, borderRadius: 13, paddingHorizontal: 12, backgroundColor: C.surface2 },
+  selectText: { flex: 1, fontSize: 14, color: C.text },
+  placeholder: { color: C.muted },
+  textField: { minHeight: 46, borderWidth: 1.5, borderColor: C.line, borderRadius: 13, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14, color: C.text, backgroundColor: C.surface2 },
   fieldHint: { fontSize: 11, color: C.warn },
 
-  sheetBasis: { fontSize: 11, color: C.muted, lineHeight: 16, paddingHorizontal: 14, paddingBottom: 8 },
-  sheetTableHead: { flexDirection: 'row', backgroundColor: '#f1f5f9', paddingHorizontal: 12, paddingVertical: 7, borderTopWidth: 1, borderBottomWidth: 1, borderColor: C.line },
-  sheetTh: { fontSize: 11.5, fontWeight: '900', color: '#475569' },
-  sheetSec: { fontSize: 12, fontWeight: '900', color: C.warn, backgroundColor: C.warnBg, paddingHorizontal: 12, paddingVertical: 6 },
-  sheetRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
-  sheetNo: { width: 22, fontSize: 12.5, color: '#94a3b8', fontWeight: '700' },
-  sheetName: { fontSize: 13, color: C.text, fontWeight: '600' },
+  basis: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginHorizontal: 16, marginBottom: 10, backgroundColor: C.surface2, borderRadius: 12, padding: 10 },
+  basisText: { flex: 1, fontSize: 11, color: C.soft, lineHeight: 16 },
+  sheetTableHead: { flexDirection: 'row', backgroundColor: C.surface2, paddingHorizontal: 16, paddingVertical: 8, borderTopWidth: 1, borderBottomWidth: 1, borderColor: C.lineSoft },
+  sheetTh: { fontSize: 11, fontWeight: '800', color: C.muted, letterSpacing: 0.3 },
+  sheetSecWrap: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 6 },
+  sheetSec: { alignSelf: 'flex-start', fontSize: 11.5, fontWeight: '800', color: C.warn, backgroundColor: C.warnBg, borderRadius: 50, overflow: 'hidden', paddingHorizontal: 10, paddingVertical: 3 },
+  sheetRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: C.lineSoft },
+  sheetNo: { width: 22, fontSize: 12.5, color: C.faint, fontWeight: '700', ...TABULAR },
+  sheetName: { fontSize: 13.5, color: C.text, fontWeight: '600', lineHeight: 19 },
   sheetDetail: { fontSize: 11, color: C.muted },
-  sheetMemo: { fontSize: 11.5, color: '#334155', marginTop: 2 },
-  sheetQty: { width: 84, textAlign: 'right', fontSize: 13, fontWeight: '900', color: C.text },
-  sheetSum: { fontSize: 12.5, fontWeight: '800', color: C.text, paddingHorizontal: 14, paddingTop: 10 },
-  sheetDirty: { fontSize: 11.5, color: C.warn, paddingHorizontal: 14, paddingTop: 6 },
+  sheetMemo: { fontSize: 11.5, color: C.soft, marginTop: 2 },
+  sheetQty: { width: 84, textAlign: 'right', fontSize: 14, fontWeight: '900', color: C.primary, ...TABULAR },
+  sheetSum: { fontSize: 12.5, fontWeight: '800', color: C.text, paddingHorizontal: 16, paddingTop: 12 },
+  sheetDirty: { fontSize: 11.5, color: C.warn, paddingHorizontal: 16, paddingTop: 6 },
 
-  whoTabs: { flexDirection: 'row', gap: 6, paddingHorizontal: 14, paddingBottom: 8 },
-  whoTab: { borderWidth: 1, borderColor: C.line, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 },
-  whoTabText: { fontSize: 12.5, fontWeight: '900' },
-  whoRow: { paddingHorizontal: 14, paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: '#f1f5f9', gap: 6 },
-  whoName: { fontSize: 13, fontWeight: '800', color: C.text },
+  whoTabs: { flexDirection: 'row', gap: 6, paddingHorizontal: 16, paddingBottom: 8 },
+  whoTab: { borderWidth: 1, borderColor: C.line, borderRadius: 50, paddingHorizontal: 14, paddingVertical: 6 },
+  whoTabText: { fontSize: 12.5, fontWeight: '800' },
+  whoRow: { paddingHorizontal: 16, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: C.lineSoft, gap: 8 },
+  whoName: { fontSize: 13.5, fontWeight: '800', color: C.text },
+  whoNo: { color: C.faint },
   whoBoxes: { flexDirection: 'row', gap: 8 },
-  whoBox: { flex: 1, backgroundColor: '#f8fafc', borderRadius: 8, padding: 7, gap: 2 },
-  whoBoxHead: { fontSize: 11, fontWeight: '900', color: C.muted },
-  whoEmpty: { fontSize: 12.5, color: '#cbd5e1' },
-  whoVal: { fontSize: 13, fontWeight: '900', color: C.text },
+  whoBox: { flex: 1, backgroundColor: C.surface2, borderRadius: 12, padding: 9, gap: 3 },
+  whoBoxHead: { fontSize: 11, fontWeight: '800', color: C.muted },
+  whoEmpty: { fontSize: 12.5, color: C.faint },
+  whoVal: { fontSize: 14, fontWeight: '900', color: C.text },
   whoDone: { fontSize: 11, color: C.ok, fontWeight: '900' },
-  whoLine: { fontSize: 11.5, color: '#334155' },
+  whoLine: { fontSize: 11.5, color: C.soft },
   whoK: { color: C.muted, fontWeight: '700' },
   whoEdits: { color: C.primary, fontWeight: '800', textDecorationLine: 'underline' },
-  histList: { gap: 4, marginTop: 4, borderLeftWidth: 2, borderLeftColor: '#c7d2fe', paddingLeft: 6 },
+  histList: { gap: 4, marginTop: 4, borderLeftWidth: 2, borderLeftColor: C.primaryLine, paddingLeft: 7 },
   histItem: { gap: 1 },
   histWhat: { fontSize: 11.5, color: C.text, fontWeight: '700' },
   histWho: { fontSize: 10.5, color: C.muted },
   histNote: { fontSize: 11, color: C.muted, marginTop: 3 },
 
-  photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, paddingHorizontal: 14, paddingBottom: 12 },
-  photoTile: { width: '30%', gap: 4 },
-  photoImg: { width: '100%', aspectRatio: 1, borderRadius: 10, backgroundColor: '#e2e8f0' },
-  photoX: { position: 'absolute', top: 4, right: 4, width: 24, height: 24, borderRadius: 12, backgroundColor: '#0f172acc', alignItems: 'center', justifyContent: 'center' },
+  photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, paddingHorizontal: 16, paddingBottom: 12 },
+  photoTile: { width: '30.5%', gap: 4 },
+  photoImg: { width: '100%', aspectRatio: 1, borderRadius: 14, backgroundColor: C.track },
+  photoX: { position: 'absolute', top: 5, right: 5, width: 26, height: 26, borderRadius: 13, backgroundColor: 'rgba(10,18,34,0.75)', alignItems: 'center', justifyContent: 'center' },
   photoCap: { fontSize: 10.5, color: C.muted },
-  photoSlot: { aspectRatio: 1, borderWidth: 1, borderStyle: 'dashed', borderColor: '#cbd5e1', borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  photoMsg: { fontSize: 12, color: C.muted, paddingHorizontal: 14, paddingBottom: 6 },
-  viewer: { flex: 1, backgroundColor: '#000e', alignItems: 'center', justifyContent: 'center' },
+  photoSlot: { aspectRatio: 1, borderWidth: 1.5, borderStyle: 'dashed', borderColor: C.faint, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: C.surface2 },
+  photoMsg: { fontSize: 12, color: C.muted, paddingHorizontal: 16, paddingBottom: 6 },
+  viewer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)', alignItems: 'center', justifyContent: 'center' },
   viewerImg: { width: '100%', height: '85%' },
   viewerClose: { color: '#fff', fontSize: 13, marginTop: 10 },
 
-  pickerOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', justifyContent: 'center', padding: 18 },
-  picker: { backgroundColor: '#fff', borderRadius: 16, padding: 14, maxHeight: '90%' },
-  pickerHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
-  pickerTitle: { fontSize: 15, fontWeight: '900', color: C.text },
-  pickerSearch: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: C.line, borderRadius: 10, paddingHorizontal: 10, height: 40, marginBottom: 8 },
-  pickerSearchInput: { flex: 1, fontSize: 13, color: C.text, padding: 0 },
-  pickerOption: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 11, paddingHorizontal: 8, borderRadius: 8 },
+  // ป๊อปอัปกลางจอ (เลือก / ผู้จัดงาน / ยังไม่บันทึก)
+  pickerOverlay: { flex: 1, backgroundColor: 'rgba(8,14,30,0.55)', justifyContent: 'center', padding: 18 },
+  picker: { backgroundColor: '#fff', borderRadius: 24, padding: 16, maxHeight: '90%', boxShadow: '0 20px 50px rgba(8,14,30,0.25)' },
+  pickerHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  pickerTitle: { fontSize: 16, fontWeight: '800', color: C.text },
+  pickerSearch: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: C.surface2, borderWidth: 1.5, borderColor: C.line, borderRadius: 13, paddingHorizontal: 12, height: 44, marginBottom: 8 },
+  pickerSearchInput: { flex: 1, fontSize: 14, color: C.text, padding: 0 },
+  pickerOption: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, paddingHorizontal: 10, borderRadius: 13 },
   pickerOptionOn: { backgroundColor: C.primarySoft },
-  pickerOptionText: { flex: 1, fontSize: 13.5, color: '#334155', fontWeight: '600' },
-  comboHead: { fontSize: 11.5, color: C.muted, marginBottom: 4 },
-  pickChip: { borderWidth: 1, borderColor: C.line, borderRadius: 50, paddingHorizontal: 10, paddingVertical: 5, backgroundColor: '#fff' },
+  pickerOptionText: { flex: 1, fontSize: 14, color: C.text, fontWeight: '600' },
+  comboHead: { fontSize: 11.5, color: C.muted, marginBottom: 4, fontWeight: '600' },
+  pickChip: { borderWidth: 1, borderColor: C.line, borderRadius: 50, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: '#fff' },
   pickChipOn: { backgroundColor: C.primary, borderColor: C.primary },
-  pickChipText: { fontSize: 12, fontWeight: '700', color: '#334155' },
-  pickCancel: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  pickCancelText: { fontSize: 12.5, color: '#334155' },
-  pickRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
-  pickCode: { width: 54, alignItems: 'center' },
-  pickCodeText: { fontSize: 13.5, fontWeight: '900', color: C.primary },
-  pickCur: { fontSize: 10, color: C.primary, fontWeight: '800' },
-  pickCus: { fontSize: 12.5, fontWeight: '800', color: C.text },
-  pickName: { fontSize: 11.5, color: C.muted },
+  pickChipText: { fontSize: 12, fontWeight: '800', color: C.soft },
+  pickCancel: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  pickCancelText: { fontSize: 12.5, color: C.soft, fontWeight: '600' },
+  pickRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: C.lineSoft },
+  pickCode: { minWidth: 60, alignItems: 'center', borderRadius: 10, backgroundColor: C.primarySoft, paddingHorizontal: 8, paddingVertical: 6 },
+  pickCodeText: { fontSize: 13.5, fontWeight: '900', color: C.primary, ...TABULAR },
+  pickCur: { fontSize: 10.5, color: C.primary, fontWeight: '800' },
+  pickCus: { fontSize: 13, fontWeight: '800', color: C.text },
+  pickName: { fontSize: 11.5, color: C.muted, lineHeight: 16 },
   pickStatus: { width: 78, fontSize: 10.5, color: C.muted, textAlign: 'right' },
-  pickFoot: { textAlign: 'center', fontSize: 11.5, color: C.muted, padding: 12 },
+  pickFoot: { textAlign: 'center', fontSize: 11.5, color: C.muted, padding: 14 },
 });
