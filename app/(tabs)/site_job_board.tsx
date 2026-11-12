@@ -26,6 +26,7 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
+  DeviceEventEmitter,
   Modal,
   Pressable,
   PressableProps,
@@ -60,6 +61,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useScreenInsets } from '../../components/useScreenInsets';
 import { API_MODULES } from '../../constants/config';
 import { apiMobileGet, apiMobilePost } from '../../service/api_mobile';
+import { JOB_REFRESH_EVENT } from '../../service/push';
 import { useAuth } from '../_layout';
 
 const SJB_API_URL = `${API_MODULES}/site_job_board_API_mobile.php`;
@@ -67,7 +69,8 @@ const POLL_MS = 30000;
 const POLL_MAX_MS = 300000;
 
 type IonName = keyof typeof Ionicons.glyphMap;
-type Status = 'open' | 'taken' | 'packing' | 'packed' | 'loading';
+// ready = จัดแล้ว แต่ยังไม่ถึงวันที่ขึ้นของที่ตั้งไว้ (sjb_status ฝั่งเซิร์ฟเวอร์ · ถึงวันแล้วเป็น packed รอขึ้น เอง)
+type Status = 'open' | 'taken' | 'packing' | 'ready' | 'packed' | 'loading';
 type Tab = 'all' | Status;
 type Sort = 'at' | 'new' | 'site';
 type Grad = [string, string];
@@ -107,12 +110,13 @@ const STATUS: Record<Status, Tone> = {
   open: { label: 'ยังไม่รับงาน', short: 'ยังไม่รับ', color: '#E8335A', grad: ['#FF8FA3', '#F43F5E'], soft: '#FFF0F3', icon: 'hourglass-outline' },
   taken: { label: 'รับงานแล้ว', short: 'รับแล้ว', color: '#0E9F6E', grad: ['#4ADE9F', '#10B981'], soft: '#E9FBF3', icon: 'person' },
   packing: { label: 'กำลังจัด', short: 'กำลังจัด', color: '#DB7A00', grad: ['#FFCB52', '#F59E0B'], soft: '#FFF7E6', icon: 'cube' },
+  ready: { label: 'จัดแล้ว รอวันขึ้น', short: 'รอวัน', color: '#0F9488', grad: ['#5EEAD4', '#14B8A6'], soft: '#E6FBF7', icon: 'calendar' },
   packed: { label: 'รอขึ้น', short: 'รอขึ้น', color: '#0A8BD6', grad: ['#5CCBFF', '#0EA5E9'], soft: '#EAF7FF', icon: 'albums' },
   loading: { label: 'กำลังขึ้นรถ', short: 'ขึ้นรถ', color: '#7446F5', grad: ['#B79CFF', '#8B5CF6'], soft: '#F4F0FF', icon: 'bus' },
 };
 const ALL_TONE: Tone = { label: 'ทั้งหมด', short: 'ทั้งหมด', color: '#2459EA', grad: BRAND_GRAD, soft: '#EEF3FF', icon: 'layers' };
 const FALLBACK_TONE: Tone = { label: '', short: '', color: C.soft, grad: ['#A9B3C6', '#6B778E'], soft: C.track, icon: 'ellipse' };
-const TABS: Tab[] = ['all', 'open', 'taken', 'packing', 'packed', 'loading'];
+const TABS: Tab[] = ['all', 'open', 'taken', 'packing', 'ready', 'packed', 'loading'];
 const toneOf = (tab: Tab) => (tab === 'all' ? ALL_TONE : STATUS[tab]);
 const TAB_INDEX = TABS.map((_, i) => i);
 const TAB_COLORS = TABS.map((t) => toneOf(t).grad[1]);
@@ -156,6 +160,7 @@ interface Job {
   at: string;
   atText: string;
   deliver: string;
+  load: string; // วันที่ขึ้นของ (ข้อมูลใบส่งของรอบในหน้าเช็คของส่ง)
   organizer: string;
   truck: string;
   printed: string;
@@ -192,6 +197,7 @@ function mapJob(r: any): Job {
     at: str(r.at),
     atText: str(r.at_text),
     deliver: str(r.deliver),
+    load: str(r.load),
     organizer: str(r.organizer),
     truck: str(r.truck),
     printed: str(r.printed),
@@ -394,7 +400,7 @@ function RailTab({ index, tab, pos, count, active, onPress }: {
 }
 
 /**
- * แถบสถานะ 6 ช่องแบ่งเท่ากันเต็มความกว้าง (ไม่มีเลื่อนข้าง)
+ * แถบสถานะ 7 ช่องแบ่งเท่ากันเต็มความกว้าง (ไม่มีเลื่อนข้าง) · ป้าย short ต้องสั้น
  * ตัวเลือก = ก้อนขาวลอยมีเงา เลื่อนเรียบ ๆ ไปช่องที่กด · ขีดใต้ก้อนเปลี่ยนสีตามสถานะระหว่างทาง
  */
 function StatusRail({ value, counts, onChange }: { value: Tab; counts: Record<string, number>; onChange: (t: Tab) => void }) {
@@ -684,6 +690,7 @@ function JobCard({ job, isNew, now, busy, run, onSheet, onGo, onRelease }: {
             </View>
           }
         />
+        {!!job.load && <InfoRow icon="cube-outline" label="วันที่ขึ้นของ" value={job.load} color={C.brand} />}
         {!!job.deliver && <InfoRow icon="calendar-outline" label="กำหนดส่ง" value={job.deliver} />}
         {!!job.organizer && <InfoRow icon="person-outline" label="ผู้จัดงาน" value={job.organizer} />}
         {!!job.truck && <InfoRow icon="car-outline" label="รถ" value={job.truck} />}
@@ -931,6 +938,14 @@ export default function SiteJobBoardScreen() {
     const sub = AppState.addEventListener('change', (state) => {
       if (state !== 'active') stopPoll();
       else if (focused.current) void load('poll');
+    });
+    return () => sub.remove();
+  }, [load]);
+
+  // แจ้งเตือน push เรื่องงานเข้ามาตอนเปิดแอปอยู่ (service/push.ts) = โหลดรายการใหม่ทันที ไม่ต้องรอรอบ 30 วินาที
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener(JOB_REFRESH_EVENT, () => {
+      if (focused.current) void load('poll');
     });
     return () => sub.remove();
   }, [load]);

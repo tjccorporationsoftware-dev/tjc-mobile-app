@@ -33,6 +33,9 @@ The PHP backend uses a **single-file action-router** pattern — one file per mo
 | `api_fm.php` | fleet/transport jobs |
 | `api_correspondence.php` | correspondence register |
 | `api_manager_car.php` | manager car view |
+| `mobile_api/modules/push_API_mobile.php` | push-notification device registration (`register` / `unregister`) |
+
+**Push notifications** ([service/push.ts](service/push.ts), called from `InitialLayout` and `signOut` in [app/_layout.tsx](app/_layout.tsx)): the app registers its Expo push token with `user_id`; the PHP side sends via Expo Push API from `helpers/push_notify.php` (events: new job announced → everyone who can see `site_job_board.php`; job accepted → the announcer). Tapping a notification opens `data.url`. Needs a native build with `google-services.json` (Android/FCM) — in Expo Go or without Firebase, registration silently does nothing. Docs: `tjc-api-server/mobile_api/docs/README_push.md`.
 
 Conventions: reads are `axios.get` with `?action=…` query params; writes are `axios.post` of a `FormData` with `"Content-Type": "multipart/form-data"` (PHP reads `$_POST`). Responses are checked with `res.data.status === "success"` or `res.data.success`. Uploaded files live under `IMG_BASE_URL` subfolders — `uploads/profiles/`, `uploads/docs/`, `uploads/proofs/`. There is no shared axios client and no auth token: API calls are unauthenticated and identify the user by passing `username` / `user_id` / `role` as parameters (a known open item, see [PLAN_book_for_others_mobile.md](docs/PLAN_book_for_others_mobile.md) §13.1).
 

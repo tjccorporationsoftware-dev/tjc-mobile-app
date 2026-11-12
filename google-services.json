@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "671257052905",
+    "project_id": "one-tjc",
+    "storage_bucket": "one-tjc.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:671257052905:android:9525c6409ca33eb9295278",
+        "android_client_info": {
+          "package_name": "com.tjcgroup.tjcmobileapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDTIxgc1lRfu7snXkPvAnVsDdswUShsNFw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

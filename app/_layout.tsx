@@ -7,6 +7,7 @@ import { configureReanimatedLogger, ReanimatedLogLevel } from "react-native-rean
 import { AppLockGate } from "../components/AppLock";
 import { AutoUpdate } from "../components/AutoUpdate";
 import { API_BASE } from "../constants/config";
+import { unregisterPush, usePushNotifications } from "../service/push";
 
 // เมนูข้าง (react-native-drawer-layout 4.2.12 ล่าสุด) ส่ง dependency array ให้ hook ของ Reanimated 4.7
 // ซึ่งบนมือถือไม่ใช้อยู่แล้ว จึงขึ้นคำเตือนทุกครั้งที่เปิดแอป — ไม่ใช่โค้ดของเรา และไม่มีผลกับการทำงาน
@@ -115,6 +116,8 @@ function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signOut = async () => {
+    // เอาเครื่องนี้ออกจากผู้รับแจ้งเตือนของคนนี้ (ไม่รอผล ออกจากระบบได้ทันที)
+    if (user?.id) void unregisterPush(user.id);
     setUser(null);
     await AsyncStorage.removeItem("user");
   };
@@ -135,6 +138,9 @@ function InitialLayout() {
   const segments = useSegments();
   const router = useRouter();
   const [isReady, setIsReady] = useState(false);
+
+  // แจ้งเตือน push: ลงทะเบียนเครื่องเมื่อมีผู้ใช้ · กดแจ้งเตือนแล้วเปิดหน้าที่เกี่ยวข้อง (service/push.ts)
+  usePushNotifications(user?.id);
 
   useEffect(() => {
     setTimeout(() => setIsReady(true), 100);

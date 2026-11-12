@@ -20,6 +20,7 @@
         "foregroundImage": "./assets/images/adaptive-icon-tjc.png",
         "backgroundColor": "#ffffff"
       },
+      "googleServicesFile": "./google-services.json",
       "package": "com.tjcgroup.tjcmobileapp"
     },
     "web": {
@@ -48,7 +49,13 @@
       "expo-font",
       "expo-sharing",
       "expo-status-bar",
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "expo-notifications",
+        {
+          "color": "#1D4ED8"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
