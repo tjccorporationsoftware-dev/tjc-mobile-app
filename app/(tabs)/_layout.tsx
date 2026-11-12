@@ -68,7 +68,7 @@ const MENU_GROUPS: {
     title: "แดชบอร์ดโครงการ",
     icon: "briefcase",
     colors: ["#1d4ed8", "#38bdf8"], // น้ำเงิน ไล่ไปฟ้า
-    items: ["project_dashboard", "CostCheckScreen"],
+    items: ["project_dashboard", "CostCheckScreen", "site_job_board"],
   },
   {
     id: "accounting_group",
@@ -967,6 +967,20 @@ export default function DrawerLayout() {
           "calculator",
           "cost_check.php",
         )}
+      />
+      {/* แจ้งจัดงาน (site_job_board.php) — รับงาน/ดูใบงาน แล้วเปิดหน้าเช็คของส่งด้านล่าง */}
+      <Drawer.Screen
+        name="site_job_board"
+        options={getDrawerOptions(
+          "แจ้งจัดงาน",
+          "megaphone",
+          "site_job_board.php",
+        )}
+      />
+      {/* เช็คของส่ง (site_item_check.php) — เปิดจากหน้าแจ้งจัดงาน (รับงาน/เปิดงาน) พร้อม project_id · ไม่โชว์ในเมนู (หน้าเว็บก็ไม่มีเมนู) */}
+      <Drawer.Screen
+        name="site_item_check"
+        options={{ title: "เช็คของส่ง", drawerItemStyle: { display: "none" } }}
       />
       {/* sub-screen ของแดชบอร์ดโครงการ — เปิดจากปุ่มลัดในหน้านั้นเอง ไม่โชว์ในเมนู */}
       <Drawer.Screen name="Estimatedashboard" options={{ drawerItemStyle: { display: "none" } }} />
