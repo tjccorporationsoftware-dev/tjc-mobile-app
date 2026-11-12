@@ -53,6 +53,10 @@ export default function DriverConfirmItems() {
 
   const [refreshing, setRefreshing] = useState(false);
 
+  // รับของคืนจากหน้างาน (ขากลับ) ที่ขึ้นในใบนี้ (get_delivery_detail → returns · เว็บ driver_confirm_items.php เหมือนกัน)
+  const [doReturns, setDoReturns] = useState<{ pickable: boolean; list: any[] }>({ pickable: false, list: [] });
+  const [pickReturn, setPickReturn] = useState<{ id: number; label: string; max: number; qty: string; busy: boolean; error: string } | null>(null);
+
   // ฟังก์ชันสำหรับดึงข้อมูล (แยกออกมาเพื่อให้เรียกใช้ใหม่ได้ตอนบันทึกเสร็จ)
   const fetchDeliveryDetail = () => {
     return fetch(`${API_BASE}/api_mobile.php?action=get_delivery_detail&do_no=${do_no}`)
@@ -60,6 +64,7 @@ export default function DriverConfirmItems() {
       .then((json) => {
         const fetchedItems = json.data || [];
         setItems(fetchedItems);
+        setDoReturns(json.returns && Array.isArray(json.returns.list) ? json.returns : { pickable: false, list: [] });
 
         const initialStates: Record<string, any> = {};
 
@@ -1089,9 +1094,104 @@ export default function DriverConfirmItems() {
                 </View>
               );
             })}
+
+            {/* รับของคืนจากหน้างาน (ขากลับ): ของที่ส่งเกินจำนวน/รายการถูกลบ · ยืนยันทีละรายการ ไม่เข้าคลัง */}
+            {doReturns.list.length > 0 && (
+              <View style={styles.returnCard}>
+                <Text style={styles.returnTitle}>↩ รับของคืนจากหน้างาน (ขากลับ)</Text>
+                {doReturns.list.map((r: any) => {
+                  const picked = r.status === "picked";
+                  const qty = Number(picked ? r.picked_qty : r.qty) || 0;
+                  const qtyText = String(Math.round(qty * 100) / 100);
+                  return (
+                    <View key={r.id} style={[styles.returnRow, picked && { opacity: 0.65 }]}>
+                      <View style={{ flex: 1, gap: 2 }}>
+                        <Text style={styles.returnName}>
+                          {r.name} <Text style={[styles.returnQty, picked && { color: "#059669" }]}>{qtyText} {r.unit}</Text>
+                        </Text>
+                        <Text style={styles.returnMeta}>
+                          {(r.reason === "deleted" ? "ลบรายการแล้ว" : "แก้จำนวนลด") + (picked ? " · รับคืนแล้ว โดย " + r.picked_by : " · รอรับคืน")}
+                        </Text>
+                      </View>
+                      {!picked && doReturns.pickable && (
+                        <TouchableOpacity
+                          style={styles.returnBtn}
+                          onPress={() => setPickReturn({ id: Number(r.id), label: r.name + " (" + r.unit + ")", max: qty, qty: qtyText, busy: false, error: "" })}
+                          accessibilityRole="button"
+                          accessibilityLabel={"รับคืนแล้ว " + r.name}
+                        >
+                          <Text style={styles.returnBtnText}>รับคืนแล้ว</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  );
+                })}
+              </View>
+            )}
           </ScrollView>
         </View>
       </KeyboardAvoidingView>
+
+      {/* ยืนยันรับคืน: แก้จำนวนได้ (รับไม่ครบ ส่วนที่เหลือรอรอบถัดไป) */}
+      <Modal visible={!!pickReturn} transparent animationType="fade" onRequestClose={() => setPickReturn(null)}>
+        <View style={styles.modalOverlay}>
+          {pickReturn && (
+            <View style={styles.returnModal}>
+              <Text style={styles.returnModalTitle}>รับของคืนแล้ว</Text>
+              <Text style={styles.returnMeta}>{pickReturn.label}</Text>
+              <TextInput
+                style={styles.returnInput}
+                value={pickReturn.qty}
+                onChangeText={(t) => setPickReturn({ ...pickReturn, qty: t, error: "" })}
+                keyboardType="decimal-pad"
+                accessibilityLabel="จำนวนที่รับคืน"
+              />
+              {!!pickReturn.error && <Text style={styles.returnError}>{pickReturn.error}</Text>}
+              <View style={{ flexDirection: "row", gap: 10 }}>
+                <TouchableOpacity style={[styles.returnModalBtn, { backgroundColor: "#e2e8f0" }]} onPress={() => setPickReturn(null)} disabled={pickReturn.busy}>
+                  <Text style={{ fontWeight: "700", color: "#334155" }}>ยกเลิก</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.returnModalBtn, { backgroundColor: "#ef4444" }, pickReturn.busy && { opacity: 0.6 }]}
+                  disabled={pickReturn.busy}
+                  onPress={async () => {
+                    const qty = Number(pickReturn.qty);
+                    if (!(qty > 0)) return setPickReturn({ ...pickReturn, error: "ใส่จำนวนที่รับคืน" });
+                    if (qty > pickReturn.max + 0.001) return setPickReturn({ ...pickReturn, error: "รับคืนได้ไม่เกิน " + pickReturn.max });
+                    setPickReturn({ ...pickReturn, busy: true, error: "" });
+                    try {
+                      let fullname = "";
+                      try {
+                        const AsyncStorage = require("@react-native-async-storage/async-storage").default;
+                        const userJson = (await AsyncStorage.getItem("user")) || (await AsyncStorage.getItem("user_data")) || (await AsyncStorage.getItem("userInfo"));
+                        if (userJson) {
+                          const u = JSON.parse(userJson);
+                          fullname = u.fullname || u.name || u.username || "";
+                        }
+                      } catch (e) {}
+                      const form = new FormData();
+                      form.append("do_no", String(do_no));
+                      form.append("return_id", String(pickReturn.id));
+                      form.append("qty", String(qty));
+                      form.append("fullname", fullname);
+                      const res = await axios.post(`${API_BASE}/api_mobile.php?action=pick_delivery_return`, form, { headers: { "Content-Type": "multipart/form-data" } });
+                      if (res.data?.status !== "success") throw new Error(res.data?.message || "บันทึกไม่สำเร็จ");
+                      setPickReturn(null);
+                      const left = Number(res.data.left) || 0;
+                      Alert.alert("บันทึกรับคืนแล้ว", left > 0 ? "ที่เหลือ " + left + " รอรอบถัดไป" : "");
+                      fetchDeliveryDetail();
+                    } catch (err: any) {
+                      setPickReturn({ ...pickReturn, busy: false, error: err?.message || "บันทึกไม่สำเร็จ" });
+                    }
+                  }}
+                >
+                  <Text style={{ fontWeight: "800", color: "#fff" }}>{pickReturn.busy ? "กำลังบันทึก..." : "ยืนยันรับคืน"}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+        </View>
+      </Modal>
 
       {/* Image Viewer Modal - ย้ายออกมานอก KeyboardAvoidingView เพื่อป้องกันการถูกซ่อน/บดบัง */}
       <Modal
@@ -1122,6 +1222,20 @@ export default function DriverConfirmItems() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#f1f5f9" },
+  // รับของคืนจากหน้างาน (ขากลับ)
+  returnCard: { marginHorizontal: 16, marginTop: 8, marginBottom: 24, padding: 14, borderRadius: 16, borderWidth: 2, borderColor: "#ef4444", backgroundColor: "#fff", gap: 4 },
+  returnTitle: { fontSize: 16, fontWeight: "800", color: "#b91c1c", marginBottom: 4 },
+  returnRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 10, borderTopWidth: 1, borderTopColor: "#fee2e2" },
+  returnName: { fontSize: 15, fontWeight: "700", color: "#0f172a" },
+  returnQty: { color: "#b91c1c", fontWeight: "800" },
+  returnMeta: { fontSize: 12.5, color: "#64748b" },
+  returnBtn: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, backgroundColor: "#ef4444" },
+  returnBtnText: { color: "#fff", fontWeight: "800" },
+  returnModal: { width: "86%", maxWidth: 380, backgroundColor: "#fff", borderRadius: 18, padding: 18, gap: 10 },
+  returnModalTitle: { fontSize: 18, fontWeight: "800", color: "#b91c1c" },
+  returnInput: { borderWidth: 1, borderColor: "#cbd5e1", borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, fontSize: 18, fontWeight: "700", color: "#0f172a" },
+  returnError: { color: "#b91c1c", fontSize: 13 },
+  returnModalBtn: { flex: 1, alignItems: "center", paddingVertical: 12, borderRadius: 12 },
 
   // Modal Styles ปรับแต่งให้แสดงผลชัดเจนขึ้น
   modalOverlay: {
