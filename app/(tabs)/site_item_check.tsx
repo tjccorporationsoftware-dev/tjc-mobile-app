@@ -132,6 +132,7 @@ interface Member { id: number; name: string; qty: number; site: number; r: numbe
 interface Photo { id: number; src: string; thumb: string; by: string; at: string }
 interface PhotoAdd { uri: string; key: string }
 interface PhotoEdit { adds: PhotoAdd[]; dels: number[] }
+interface PhotoCarry { sub: number; round: number; adds: PhotoAdd[] }
 interface PoLine { no: string; cond: string; cond_po?: string; qty_text: string; tone: string; auto: boolean; wh: boolean; recv: [string, number][]; at: string; qty: number }
 interface StockInfo { src: number; auto: number; blocked: string; no_cost: boolean }
 interface LoadVal { r: string[]; d: number }
@@ -263,6 +264,11 @@ type ListItem = { type: 'sec'; sec: string; key: string } | { type: 'row'; row: 
 // -------------------- กติกาเดียวกับหน้าเว็บ --------------------
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+/** ยอดที่ติ๊กครบแล้วเติมให้: ที่ขาดจากเป้า · ถึงเป้า 80% แล้ว = ส่วนที่เหลือจนครบจำนวนเต็ม (เหมือน remainFor ในหน้าเว็บ) */
+const remainFor = (target: number, full: number, others: number) => {
+  const remain = Math.max(round2(target - others), 0);
+  return remain > 0 || full <= others ? remain : round2(full - others);
+};
 // ติ๊กครบของบรรทัดรวม → ค่าของรายการ 1 รายการ: ครบไปแล้วในรอบก่อนคงรอบเดิม · เอาติ๊กออกล้างเฉพาะรายการที่ครบรอบเดียวกับบรรทัด
 const memberDone = (old: number, next: number, saved: number) => (next > 0 ? (old > 0 && old < next ? old : next) : old === saved ? 0 : old);
 const fmt = (n: number | string) => Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 });
@@ -701,6 +707,10 @@ class Board {
   targetOf(tr: Tr) {
     return tr.isSub ? Number(this.subValues(tr).qty) || 0 : this.targetQty(tr);
   }
+  /** จำนวนเต็ม (ไม่หัก 80%) ใช้คิด "เกิน" · ติ๊ก 80% แล้วส่งส่วนที่เหลือจนครบจำนวนเต็มไม่ใช่เกิน (เหมือนหน้าเว็บ 14 พ.ย. 69) */
+  fullOf(tr: Tr) {
+    return tr.isSub ? this.targetOf(tr) : Math.max(Number((tr as Row).qty) || 0, this.targetQty(tr as Row));
+  }
   packChanged(row: Row) {
     return row.pendingPack !== row.packRound || ROUNDS.some((r) => normQty(row.pack[r - 1]) !== row.savedPack[r - 1]);
   }
@@ -998,7 +1008,7 @@ class Board {
   /** ติ๊กครบ: ช่องว่างเติมยอดที่เหลือ / กรอกแล้วคงเลขเดิม · แถวละ 1 รอบ · เลิกติ๊ก: เลขเท่ายอดที่เหลือพอดี = ล้าง */
   markPending(tr: Tr, round: number, complete: boolean, target = this.targetOf(tr)) {
     const others = ROUNDS.filter((r) => r !== round).reduce((t, r) => t + qtyOf(tr, r), 0) - backQty(tr);
-    const remain = Math.max(round2(target - others), 0);
+    const remain = remainFor(target, this.fullOf(tr), others);
     if (complete) {
       if (tr.pendingDone !== 0) return;
       tr.pendingDone = round;
@@ -1011,7 +1021,7 @@ class Board {
   }
   markPackPending(tr: Tr, round: number, complete: boolean, target = this.targetOf(tr)) {
     const others = ROUNDS.filter((r) => r !== round).reduce((t, r) => t + packOf(tr, r), 0) - backQty(tr);
-    const remain = Math.max(round2(target - others), 0);
+    const remain = remainFor(target, this.fullOf(tr), others);
     if (complete) {
       if (tr.pendingPack !== 0) return;
       tr.pendingPack = round;
@@ -1195,13 +1205,42 @@ class Board {
 
   // ---------- การแสดงผลช่องรอบ (paintRounds) ----------
   leftInfo(tr: Tr) {
-    const diff = round2(this.targetOf(tr) - sentQty(tr));
-    return { text: diff < 0 ? 'เกิน ' + fmt(-diff) : fmt(diff), tone: diff < 0 ? 'over' : diff === 0 ? 'zero' : '' };
+    const sent = sentQty(tr);
+    const diff = round2(this.targetOf(tr) - sent);
+    const over = round2(sent - this.fullOf(tr)); // เกินเทียบจำนวนเต็ม ไม่ใช่เป้า 80%
+    return { text: over > 0 ? 'เกิน ' + fmt(over) : fmt(Math.max(diff, 0)), tone: over > 0 ? 'over' : diff <= 0 ? 'zero' : '' };
+  }
+  /**
+   * ติ๊ก 80% แยกสองระดับ (เหมือน paintRounds ในเว็บ 14 พ.ย. 69): รอบที่ยอดสะสมถึงเป้า 80% และรอบที่ถึงจำนวนเต็ม
+   * คิดจากยอดสะสม ไม่ใช่ติ๊กครบ · { target: 0, full: 0 } = ไม่ได้ติ๊ก 80% หรือยังไม่ถึง
+   */
+  reachRounds(tr: Tr) {
+    const total = this.targetOf(tr);
+    const full = this.fullOf(tr);
+    const reach = { target: 0, full: 0 };
+    if (!(full > total + 0.005)) return reach;
+    const returns = returnsOf(tr);
+    let acc = 0;
+    ROUNDS.forEach((round, i) => {
+      const back = returns.filter((e) => e[0] === round).reduce((t, e) => t + e[2], 0);
+      const before = acc;
+      acc = round2(acc + (Number(normQty(tr.load[i])) || 0) - back);
+      if (!reach.target && total > 0 && acc >= total - 0.005 && before < total - 0.005) reach.target = round;
+      if (!reach.full && acc >= full - 0.005 && before < full - 0.005) reach.full = round;
+    });
+    return reach;
+  }
+  /** ป้ายในแถว: ครบ 80% รอบไหน · ครบเต็มรอบไหน (ว่าง = ไม่ได้ติ๊ก 80%) */
+  reachText(tr: Tr) {
+    const reach = this.reachRounds(tr);
+    return [reach.target ? 'ครบ 80% รอบ ' + reach.target : '', reach.full ? 'ครบเต็มรอบ ' + reach.full : ''].filter(Boolean).join(' · ');
   }
   roundCells(tr: Tr) {
     const total = this.targetOf(tr);
+    const full = this.fullOf(tr);
     const done = tr.pendingDone;
     const returns = returnsOf(tr);
+    const reach = this.reachRounds(tr);
     let sentSoFar = 0;
     return ROUNDS.map((round, i) => {
       const norm = normQty(tr.load[i]);
@@ -1214,19 +1253,26 @@ class Board {
       const packNorm = normQty(tr.pack[i]);
       const packBy = packNorm === savedPackOf(tr, i) ? this.packDraftBy(tr, round) : '';
       const packDone = tr.pendingPack;
-      const rest = round2(total - sentSoFar);
+      const rest = Math.max(round2(total - sentSoFar), 0);
+      const overAt = round2(sentSoFar - full);
       let status = '';
       let tone = '';
       if (norm === null) {
         status = 'จำนวนไม่ถูกต้อง';
         tone = 'over';
+      } else if (overAt <= 0 && reach.full === round) {
+        status = (reach.target && reach.target !== round ? 'ส่งเพิ่ม ' + fmt(round2(qty - backOfRound)) + ' · ' : '') + 'ครบเต็ม ' + fmt(full) + '/' + fmt(full);
+        tone = 'done';
+      } else if (overAt <= 0 && reach.target === round) {
+        status = 'ครบ 80% · ' + fmt(round2(sentSoFar)) + '/' + fmt(full);
+        tone = 'done';
       } else if (done === round) {
         status = 'ครบ';
         tone = 'done';
       } else if (qty > 0) {
         const backText = roundBack.map((e) => e[1] + ' ' + fmt(e[2]) + ' ').join('');
-        status = rest < 0 ? 'เกิน ' + fmt(-rest) : 'ได้ ' + fmt(round2(qty - backOfRound)) + ' ' + backText + 'ค้าง ' + fmt(rest);
-        tone = rest < 0 ? 'over' : '';
+        status = overAt > 0 ? 'เกิน ' + fmt(overAt) : 'ได้ ' + fmt(round2(qty - backOfRound)) + ' ' + backText + 'ค้าง ' + fmt(rest);
+        tone = overAt > 0 ? 'over' : '';
       }
       return {
         round,
@@ -1282,7 +1328,8 @@ class Board {
     });
     return out;
   }
-  photoUnsaved(tr: Tr) {
+  // รายการย่อยที่เพิ่งเพิ่ม (ยังไม่มี id): ถ่าย/เลือกรูปได้เลย เก็บไว้ในเครื่อง ส่งตามทันทีหลังบันทึกรายการย่อย (ผู้ใช้สั่ง 14 พ.ย. 69)
+  photoWaitsSub(tr: Tr) {
     return tr.isSub && this.isNewSub(tr);
   }
   /** ส่งรูปที่แนบ/ลบของ 1 รายการ-รอบ · ทีละรูป (รูปจากกล้องมือถือไม่ได้ย่อในเครื่อง กันเกินที่เซิร์ฟเวอร์รับ) · พลาดโยน Error */
@@ -1327,6 +1374,7 @@ class Board {
   // ถ่าย/ลบแล้วบันทึกทันที · ส่งไม่สำเร็จค้างไว้ในหน้า ส่งอีกครั้งตอนกดบันทึก · คืนข้อความแจ้ง ('' = สำเร็จ)
   async savePhotoNow(tr: Tr, round: number): Promise<string> {
     if (!this.photoPending(tr, round) || (tr.isSub && tr.deleted)) return '';
+    if (this.photoWaitsSub(tr)) return 'รูปจะบันทึกพร้อมรายการย่อยนี้ตอนกดบันทึก';
     this.photoBusy = true;
     this.emit();
     try {
@@ -1343,7 +1391,8 @@ class Board {
   }
   // กดบันทึกทั้งหน้า: รูปที่ค้างส่งทีละรายการ-รอบ · พลาดหยุดทันทีแล้วโยน Error พร้อมชื่อรายการ
   async savePhotos(onProgress?: (text: string) => void) {
-    const list = this.photoChanged();
+    // รูปของรายการย่อยใหม่รอ id จากการบันทึกข้อมูล (sendNewSubPhotos)
+    const list = this.photoChanged().filter(({ tr }) => !this.photoWaitsSub(tr));
     for (let i = 0; i < list.length; i++) {
       const { tr, round } = list[i];
       onProgress?.('กำลังส่งรูป ' + (i + 1) + '/' + list.length + '...');
@@ -1355,6 +1404,45 @@ class Board {
     }
     if (list.length) onProgress?.('กำลังบันทึก...');
     return list.length;
+  }
+  /**
+   * หลังบันทึกข้อมูล: ส่งรูปของรายการย่อยที่เพิ่งเพิ่ม ด้วย id ที่เซิร์ฟเวอร์ตอบกลับ (sub_ids {key: id})
+   * ส่งไม่สำเร็จไม่โยน Error (ข้อมูลบันทึกไปแล้ว) คืนรูปที่ค้างไว้ให้ใส่กลับหลังโหลดหน้าใหม่ (restorePhotoAdds)
+   */
+  async sendNewSubPhotos(list: { tr: Tr; round: number }[], subIds: Record<string, any>, onProgress?: (text: string) => void) {
+    const carry: PhotoCarry[] = [];
+    const failed: string[] = [];
+    let sent = 0;
+    for (let i = 0; i < list.length; i++) {
+      const { tr, round } = list[i];
+      const id = num(subIds[tr.key]);
+      if (!id) {
+        failed.push(trName(tr) + ' รอบ ' + round);
+        continue;
+      }
+      tr.id = id; // บันทึกแล้ว (หน้าโหลดใหม่ตามหลัง)
+      onProgress?.('กำลังส่งรูปรายการย่อย ' + (i + 1) + '/' + list.length + '...');
+      try {
+        await this.sendPhotos(tr, round);
+        sent++;
+      } catch (err: any) {
+        failed.push(trName(tr) + ' รอบ ' + round);
+        const adds = this.photoEditOf(tr, round).adds;
+        if (adds.length) carry.push({ sub: id, round, adds: adds.slice() });
+      }
+    }
+    return { sent, failed, carry };
+  }
+  // ใส่รูปที่ส่งไม่สำเร็จกลับหลังโหลดหน้าใหม่ (ค้างเป็นรูปรอส่ง กดบันทึกส่งอีกครั้ง)
+  restorePhotoAdds(carry: PhotoCarry[]) {
+    carry.forEach(({ sub, round, adds }) => {
+      const tr = this.rows.flatMap((row) => row.subs).find((s) => s.id === sub);
+      if (!tr) return;
+      const edit = this.photoEditOf(tr, round);
+      // โหลดหน้าใหม่ไม่สำเร็จ = หน้าเดิม รูปยังค้างอยู่แล้ว ไม่ใส่ซ้ำ
+      const fresh = adds.filter((add) => !edit.adds.some((a) => a.key === add.key));
+      if (fresh.length) this.setPhotoEdit(tr, round, { adds: edit.adds.concat(fresh), dels: edit.dels.slice() });
+    });
   }
 
   // ---------- ช่องขึ้นเห็นตามกัน (live) ----------
@@ -1758,7 +1846,8 @@ class Board {
       const where = 'ย่อยของ ' + sub.parent.name;
       const unit = v.unit ? ' ' + v.unit : '';
       if (this.isNewSub(sub)) {
-        changes.subs.push({ op: 'add', parent: sub.parent.id, ...subPayload(v) });
+        // k = รหัสชั่วคราว เซิร์ฟเวอร์ตอบ id กลับใน sub_ids ให้ส่งรูปที่แนบไว้ตามไป
+        changes.subs.push({ op: 'add', parent: sub.parent.id, k: sub.key, ...subPayload(v) });
         const rounds = ROUNDS.flatMap((round) => [v.p[round - 1] ? 'จัดรอบ ' + round + ': ' + fmt(v.p[round - 1]) : '', v.r[round - 1] ? 'ขึ้นรอบ ' + round + ': ' + fmt(v.r[round - 1]) : '']).filter(Boolean);
         lines.push({ name: v.name || '(ยังไม่มีชื่อ)', where, text: ['เพิ่มรายการย่อย จำนวน ' + fmt(v.qty || 0) + unit].concat(rounds).join(' · ') });
         return;
@@ -1933,8 +2022,11 @@ class Board {
     this.ctx++;
   }
 
-  /** ส่งทุกการแก้ไขไปบันทึก (รูปก่อน แล้วข้อมูลอื่นครั้งเดียว) คืน { reload, message } · พลาดโยน Error */
-  async saveAll(onProgress?: (text: string) => void): Promise<{ reload: boolean; message: string }> {
+  /**
+   * ส่งทุกการแก้ไขไปบันทึก (รูปก่อน แล้วข้อมูลอื่นครั้งเดียว แล้วรูปของรายการย่อยใหม่) คืน { reload, message } · พลาดโยน Error
+   * photoFail = ข้อมูลบันทึกแล้วแต่ส่งรูปรายการย่อยใหม่ไม่สำเร็จ · carry = รูปที่ใส่กลับหลังโหลดหน้าใหม่
+   */
+  async saveAll(onProgress?: (text: string) => void): Promise<{ reload: boolean; message: string; photoFail?: string; carry?: PhotoCarry[] }> {
     this.linkPacksForSave(); // ทางบันทึกที่ไม่ผ่านหน้าต่างยืนยัน ช่องจัดก็ตามช่องขึ้น
     await this.flushAutoSaves();
     await this.cancelLive();
@@ -1970,15 +2062,28 @@ class Board {
           throw new Error(again.message + photoNote);
         }
       }
+      // รายการย่อยใหม่ที่แนบรูปไว้ (เก็บก่อน applySaved · ยังเป็นตัวใหม่อยู่จนโหลดหน้าใหม่)
+      const newSubPhotos = this.photoChanged().filter(({ tr }) => this.photoWaitsSub(tr));
       this.applySaved(data);
       this.myDrafts = num(data.drafts);
       if (!this.myDrafts) this.clearMyDrafts();
       ROUNDS.forEach((round) => {
         this.rounds[round].savedHead = { ...this.rounds[round].head };
       });
-      const message = 'บันทึกแล้ว' + photoText + (data.stock_count ? ' · เบิกสต๊อกอัตโนมัติ ' + data.stock_count + ' รายการ' : '');
+      let subPhotoText = '';
+      let photoFail = '';
+      let carry: PhotoCarry[] = [];
+      if (newSubPhotos.length) {
+        const res = await this.sendNewSubPhotos(newSubPhotos, data.sub_ids || {}, onProgress);
+        if (res.sent) subPhotoText = ' · รูปรายการย่อย ' + res.sent + ' รายการ';
+        if (res.failed.length) {
+          photoFail = 'บันทึกแล้ว แต่ส่งรูปไม่สำเร็จ: ' + res.failed.join(', ') + (res.carry.length ? ' · รูปค้างไว้ กดบันทึกอีกครั้ง' : ' · แนบรูปใหม่อีกครั้ง');
+        }
+        carry = res.carry;
+      }
+      const message = 'บันทึกแล้ว' + photoText + subPhotoText + (data.stock_count ? ' · เบิกสต๊อกอัตโนมัติ ' + data.stock_count + ' รายการ' : '');
       // รายการย่อยที่เพิ่ม/ลบ ชื่อเปลี่ยน หรือออก/แก้ใบส่ง: ต้องวาดหน้าใหม่จากเซิร์ฟเวอร์
-      return { reload: Boolean(data.reload) || changes.subs.length > 0, message };
+      return { reload: Boolean(data.reload) || changes.subs.length > 0, message, photoFail, carry };
     } finally {
       this.saving = false;
       this.touchAll();
@@ -2602,6 +2707,7 @@ interface CardActions {
   loadTick: (tr: Tr, round: number) => void;
   packTick: (tr: Tr, round: number) => void;
   photo: (tr: Tr, round: number) => void;
+  viewPhoto: (tr: Tr, round: number) => void;
   note: (tr: Tr, text: string) => void;
   focus: (row: Row | null) => void;
   p80: (row: Row) => void;
@@ -2640,8 +2746,9 @@ function RoundBox({ b, tr, cell, act, disabledAll }: { b: Board; tr: Tr; cell: R
   const round = cell.round;
   const rc = roundColor(round);
   const total = b.photoTotal(tr, round);
-  const unsaved = b.photoUnsaved(tr);
-  const photoDisabled = unsaved || (cell.locked && total === 0);
+  // ปุ่มกล้อง = ถ่ายอย่างเดียว · ปุ่มดูรูปแยก โผล่เมื่อมีรูป (ผู้ใช้สั่ง 14 พ.ย. 69) · รอบล็อกถ่ายเพิ่มไม่ได้ ซ่อนกล้อง
+  // รายการย่อยที่เพิ่งเพิ่มก็แนบรูปได้เลย (ส่งตามหลังกดบันทึก)
+  const camFull = total >= b.photoMax;
   const conflicts = tr.conflicts.filter((c) => c.round === round && c.still());
   return (
     <View style={[s.roundBox, { backgroundColor: rc.tint, borderColor: rc.c + '2E' }, cell.locked && s.roundBoxLocked]}>
@@ -2651,15 +2758,26 @@ function RoundBox({ b, tr, cell, act, disabledAll }: { b: Board; tr: Tr; cell: R
         <Text style={[s.cellStatus, cell.tone === 'over' && { color: C.bad }, cell.tone === 'done' && { color: C.ok, fontWeight: '800' }]} numberOfLines={2}>
           {cell.status}
         </Text>
-        <TouchableOpacity
-          style={[s.photoBtn, total > 0 && s.photoBtnOn, b.photoPending(tr, round) && s.photoBtnPending, photoDisabled && { opacity: 0.4 }]}
-          disabled={photoDisabled}
-          onPress={() => act.photo(tr, round)}
-          accessibilityLabel={'รูปจัดของ รอบ ' + round}
-        >
-          <Ionicons name="camera" size={15} color={total > 0 ? '#fff' : C.primary} />
-          <Text style={[s.photoBtnText, total > 0 && { color: '#fff' }]}>{total > 0 ? total + '/' + b.photoMax : 'รูป'}</Text>
-        </TouchableOpacity>
+        {total > 0 && (
+          <TouchableOpacity
+            style={[s.photoBtn, s.photoBtnOn, b.photoPending(tr, round) && s.photoBtnPending]}
+            onPress={() => act.viewPhoto(tr, round)}
+            accessibilityLabel={'ดูรูปจัดของ รอบ ' + round}
+          >
+            <Text style={[s.photoBtnText, { color: '#fff' }]}>{'ดูรูป ' + total + '/' + b.photoMax}</Text>
+          </TouchableOpacity>
+        )}
+        {!cell.locked && (
+          <TouchableOpacity
+            style={[s.photoBtn, camFull && { opacity: 0.4 }]}
+            disabled={camFull}
+            onPress={() => act.photo(tr, round)}
+            accessibilityLabel={camFull ? 'ครบ ' + b.photoMax + ' รูปแล้ว' : 'ถ่ายรูปจัดของ รอบ ' + round}
+          >
+            <Ionicons name="camera" size={15} color={C.primary} />
+            {total === 0 && <Text style={s.photoBtnText}>ถ่ายรูป</Text>}
+          </TouchableOpacity>
+        )}
       </View>
       <View style={s.boxPair}>
         <View style={[s.box, cell.flash && s.boxFlash]}>
@@ -2765,9 +2883,10 @@ const RowCard = memo(function RowCard({ b, row, shown, noteOnly, act }: { b: Boa
   const retOver = b.returnOver(row); // ส่งถึงหน้างานแล้วเกินจำนวน → รับกลับ
   const retWait = b.returnWaiting(row); // กดรับคืนแล้ว รอคนขับรับ
   const retGot = b.returnPicked(row); // คนขับรับคืนแล้ว (ป้ายเขียว)
+  const reachText = b.reachText(row); // ติ๊ก 80%: ครบ 80% รอบไหน · ครบเต็มรอบไหน
   const hasTags =
     !!row.skipReason || ids.length > 1 || row.parts.length > 1 || !!row.where || row.namesDiffer || row.multiUnit || !!row.hint || row.otherDo > 0 || !!row.doneText || dirty
-    || retOver > 0 || retWait > 0 || retGot > 0;
+    || retOver > 0 || retWait > 0 || retGot > 0 || !!reachText;
   const leftTone = left.tone === 'over' ? s.leftOver : left.tone === 'zero' ? s.leftZero : null;
   const leftColor = left.tone === 'over' ? C.bad : left.tone === 'zero' ? C.ok : C.warn;
   return (
@@ -2799,6 +2918,7 @@ const RowCard = memo(function RowCard({ b, row, shown, noteOnly, act }: { b: Boa
       </View>
       {hasTags && (
         <View style={s.tags}>
+          {!!reachText && <Chip text={reachText} color={C.ok} bg="#fff" bold />}
           {!!row.doneText && <Chip text={row.doneText} color={C.ok} bg={C.okBg} icon="checkmark-circle" bold />}
           {dirty && <Chip text="ยังไม่บันทึก" color={C.warn} bg={C.warnBg} icon="create" bold />}
           {!!row.skipReason && <Chip text={row.skipReason} />}
@@ -3392,6 +3512,7 @@ export default function SiteItemCheckScreen() {
       loadTick: (tr, round) => with_((bd) => bd.onLoadTick(tr, round, tr.pendingDone !== round)),
       packTick: (tr, round) => with_((bd) => bd.onPackTick(tr, round, tr.pendingPack !== round)),
       photo: (tr, round) => with_((bd) => onPhotoButton(bd, tr, round)),
+      viewPhoto: (tr, round) => setPhoto({ tr, round, note: '' }),
       note: (tr, text) => with_((bd) => bd.setNote(tr, text)),
       focus: (row) => {
         setFocusRow(row);
@@ -3494,10 +3615,8 @@ export default function SiteItemCheckScreen() {
     const room = Math.max(board.photoMax - board.photoTotal(tr, round), 0);
     if (!room || board.roundFrozen(round) || board.photoBusy) return;
     const adds = await pickImages(camera, room);
-    if (!adds.length) {
-      if (board.photoTotal(tr, round) > 0) setPhoto({ tr, round, note: '' });
-      return;
-    }
+    // ยกเลิกกล้อง = ไม่ทำอะไร (ดูรูปมีปุ่มแยกแล้ว)
+    if (!adds.length) return;
     const edit = board.photoEditOf(tr, round);
     board.setPhotoEdit(tr, round, { adds: edit.adds.concat(adds), dels: edit.dels.slice() });
     setPhoto({ tr, round, note: '' });
@@ -3505,7 +3624,7 @@ export default function SiteItemCheckScreen() {
     setPhoto((p) => (p && p.tr === tr && p.round === round ? { ...p, note } : p));
   }
 
-  // ปุ่มกล้อง = เปิดกล้องทันที (ถ่ายแล้วบันทึกเลย) · รอบล็อก/ครบแล้ว = เปิดดูรูป
+  // ปุ่มกล้อง = เปิดกล้องทันที (ถ่ายแล้วบันทึกเลย) · รอบล็อก/ครบแล้ว/กำลังส่ง = เปิดหน้าต่างรูปแทน (ปุ่มดูรูปแยก: viewPhoto)
   function onPhotoButton(board: Board, tr: Tr, round: number) {
     if (board.roundFrozen(round) || board.photoTotal(tr, round) >= board.photoMax || board.photoBusy) {
       setPhoto({ tr, round, note: '' });
@@ -3554,11 +3673,17 @@ export default function SiteItemCheckScreen() {
     if (!board) return false;
     setBusyText('กำลังบันทึก...');
     try {
-      const { reload, message } = await board.saveAll((t) => setBusyText(t));
+      const { reload, message, photoFail, carry } = await board.saveAll((t) => setBusyText(t));
       board.confirmOpen = false;
       setConfirm(null);
       if (reload) await loadPage(board.project.id, message);
       else showToast(message);
+      // รูปรายการย่อยใหม่ส่งไม่สำเร็จ: ใส่กลับเป็นรูปรอส่ง แจ้งเตือน และอยู่หน้านี้ต่อ (ไม่ทำต่อ เช่น ออกจากหน้า)
+      if (photoFail) {
+        if (carry?.length) boardRef.current?.restorePhotoAdds(carry);
+        showToast(photoFail, true);
+        return false;
+      }
       after?.();
       return true;
     } catch (err: any) {
@@ -4837,7 +4962,9 @@ export default function SiteItemCheckScreen() {
       : busy
         ? 'กำลังบันทึกรูป...'
         : photo.note ||
-          (b.photoPending(tr, round)
+          (b.photoWaitsSub(tr)
+            ? 'รูปจะบันทึกพร้อมรายการย่อยนี้ตอนกดบันทึก'
+            : b.photoPending(tr, round)
             ? 'ยังไม่ได้บันทึกรูป จะส่งตอนกดบันทึก'
             : total >= b.photoMax
               ? 'บันทึกแล้ว ครบ ' + b.photoMax + ' รูป'
