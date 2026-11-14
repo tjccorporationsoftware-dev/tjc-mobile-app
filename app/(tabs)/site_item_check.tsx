@@ -30,6 +30,7 @@ import {
   FlatList,
   Image,
   Keyboard,
+  KeyboardAvoidingView,
   Linking,
   Modal,
   Platform,
@@ -51,14 +52,20 @@ import { API_BASE, API_MODULES } from '../../constants/config';
 import { useAuth } from '../_layout';
 
 const SIC_API_URL = `${API_MODULES}/site_item_check_API_mobile.php`;
-const ROUNDS = [1, 2, 3];
+// รอบที่มี 1..N ตามหน้างาน (ผู้ใช้สั่ง 13 พ.ย. 69 รอบ 4 5 6 เพิ่มมาเรื่อย ๆ ไม่ฟิค) · ตั้งใหม่ทุกครั้งที่โหลดหน้า (Board.load จาก page.rounds)
+let ROUNDS: number[] = [1, 2, 3];
+const roundsOf = (rounds: any): number[] => {
+  const n = Math.max(3, ...Object.keys(rounds || {}).map(Number).filter((r) => Number.isInteger(r) && r > 0));
+  return Array.from({ length: n }, (_, i) => i + 1);
+};
 const MAX_QTY = 9999999;
 const SYNC_MS = 2000;
 const AUTO_MS = 1500;
 const LIVE_MS = 700;
 const ROUND_LOCK_TEXT = 'รอบนี้จัดส่งบันทึกส่งแล้ว แก้ไม่ได้';
-// load_at = วันที่ขึ้นของ (ไม่อยู่ในใบส่งของ แก้อย่างเดียวไม่ต้องเขียนใบส่งใหม่ · headDoChanged)
-const HEAD_KEYS = ['transport', 'driver', 'helper', 'vehicle', 'receiver', 'organizer', 'deliver_at', 'load_at', 'note'] as const;
+// load_at = วันที่ขึ้นของ · job_note = หมายเหตุจัดงาน (ไม่อยู่ในใบส่งของ แก้อย่างเดียวไม่ต้องเขียนใบส่งใหม่ · headDoChanged)
+const HEAD_KEYS = ['transport', 'driver', 'helper', 'vehicle', 'receiver', 'organizer', 'deliver_at', 'load_at', 'job_note', 'note'] as const;
+const JOB_NOTE_MAX = 500; // = SIC_JOB_NOTE_MAX
 const EMPTY_TEXT: Record<string, string> = { todo: 'ไม่มีรายการค้างแล้ว', done: 'ยังไม่มีรายการที่ติ๊กครบ', all: 'ไม่มีรายการ' };
 const JOB_STATUS_TEXT: Record<string, string> = { waiting: 'รอจัด', packing: 'กำลังจัด', packed: 'รอขึ้น', loading: 'กำลังขึ้นรถ', loaded: 'ขึ้นครบแล้ว' };
 const STOCK_BLOCKED_TEXT: Record<string, string> = { parts: 'ซื้อเป็นชิ้นส่วน เบิกเองที่หน้าโครงการ', split: 'แยกทุนส่วนประกอบ เบิกเองที่หน้าโครงการ' };
@@ -97,6 +104,16 @@ const ROUND_COLOR: Record<number, { c: string; tint: string; grad: [string, stri
   2: { c: '#EA580C', tint: '#FFF2E8', grad: ['#FFB067', '#F2620F'] },
   3: { c: '#16A34A', tint: '#E9F8EF', grad: ['#5EE38E', '#16A34A'] },
 };
+// รอบ 4 ขึ้นไปวนชุดสีนี้ (เดียวกับหน้าเว็บ SIC_ROUND_PALETTE) ม่วง / ชมพู / น้ำเงิน / น้ำตาลทอง / เทาฟ้า / บานเย็น
+const ROUND_PALETTE: { c: string; tint: string; grad: [string, string] }[] = [
+  { c: '#7C3AED', tint: '#F1EAFE', grad: ['#B69CFF', '#7C3AED'] },
+  { c: '#DB2777', tint: '#FDEAF3', grad: ['#F58BB8', '#DB2777'] },
+  { c: '#2563EB', tint: '#E8EFFE', grad: ['#8FB0FF', '#2563EB'] },
+  { c: '#A16207', tint: '#FBF2DE', grad: ['#E6B85C', '#A16207'] },
+  { c: '#475569', tint: '#ECEFF3', grad: ['#A3B1C4', '#475569'] },
+  { c: '#C026D3', tint: '#FAE9FC', grad: ['#E58AF0', '#C026D3'] },
+];
+const roundColor = (round: number) => ROUND_COLOR[round] ?? ROUND_PALETTE[Math.max(0, round - 4) % ROUND_PALETTE.length];
 // สถานะจัด/ขึ้นของรอบ — ชุดสีเดียวกับแท็บสถานะหน้าแจ้งจัดงาน
 const JOB_STATUS_COLOR: Record<string, { c: string; bg: string }> = {
   waiting: { c: C.soft, bg: C.track },
@@ -154,6 +171,8 @@ interface RoundCard {
   jobSaved: boolean;
   jobText: string;
   jobAt: string;
+  done: boolean; // ยืนยันจบรอบแล้ว (finish_round · ผู้ใช้สั่ง 13 พ.ย. 69)
+  doneText: string;
 }
 
 interface TrBase {
@@ -231,6 +250,7 @@ interface Changes {
   notes: any[];
   names: any[];
   rounds: Record<string, Head>;
+  rounds_saved: Record<string, Head>; // หัวรอบตอนโหลด · เซิร์ฟเวอร์ทับเฉพาะช่องที่เราแก้
   round_base: Record<string, string>;
   header: Record<string, string>;
   subs: any[];
@@ -243,6 +263,8 @@ type ListItem = { type: 'sec'; sec: string; key: string } | { type: 'row'; row: 
 // -------------------- กติกาเดียวกับหน้าเว็บ --------------------
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
+// ติ๊กครบของบรรทัดรวม → ค่าของรายการ 1 รายการ: ครบไปแล้วในรอบก่อนคงรอบเดิม · เอาติ๊กออกล้างเฉพาะรายการที่ครบรอบเดียวกับบรรทัด
+const memberDone = (old: number, next: number, saved: number) => (next > 0 ? (old > 0 && old < next ? old : next) : old === saved ? 0 : old);
 const fmt = (n: number | string) => Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 });
 const str = (v: any) => (v === null || v === undefined ? '' : String(v));
 const num = (v: any) => (Number.isFinite(Number(v)) ? Number(v) : 0);
@@ -348,8 +370,9 @@ const isDone = (row: Row) => row.doneRound > 0;
 const trName = (tr: Tr) => (tr.isSub ? tr.name.trim() || 'รายการย่อย' : tr.name);
 // ค่าที่ส่งไปบันทึก (ทั้งค่าใหม่และ base) รูปแบบเดียวกับ sic_parse_sub() ใน PHP
 const subPayload = (v: SubSaved) => ({
-  name: v.name, qty: v.qty || '', unit: v.unit, r1: v.r[0] || '', r2: v.r[1] || '', r3: v.r[2] || '', done: v.done,
-  pk1: v.p[0] || '', pk2: v.p[1] || '', pk3: v.p[2] || '', pd: v.pd, stock: v.stock, note: v.note,
+  name: v.name, qty: v.qty || '', unit: v.unit, done: v.done, pd: v.pd, stock: v.stock, note: v.note,
+  // ทุกรอบที่มี: r1.. (ขึ้น) pk1.. (จัด)
+  ...Object.fromEntries(ROUNDS.flatMap((round, i) => [['r' + round, v.r[i] || ''], ['pk' + round, v.p[i] || '']])),
 });
 
 class ApiError extends Error {
@@ -446,6 +469,7 @@ class Board {
     this.presence = Array.isArray(page.presence) ? page.presence : [];
     this.returns = readReturns(page.returns);
     this.myPackTouched.clear();
+    ROUNDS = roundsOf(page.rounds); // รอบที่มี (รอบ 4 ขึ้นไปเพิ่มเอง)
     this.rounds = {};
     ROUNDS.forEach((round) => {
       const info = page.rounds?.[String(round)] || {};
@@ -465,6 +489,8 @@ class Board {
         jobSaved: !!info.job_on,
         jobText: str(info.job_text),
         jobAt: str(info.job_at),
+        done: !!info.done_on,
+        doneText: str(info.done_text),
       };
     });
     const subsData = page.subs || {};
@@ -475,8 +501,8 @@ class Board {
       const group: Group = { sec: str(g.sec), order: num(g.order), name: str(g.name), search: str(g.search), rows: [] };
       (Array.isArray(g.lines) ? g.lines : []).forEach((l: any) => {
         const members: Member[] = (l.members || []).map((m: any) => ({
-          id: num(m.id), name: str(m.name), qty: num(m.qty), site: num(m.site), r: (m.r || [0, 0, 0]).map(num), back: num(m.back),
-          done: num(m.done), pk: (m.pk || [0, 0, 0]).map(num), pd: num(m.pd), p80: num(m.p80), stock: num(m.stock),
+          id: num(m.id), name: str(m.name), qty: num(m.qty), site: num(m.site), r: (m.r || ROUNDS.map(() => 0)).map(num), back: num(m.back),
+          done: num(m.done), pk: (m.pk || ROUNDS.map(() => 0)).map(num), pd: num(m.pd), p80: num(m.p80), stock: num(m.stock),
         }));
         const savedLoad = ROUNDS.map((round) => sumOf(members, 'r', round));
         const savedPackV = ROUNDS.map((round) => sumOf(members, 'pk', round));
@@ -528,7 +554,7 @@ class Board {
           shared: null,
           liveBy: '',
           conflicts: [],
-          flash: [0, 0, 0],
+          flash: ROUNDS.map(() => 0),
           packState: '',
           autoFailed: false,
           v: 0,
@@ -554,7 +580,7 @@ class Board {
   }
 
   photoMapOf(raw: any): Record<number, Photo[]> {
-    const out: Record<number, Photo[]> = { 1: [], 2: [], 3: [] };
+    const out: Record<number, Photo[]> = {};
     ROUNDS.forEach((round) => {
       const list = raw?.[String(round)] ?? raw?.[round];
       out[round] = Array.isArray(list) ? list : [];
@@ -586,7 +612,7 @@ class Board {
       shared: null,
       liveBy: '',
       conflicts: [],
-      flash: [0, 0, 0],
+      flash: ROUNDS.map(() => 0),
       packState: '',
       autoFailed: false,
       v: 0,
@@ -598,8 +624,9 @@ class Board {
       name: str(raw?.name),
       qty: str(raw?.qty),
       unit: str(raw?.unit),
-      r: [0, 1, 2].map((i) => str(raw?.r?.[i])),
-      p: [0, 1, 2].map((i) => str(raw?.p?.[i])),
+      // ทุกรอบที่มี (รอบ 4 ขึ้นไปเพิ่มเอง) · เดิมฟิค 3 ช่อง รอบ 4+ อ่าน load[3] แล้วแอปพัง + บันทึกชน 409 ทุกครั้ง
+      r: ROUNDS.map((_, i) => str(raw?.r?.[i])),
+      p: ROUNDS.map((_, i) => str(raw?.p?.[i])),
       done: num(raw?.done),
       pd: num(raw?.pd),
       stock: num(raw?.stock),
@@ -625,6 +652,37 @@ class Board {
   }
   isLocked(round: number) {
     return !!this.rounds[round]?.locked;
+  }
+  /**
+   * ยืนยันจบรอบแล้ว (ผู้ใช้สั่ง 13 พ.ย. 69 · หน้าเว็บ roundFrozen): ดูได้อย่างเดียว จนคนมีสิทธิ์แก้ไขรอบกดปุ่มแก้ไขของรอบนั้น
+   * frozen = ล็อก (คนขับยืนยัน) หรือจบรอบ · เซิร์ฟเวอร์กันคนไม่มีสิทธิ์ซ้ำ (sic_round_scope_error)
+   */
+  roundDone(round: number) {
+    return !!this.rounds[round]?.done;
+  }
+  roundClosed(round: number) {
+    return this.roundDone(round) && this.editRound !== round;
+  }
+  roundFrozen(round: number) {
+    return this.isLocked(round) || this.roundClosed(round);
+  }
+  frozenText(round: number) {
+    return this.isLocked(round) ? ROUND_LOCK_TEXT : 'รอบนี้ยืนยันจบแล้ว' + (this.canEditRound ? ' กดแก้ไขที่กล่องสถานะจัดงานเพื่อแก้' : ' แก้ไม่ได้');
+  }
+  // บันทึกขึ้นของรอบนี้แล้ว (มีช่องขึ้นที่บันทึกแล้ว) = กดยืนยันจบรอบได้
+  roundLoadSaved(round: number) {
+    return this.allTrs().some((tr) => Number(savedLoadOf(tr, round - 1)) > 0);
+  }
+  /** ยืนยันจบรอบ (action finish_round · sic_finish_round) จบแล้วหน้าแจ้งจัดงานไม่แสดงรอบนี้ */
+  async finishRound(round: number) {
+    const data = await this.hooks.api('finish_round', { round: String(round) });
+    const card = this.rounds[round];
+    card.done = true;
+    card.doneText = str(data.text);
+    if (this.editRound === round) this.editRound = 0;
+    this.touchAll();
+    this.ctx++;
+    this.emit();
   }
 
   // ---------- ค่าที่กรอกเทียบค่าที่บันทึกแล้ว ----------
@@ -712,7 +770,7 @@ class Board {
     const saved = sub.saved;
     return (
       saved !== null &&
-      ROUNDS.some((round, i) => this.isLocked(round) && (Number(saved.r[i]) > 0 || Number(saved.done) === round || Number(saved.p[i]) > 0 || Number(saved.pd) === round))
+      ROUNDS.some((round, i) => this.roundFrozen(round) && (Number(saved.r[i]) > 0 || Number(saved.done) === round || Number(saved.p[i]) > 0 || Number(saved.pd) === round))
     );
   }
 
@@ -734,6 +792,7 @@ class Board {
   jobMeta(round: number) {
     const card = this.rounds[round];
     if (this.jobChanged(round)) return card.jobOn ? 'ยังไม่บันทึก' : 'ยกเลิกแจ้ง · ยังไม่บันทึก';
+    if (card.jobOn && card.done) return card.doneText;
     return card.jobOn ? card.jobText : 'กดเพื่อแจ้งจัดงาน';
   }
   toggleJob(round: number) {
@@ -816,7 +875,8 @@ class Board {
    */
   roundView() {
     const current = Math.max(0, ...ROUNDS.filter((r) => this.rounds[r].jobOn));
-    if (this.editRound === current || !this.canEditRound) this.editRound = 0;
+    // ยืนยันจบรอบแล้ว: รอบล่าสุดก็ต้องกดแก้ไขก่อนจึงแก้ได้ (ปุ่มแก้ไขขึ้นที่รอบที่แสดงอยู่ด้วย)
+    if ((this.editRound === current && !this.roundDone(current)) || !this.canEditRound) this.editRound = 0;
     const shown = this.editRound || current;
     const jobTop = Math.min(ROUNDS.length, current + 1);
     const jobRows = ROUNDS.map((round) => {
@@ -824,7 +884,7 @@ class Board {
       return {
         round,
         visible: round <= jobTop || hasData,
-        edit: this.canEditRound && round !== shown && (round <= current || this.rounds[round].jobOn || hasData),
+        edit: this.canEditRound && (round !== shown || this.roundClosed(round)) && (round <= current || this.rounds[round].jobOn || hasData),
       };
     });
     return { shown, current, jobTop, jobRows, editing: this.editRound };
@@ -837,11 +897,20 @@ class Board {
 
   // ---------- หัวใบส่งของ ----------
   headChanged(round: number) {
-    return !sameJson(this.rounds[round].head, this.rounds[round].savedHead);
+    const head = this.rounds[round].head;
+    return !sameJson({ ...head, job_note: head.job_note.trim() }, this.rounds[round].savedHead); // หมายเหตุจัดงานเก็บตามที่พิมพ์ เทียบแบบตัดช่องว่าง
   }
   /** หัวใบที่อยู่ในใบส่งของเปลี่ยน (ไม่นับวันที่ขึ้นของ) · เหมือน sic_head_only_load_changed() ฝั่งเซิร์ฟเวอร์ */
   headDoChanged(round: number) {
-    return !sameJson({ ...this.rounds[round].head, load_at: '' }, { ...this.rounds[round].savedHead, load_at: '' });
+    return !sameJson({ ...this.rounds[round].head, load_at: '', job_note: '' }, { ...this.rounds[round].savedHead, load_at: '', job_note: '' });
+  }
+  /** หมายเหตุจัดงาน (กล่องสถานะจัดงาน ใต้วันที่ขึ้นของ) แก้หัวรอบ รอกดบันทึก · ไม่อยู่ในใบส่งของ · เก็บตามที่พิมพ์ (เซิร์ฟเวอร์ตัดช่องว่างหัวท้ายเอง) */
+  setJobNote(round: number, text: string) {
+    this.rounds[round].head = { ...this.rounds[round].head, job_note: text };
+    this.emit();
+  }
+  jobNoteChanged(round: number) {
+    return this.rounds[round].head.job_note.trim() !== this.rounds[round].savedHead.job_note;
   }
   setHead(round: number, head: Head) {
     this.rounds[round].head = readHead(head);
@@ -881,8 +950,9 @@ class Board {
     const packDoneChanged = row.pendingPack !== row.packRound;
     members.forEach((m) => {
       // ติ๊กครบในรอบที่ล็อกแล้วแก้ไม่ได้ รายการนั้นคงค่าเดิม
-      if (doneChanged && !(m.done > 0 && this.isLocked(m.done))) m.done = row.pendingDone;
-      if (packDoneChanged && !(m.pd > 0 && this.isLocked(m.pd))) m.pd = row.pendingPack;
+      // รายการที่ครบไปแล้วในรอบก่อนคงรอบเดิม (ไม่นับเป็นการแก้รอบเก่า) · เหมือน memberDone ใน js/site_item_check.js
+      if (doneChanged && !(m.done > 0 && this.isLocked(m.done))) m.done = memberDone(m.done, row.pendingDone, row.doneRound);
+      if (packDoneChanged && !(m.pd > 0 && this.isLocked(m.pd))) m.pd = memberDone(m.pd, row.pendingPack, row.packRound);
       if (packOnly) return;
       if (this.p80Changed(row)) m.p80 = row.p80 ? 1 : 0;
     });
@@ -903,8 +973,10 @@ class Board {
     if (!row.stock) return null;
     const info = row.stock;
     const sentOf = (members: Member[]) => round2(members.reduce((t, m) => t + m.r.reduce((a, b) => a + b, 0) - (m.back || 0), 0));
-    const sent = sentOf(this.planMembers(row));
-    if (Math.abs(sent - sentOf(row.members)) < 0.005) return null;
+    // เซิร์ฟเวอร์คิดเบิกใหม่เมื่อยอดรอบใดรอบหนึ่งของรายการใดเปลี่ยน (ย้ายยอดข้ามรอบก็คิด) · เหมือน stockPlan() ในเว็บ
+    const planned = this.planMembers(row);
+    if (!planned.some((m, i) => m.r.some((v, k) => Math.abs(v - (row.members[i]?.r[k] || 0)) >= 0.005))) return null;
+    const sent = sentOf(planned);
     const wanted = Math.max(0, round2(sent - info.src));
     const need = info.blocked ? Math.min(wanted, info.auto) : wanted;
     return { ...info, sent, held: info.blocked !== '' && wanted > need, delta: round2(need - info.auto) };
@@ -1005,6 +1077,10 @@ class Board {
   returnWaiting(row: Row) {
     return round2(row.ids.reduce((sum, id) => sum + num(this.returns.waiting[String(id)]), 0));
   }
+  /** คนขับรับคืนแล้วของบรรทัด (30 วันล่าสุด) · ป้ายเขียว (ผู้ใช้สั่ง 13 พ.ย. 69 ให้เห็นชัด) */
+  returnPicked(row: Row) {
+    return round2(this.returns.list.filter((r) => r.status === 'picked' && row.ids.includes(num(r.item))).reduce((sum, r) => sum + num(r.picked_qty), 0));
+  }
   /** กดรับของคืน / ยกเลิก: เซิร์ฟเวอร์คิดจำนวนใหม่เอง คืนข้อมูลรับคืนชุดใหม่ */
   async returnAction(action: 'return_request' | 'return_cancel', fields: Record<string, string>) {
     const data = await this.hooks.api(action, fields);
@@ -1080,8 +1156,8 @@ class Board {
     const sub = this.makeSub(row, { id: 0, saved: {} });
     sub.saved = null;
     sub.key = 'n' + ++this.uid;
-    sub.load = ['', '', ''];
-    sub.pack = ['', '', ''];
+    sub.load = ROUNDS.map(() => '');
+    sub.pack = ROUNDS.map(() => '');
     sub.pendingDone = 0;
     sub.pendingPack = 0;
     row.subs.push(sub);
@@ -1134,7 +1210,7 @@ class Board {
       const backOfRound = roundBack.reduce((t, e) => t + e[2], 0);
       sentSoFar += qty - backOfRound;
       const live = this.liveRound(tr, round, norm);
-      const locked = this.isLocked(round);
+      const locked = this.roundFrozen(round); // คนขับยืนยันแล้ว หรือยืนยันจบรอบแล้ว (ยังไม่กดแก้ไข)
       const packNorm = normQty(tr.pack[i]);
       const packBy = packNorm === savedPackOf(tr, i) ? this.packDraftBy(tr, round) : '';
       const packDone = tr.pendingPack;
@@ -1625,7 +1701,7 @@ class Board {
     return this.sortedGroups().flatMap((g) => g.rows);
   }
   collectChanges() {
-    const changes: Changes = { rows: [], notes: [], names: [], rounds: {}, round_base: {}, header: {}, subs: [], jobs: {}, live_clear: [], confirm: 0 };
+    const changes: Changes = { rows: [], notes: [], names: [], rounds: {}, rounds_saved: {}, round_base: {}, header: {}, subs: [], jobs: {}, live_clear: [], confirm: 0 };
     const lines: ChangeLine[] = [];
     let ticked = 0;
     let unticked = 0;
@@ -1668,7 +1744,8 @@ class Board {
       }
       if (this.noteChanged(row)) {
         const text = row.note.trim();
-        ids.forEach((id) => changes.notes.push({ id, note: text }));
+        // base = หมายเหตุที่เห็นตอนโหลด · มีคนแก้ไปก่อน เซิร์ฟเวอร์ตอบ 409 ไม่ลบ/ทับของคนอื่น (เหมือนเว็บ)
+        ids.forEach((id) => changes.notes.push({ id, note: text, base: row.noteSaved }));
         parts.push(text ? 'หมายเหตุ: ' + text : 'ลบหมายเหตุ');
       }
       if (parts.length) lines.push({ name: row.name, where: row.where, text: parts.join(' · ') });
@@ -1728,10 +1805,15 @@ class Board {
     ROUNDS.forEach((round) => {
       const card = this.rounds[round];
       changes.round_base[round] = card.do;
-      if (this.headChanged(round)) changes.rounds[round] = card.head;
+      if (this.headChanged(round)) {
+        changes.rounds[round] = card.head;
+        changes.rounds_saved[round] = card.savedHead;
+      }
       // วันที่ขึ้นของ (ไม่อยู่ในใบส่ง) บอกแยกบรรทัด · แก้อย่างเดียวไม่แตะใบส่ง
       if (card.head.load_at !== card.savedHead.load_at)
         doLines.push({ name: 'วันที่ขึ้นของ รอบ ' + round, where: '', text: card.head.load_at ? thaiDateTime(card.head.load_at) : 'ล้างวันที่ขึ้นของ' });
+      if (this.jobNoteChanged(round))
+        doLines.push({ name: 'หมายเหตุจัดงาน รอบ ' + round, where: '', text: card.head.job_note.trim() || 'ล้างหมายเหตุจัดงาน' });
       if (!this.roundTouched(round)) return;
       const want = this.desiredLines(round);
       const no = card.hasDo ? card.do : '';
@@ -2029,8 +2111,8 @@ class Board {
   }
   syncLine(row: Row, line: any) {
     const members: Member[] = (line.members || []).map((m: any) => ({
-      id: num(m.id), name: str(m.name), qty: num(m.qty), site: num(m.site), r: (m.r || [0, 0, 0]).map(num), back: num(m.back),
-      done: num(m.done), pk: (m.pk || [0, 0, 0]).map(num), pd: num(m.pd), p80: num(m.p80), stock: num(m.stock),
+      id: num(m.id), name: str(m.name), qty: num(m.qty), site: num(m.site), r: (m.r || ROUNDS.map(() => 0)).map(num), back: num(m.back),
+      done: num(m.done), pk: (m.pk || ROUNDS.map(() => 0)).map(num), pd: num(m.pd), p80: num(m.p80), stock: num(m.stock),
     }));
     let changed = false;
     ROUNDS.forEach((round, i) => {
@@ -2133,6 +2215,13 @@ class Board {
         card.jobSaved = saved;
         card.jobText = str(info.job_text);
         card.jobAt = str(info.job_at);
+        changed = true;
+      }
+      // ยืนยันจบรอบ (มีคนกดจบ / แจ้งจัดงานใหม่แล้วล้าง) · ช่องรอบนี้เปิด/ปิดตาม (roundFrozen) ผู้เรียกวาดทุกแถวใหม่
+      const done = num(info.done_on) === 1;
+      if (card.done !== done || card.doneText !== str(info.done_text)) {
+        card.done = done;
+        card.doneText = str(info.done_text);
         changed = true;
       }
     });
@@ -2388,7 +2477,7 @@ function CompanyBadge({ company }: { company: Company }) {
 
 /** ป้ายรอบเล็ก (ไล่สีตามรอบ) */
 function RoundPill({ round, suffix = '' }: { round: number; suffix?: string }) {
-  const rc = ROUND_COLOR[round];
+  const rc = roundColor(round);
   return (
     <LinearGradient colors={rc.grad} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={s.roundPill}>
       <Text style={s.roundPillText}>
@@ -2401,7 +2490,7 @@ function RoundPill({ round, suffix = '' }: { round: number; suffix?: string }) {
 
 /** ก้อนเลขรอบสี่เหลี่ยม · off = ยังไม่แจ้งจัดงาน (เทา) */
 function RoundBadge({ round, size = 44, off }: { round: number; size?: number; off?: boolean }) {
-  const rc = ROUND_COLOR[round];
+  const rc = roundColor(round);
   const box = { width: size, height: size, borderRadius: Math.round(size * 0.32) };
   const no = { fontSize: Math.round(size * 0.42), lineHeight: Math.round(size * 0.48) };
   if (off) {
@@ -2532,16 +2621,24 @@ interface CardActions {
 
 /** บรรทัดรายละเอียดของรายการรับคืน 1 รายการ (เหมือน renderReturns ของหน้าเว็บ) */
 function returnMeta(r: ReturnItem) {
-  if (r.status === 'found') return 'ส่งถึงหน้างานแล้ว ยังไม่ได้แจ้งรับคืน';
+  if (r.status === 'found') return 'ส่งถึงหน้างานแล้ว กดรับของคืนเพื่อให้รอบถัดไปรับกลับ';
   if (r.status === 'waiting')
-    return (r.target_round ? 'รอรับคืน · ขึ้นในใบส่งรอบ ' + r.target_round + ' (' + r.target_do + ')' : 'รอรับคืน · รอรอบถัดไป') + (r.by ? ' · แจ้งโดย ' + r.by + ' ' + thaiDateTime(r.at) : '');
-  return 'รับคืนแล้ว รอบ ' + r.round + ' (' + r.do + ') · ' + r.picked_by + ' ' + thaiDateTime(r.picked_at);
+    return (r.target_round ? 'ขึ้นในใบส่งรอบ ' + r.target_round + ' (' + r.target_do + ')' : 'รอรอบถัดไป (ยังไม่มีใบส่ง)') + (r.by ? ' · แจ้งโดย ' + r.by + ' ' + thaiDateTime(r.at) : '');
+  return 'คนขับรับคืนแล้ว รอบ ' + r.round + (r.do ? ' (' + r.do + ')' : '') + ' · ' + r.picked_by + ' ' + thaiDateTime(r.picked_at) + (returnShort(r) ? ' · รับไม่ครบ ที่เหลือรอรอบถัดไป' : '');
 }
+/** รับคืนไม่ครบ (คนขับรับได้น้อยกว่าที่แจ้ง ที่เหลือรอรอบถัดไป) */
+const returnShort = (r: ReturnItem) => r.status === 'picked' && num(r.picked_qty) < num(r.qty) - 0.005;
+/** ป้ายสถานะรับคืน (เหมือน RETURN_STATUS ของหน้าเว็บ) */
+const RETURN_STATUS: Record<string, { text: string; icon: 'alert-circle' | 'car' | 'checkmark-circle'; color: string; bg: string }> = {
+  found: { text: 'ยังไม่แจ้งรับคืน', icon: 'alert-circle', color: C.bad, bg: C.badBg },
+  waiting: { text: 'รอคนขับรับคืน', icon: 'car', color: C.info, bg: C.infoBg },
+  picked: { text: 'รับคืนแล้ว', icon: 'checkmark-circle', color: '#fff', bg: C.ok },
+};
 
 /** ช่องรอบ 1 รอบ: หัว (รอบ + สถานะ + ปุ่มรูป) · กล่องจัดของ / ขึ้นรถ (จำนวน + ติ๊กครบ) · ป้ายคนอื่นกรอก · ค่าชนกัน */
 function RoundBox({ b, tr, cell, act, disabledAll }: { b: Board; tr: Tr; cell: ReturnType<Board['roundCells']>[number]; act: CardActions; disabledAll: boolean }) {
   const round = cell.round;
-  const rc = ROUND_COLOR[round];
+  const rc = roundColor(round);
   const total = b.photoTotal(tr, round);
   const unsaved = b.photoUnsaved(tr);
   const photoDisabled = unsaved || (cell.locked && total === 0);
@@ -2662,14 +2759,15 @@ const RowCard = memo(function RowCard({ b, row, shown, noteOnly, act }: { b: Boa
   const dirty = b.anyChange(row);
   const ids = row.ids;
   const [poOpen, setPoOpen] = useState(false);
-  const rc = row.doneRound ? ROUND_COLOR[row.doneRound] : null;
+  const rc = row.doneRound ? roundColor(row.doneRound) : null;
   const poShow = row.po.length > 4 ? (poOpen ? row.po : row.po.slice(0, 3)) : row.po;
   const inSheet = row.sec !== 'skip' && b.sheetLine(row, b.targetQty(row)) !== null;
   const retOver = b.returnOver(row); // ส่งถึงหน้างานแล้วเกินจำนวน → รับกลับ
   const retWait = b.returnWaiting(row); // กดรับคืนแล้ว รอคนขับรับ
+  const retGot = b.returnPicked(row); // คนขับรับคืนแล้ว (ป้ายเขียว)
   const hasTags =
     !!row.skipReason || ids.length > 1 || row.parts.length > 1 || !!row.where || row.namesDiffer || row.multiUnit || !!row.hint || row.otherDo > 0 || !!row.doneText || dirty
-    || retOver > 0 || retWait > 0;
+    || retOver > 0 || retWait > 0 || retGot > 0;
   const leftTone = left.tone === 'over' ? s.leftOver : left.tone === 'zero' ? s.leftZero : null;
   const leftColor = left.tone === 'over' ? C.bad : left.tone === 'zero' ? C.ok : C.warn;
   return (
@@ -2720,6 +2818,7 @@ const RowCard = memo(function RowCard({ b, row, shown, noteOnly, act }: { b: Boa
             </TouchableOpacity>
           )}
           {retWait > 0 && <Chip text={'รอรับคืน ' + fmt(retWait) + unitText(row.unit)} color={C.info} bg={C.infoBg} icon="time-outline" bold />}
+          {retGot > 0 && <Chip text={'รับคืนแล้ว ' + fmt(retGot) + unitText(row.unit)} color={C.ok} bg={C.okBg} icon="checkmark-circle" bold />}
         </View>
       )}
 
@@ -2953,6 +3052,64 @@ function ChoiceModal({ visible, title, options, value, onPick, onClose, allowEmp
   );
 }
 
+/** ป๊อปอัปหมายเหตุจัดงาน (กดช่องหมายเหตุในกล่องสถานะจัดงาน) ดูเต็ม/แก้ · readOnly = ดูอย่างเดียว (เหมือน #sicJobNoteDialog ในเว็บ) */
+function JobNoteModal({ round, value, readOnly, lockText, onSave, onClose }: {
+  round: number; value: string; readOnly: boolean; lockText: string; onSave: (text: string) => void; onClose: () => void;
+}) {
+  const [text, setText] = useState(value);
+  useEffect(() => {
+    if (round) setText(value);
+  }, [round, value]);
+  return (
+    <Modal visible={round > 0} transparent animationType="fade" onRequestClose={onClose}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <View style={s.pickerOverlay}>
+          <View style={s.picker}>
+            <View style={s.pickerHead}>
+              <Text style={s.pickerTitle}>หมายเหตุจัดงาน รอบ {round}</Text>
+              <TouchableOpacity onPress={onClose} hitSlop={8} style={s.closeBtnSm} accessibilityLabel="ปิด">
+                <Ionicons name="close" size={18} color={C.soft} />
+              </TouchableOpacity>
+            </View>
+            <Text style={s.jobNoteSub}>{readOnly ? lockText + ' · ดูอย่างเดียว' : 'บอกทีมจัดของ/ขึ้นรถ · ไม่อยู่ในใบส่งของ · ตกลงแล้วกดบันทึกเพื่อยืนยัน'}</Text>
+            {readOnly ? (
+              <ScrollView style={{ maxHeight: 320 }}>
+                <Text style={s.jobNoteFull}>{value || 'ไม่มีหมายเหตุ'}</Text>
+              </ScrollView>
+            ) : (
+              <>
+                <TextInput
+                  style={s.jobNoteArea}
+                  value={text}
+                  onChangeText={setText}
+                  placeholder="พิมพ์หมายเหตุจัดงาน"
+                  placeholderTextColor={C.faint}
+                  maxLength={JOB_NOTE_MAX}
+                  multiline
+                  autoFocus
+                  textAlignVertical="top"
+                />
+                <Text style={s.jobNoteCount}>{text.length} / {JOB_NOTE_MAX}</Text>
+              </>
+            )}
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+              <TouchableOpacity style={[s.btn, s.btnGhost]} onPress={onClose}>
+                <Text style={[s.btnText, { color: C.text }]}>{readOnly ? 'ปิด' : 'ยกเลิก'}</Text>
+              </TouchableOpacity>
+              {!readOnly && (
+                <TouchableOpacity style={[s.btn, s.btnPrimary]} onPress={() => onSave(text.trim())}>
+                  <Ionicons name="checkmark" size={17} color="#fff" />
+                  <Text style={[s.btnText, { color: '#fff' }]}>ตกลง</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
 // -------------------- หน้าจอหลัก --------------------
 
 interface WhoLine { key: string; tr: Tr; sub: boolean; name: string; unit: string; pack: [number, boolean]; load: [number, boolean] }
@@ -2991,6 +3148,8 @@ export default function SiteItemCheckScreen() {
   const [who, setWho] = useState<{ round: number; loading: boolean; error: string; lines: WhoLine[]; rows: any } | null>(null);
   const [hist, setHist] = useState<Record<string, { open: boolean; loading: boolean; error: string; data: any }>>({});
   const [photo, setPhoto] = useState<{ tr: Tr; round: number; note: string } | null>(null);
+  const [finishing, setFinishing] = useState(0); // รอบที่กำลังส่งยืนยันจบรอบ (0 = ไม่มี)
+  const [jobNoteRound, setJobNoteRound] = useState(0); // ป๊อปอัปหมายเหตุจัดงานของรอบนี้ (0 = ปิด)
   const [viewer, setViewer] = useState('');
   const [pick, setPick] = useState<{ loading: boolean; error: string; list: any[]; q: string; co: string; cancel: boolean } | null>(null);
   const [sortOpen, setSortOpen] = useState(false);
@@ -3271,6 +3430,37 @@ export default function SiteItemCheckScreen() {
       bd.hooks.toast(err?.message || 'บันทึกไม่สำเร็จ', true);
     }
   }
+  // ---------- ยืนยันจบรอบ (ผู้ใช้สั่ง 13 พ.ย. 69 "กดบันทึกยังไม่จบรอบ ให้มียืนยันจบแล้วด้วย") ----------
+  // ต้องบันทึกให้หมดก่อน (ไม่มีอะไรค้างในแถบบันทึก) · จบแล้วหน้าแจ้งจัดงานไม่แสดงรอบนี้ · รอบนี้ดูได้อย่างเดียวจนกดแก้ไข
+  function askFinishRound(bd: Board, round: number) {
+    const bar = bd.saveBar();
+    if (bar.show || bar.dirty) {
+      bd.hooks.toast('ยังมีที่แก้ค้างอยู่ กดบันทึกก่อน แล้วค่อยยืนยันจบรอบ ' + round, true);
+      return;
+    }
+    const left = bd.roundProgress(round).left;
+    Alert.alert(
+      'ยืนยันจบรอบ ' + round + '?',
+      (left > 0 ? 'ยังค้างขึ้น ' + left + ' รายการ (ส่งรอบถัดไป)\n' : '') +
+        'จบแล้วหน้าแจ้งจัดงานไม่แสดงรอบนี้ · ' +
+        (bd.canEditRound ? 'แก้ต่อได้ที่ปุ่มแก้ไข' : 'แก้ต่อได้เฉพาะคนที่มีสิทธิ์แก้ไขรอบ'),
+      [
+        { text: 'ยกเลิก', style: 'cancel' },
+        { text: 'ยืนยันจบรอบ', onPress: () => void runFinish(bd, round) },
+      ],
+    );
+  }
+  async function runFinish(bd: Board, round: number) {
+    setFinishing(round);
+    try {
+      await bd.finishRound(round);
+      bd.hooks.toast('ยืนยันจบรอบ ' + round + ' แล้ว');
+    } catch (err: any) {
+      bd.hooks.toast(err?.message || 'บันทึกไม่สำเร็จ', true);
+    } finally {
+      setFinishing(0);
+    }
+  }
   function askCancelReturn(bd: Board, r: ReturnItem) {
     Alert.alert('ยกเลิกรอรับคืน?', r.name + ' ' + fmt(r.qty) + unitText(r.unit), [
       { text: 'ไม่ใช่', style: 'cancel' },
@@ -3302,7 +3492,7 @@ export default function SiteItemCheckScreen() {
 
   async function addPhotos(board: Board, tr: Tr, round: number, camera: boolean) {
     const room = Math.max(board.photoMax - board.photoTotal(tr, round), 0);
-    if (!room || board.isLocked(round) || board.photoBusy) return;
+    if (!room || board.roundFrozen(round) || board.photoBusy) return;
     const adds = await pickImages(camera, room);
     if (!adds.length) {
       if (board.photoTotal(tr, round) > 0) setPhoto({ tr, round, note: '' });
@@ -3317,7 +3507,7 @@ export default function SiteItemCheckScreen() {
 
   // ปุ่มกล้อง = เปิดกล้องทันที (ถ่ายแล้วบันทึกเลย) · รอบล็อก/ครบแล้ว = เปิดดูรูป
   function onPhotoButton(board: Board, tr: Tr, round: number) {
-    if (board.isLocked(round) || board.photoTotal(tr, round) >= board.photoMax || board.photoBusy) {
+    if (board.roundFrozen(round) || board.photoTotal(tr, round) >= board.photoMax || board.photoBusy) {
       setPhoto({ tr, round, note: '' });
       return;
     }
@@ -3670,13 +3860,13 @@ export default function SiteItemCheckScreen() {
               </View>
               <View style={s.sumBar}>
                 {ROUNDS.map((round) => (
-                  <View key={round} style={{ width: `${counts.all ? (counts.perRound[round - 1] / counts.all) * 100 : 0}%`, backgroundColor: ROUND_COLOR[round].c }} />
+                  <View key={round} style={{ width: `${counts.all ? (counts.perRound[round - 1] / counts.all) * 100 : 0}%`, backgroundColor: roundColor(round).c }} />
                 ))}
               </View>
               <View style={s.legend}>
                 {ROUNDS.filter((round) => counts.perRound[round - 1] > 0).map((round) => (
                   <View key={round} style={s.legendItem}>
-                    <View style={[s.legendDot, { backgroundColor: ROUND_COLOR[round].c }]} />
+                    <View style={[s.legendDot, { backgroundColor: roundColor(round).c }]} />
                     <Text style={s.legendText}>
                       รอบ {round} · {counts.perRound[round - 1]}
                     </Text>
@@ -3747,23 +3937,40 @@ export default function SiteItemCheckScreen() {
         )}
 
         {/* รับของคืนจากหน้างาน: รายการที่ลบแล้ว (ส่งไปแล้ว) / รอรับคืน / รับคืนแล้ว · ซ่อนเมื่อไม่มี */}
-        {board.returns.list.length > 0 && (
-          <View style={s.returnPanel}>
+        {board.returns.list.length > 0 && (() => {
+          const retOpen = board.returns.list.filter((r) => r.status !== 'picked').length;
+          const retDone = board.returns.list.length - retOpen;
+          const allDone = retOpen === 0; // รับคืนครบหมดแล้ว = กรอบ/หัวเขียว
+          return (
+          <View style={[s.returnPanel, allDone && { borderColor: C.ok }]}>
             <View style={s.returnHead}>
-              <Ionicons name="arrow-undo" size={16} color={C.bad} />
-              <Text style={s.returnTitle}>รับของคืนจากหน้างาน</Text>
+              <Ionicons name={allDone ? 'checkmark-circle' : 'arrow-undo'} size={16} color={allDone ? C.ok : C.bad} />
+              <Text style={[s.returnTitle, allDone && { color: C.ok }]}>รับของคืนจากหน้างาน</Text>
+              <Text style={[s.returnSum, { color: allDone ? C.ok : C.bad }]}>
+                {[retOpen ? 'ค้าง ' + retOpen : '', retDone ? 'รับคืนแล้ว ' + retDone : ''].filter(Boolean).join(' · ')}
+              </Text>
             </View>
             <Text style={s.returnTarget}>
-              {board.returns.target
-                ? 'รอรับคืนจะขึ้นในใบส่งรอบ ' + board.returns.target.round + ' (' + board.returns.target.do + ')'
-                : 'ยังไม่มีใบส่งรอบถัดไป · รอรับคืนจะขึ้นเมื่อออกใบส่งรอบถัดไป'}
+              {allDone
+                ? 'คนขับรับของคืนครบแล้ว'
+                : board.returns.target
+                  ? 'รอรับคืนจะขึ้นในใบส่งรอบ ' + board.returns.target.round + ' (' + board.returns.target.do + ')'
+                  : 'ยังไม่มีใบส่งรอบถัดไป · รอรับคืนจะขึ้นเมื่อออกใบส่งรอบถัดไป'}
             </Text>
-            {board.returns.list.map((r) => (
-              <View key={r.id} style={[s.returnItem, r.status === 'picked' && { opacity: 0.65 }]}>
+            {board.returns.list.map((r) => {
+              const st = RETURN_STATUS[r.status] || RETURN_STATUS.found;
+              return (
+              <View key={r.id} style={[s.returnItem, r.status === 'picked' && { borderColor: C.ok, backgroundColor: C.okBg }]}>
                 <View style={{ flex: 1, gap: 4 }}>
+                  <View style={[s.returnStatus, { backgroundColor: st.bg }]}>
+                    <Ionicons name={st.icon} size={12} color={st.color} />
+                    <Text style={[s.returnStatusText, { color: st.color }]}>{st.text}</Text>
+                  </View>
                   <View style={s.returnLine}>
                     <Text style={s.returnName}>{r.name}</Text>
-                    <Text style={[s.returnQty, r.status === 'picked' && { color: C.ok }]}>{fmt(r.status === 'picked' ? r.picked_qty : r.qty) + unitText(r.unit)}</Text>
+                    <Text style={[s.returnQty, r.status === 'picked' && { color: C.ok }]}>
+                      {(r.status === 'picked' ? fmt(r.picked_qty) + (returnShort(r) ? ' จาก ' + fmt(r.qty) : '') : fmt(r.qty)) + unitText(r.unit)}
+                    </Text>
                     <Chip text={r.reason === 'deleted' ? 'ลบรายการแล้ว' : 'แก้จำนวนลด'} color={r.reason === 'deleted' ? C.warn : C.info} bg={r.reason === 'deleted' ? C.warnBg : C.infoBg} />
                   </View>
                   <Text style={s.returnMeta}>{returnMeta(r)}</Text>
@@ -3780,9 +3987,11 @@ export default function SiteItemCheckScreen() {
                   </TouchableOpacity>
                 )}
               </View>
-            ))}
+              );
+            })}
           </View>
-        )}
+          );
+        })()}
 
         {!hasItems ? (
           <View style={s.emptyPage}>
@@ -3806,15 +4015,19 @@ export default function SiteItemCheckScreen() {
               />
               {roundView.jobRows.filter((jr) => jr.visible).map(({ round, edit }) => {
                 const card = board.rounds[round];
-                const rc = ROUND_COLOR[round];
+                const rc = roundColor(round);
                 const changed = board.jobChanged(round);
                 const show = card.jobOn && !changed;
                 const prog = show ? board.roundProgress(round) : null;
                 const pc = prog ? JOB_STATUS_COLOR[prog.status] : null;
                 const isShown = round === roundView.shown;
-                // วันที่ขึ้นของ: กรอกที่กล่องสถานะจัดงาน (ผู้ใช้สั่ง 12 พ.ย. 69) · รอบที่คนขับยืนยันแล้ว/ไม่มีสิทธิ์แก้ไขรอบเก่า แก้ไม่ได้ (เซิร์ฟเวอร์กันซ้ำ)
-                const loadLocked = card.locked || (!board.canEditRound && round !== roundView.current);
+                // วันที่ขึ้นของ: กรอกที่กล่องสถานะจัดงาน (ผู้ใช้สั่ง 12 พ.ย. 69) · รอบที่คนขับยืนยันแล้ว/จบรอบแล้ว/ไม่มีสิทธิ์แก้ไขรอบเก่า แก้ไม่ได้ (เซิร์ฟเวอร์กันซ้ำ)
+                const loadLocked = board.roundFrozen(round) || (!board.canEditRound && round !== roundView.current);
                 const loadChanged = card.head.load_at !== card.savedHead.load_at;
+                // ยืนยันจบรอบ (ผู้ใช้สั่ง 13 พ.ย. 69): แจ้งจัดงานแล้ว (บันทึกแล้ว) + บันทึกขึ้นของรอบนี้แล้ว + ยังไม่จบ · ไม่มีสิทธิ์แก้ไขรอบ = เฉพาะรอบล่าสุด
+                const done = show && card.done;
+                // ทุกคนจบได้ทุกรอบที่แจ้งแล้ว (จบรอบไม่แก้ข้อมูล · เดิมจำกัดรอบล่าสุด รอบเก่าค้างในหน้าแจ้งจัดงาน)
+                const canFinish = card.jobSaved && show && !card.done && board.roundLoadSaved(round);
                 return (
                   <View key={round} style={{ gap: 6 }}>
                   <View style={s.jobRow}>
@@ -3827,7 +4040,7 @@ export default function SiteItemCheckScreen() {
                     >
                       <RoundBadge round={round} size={42} off={!card.jobOn} />
                       <View style={{ flex: 1, gap: 1 }}>
-                        <Text style={[s.jobState, card.jobOn && { color: rc.c }]}>{card.jobOn ? 'แจ้งจัดงานแล้ว' : 'ยังไม่แจ้งจัดงาน'}</Text>
+                        <Text style={[s.jobState, card.jobOn && { color: rc.c }, done && { color: C.ok }]}>{done ? 'จบรอบแล้ว' : card.jobOn ? 'แจ้งจัดงานแล้ว' : 'ยังไม่แจ้งจัดงาน'}</Text>
                         <Text style={s.jobMeta} numberOfLines={2}>
                           {board.jobMeta(round)}
                         </Text>
@@ -3851,10 +4064,10 @@ export default function SiteItemCheckScreen() {
                         )}
                       </View>
                       <Ionicons
-                        name={card.jobSaved ? 'lock-closed' : card.jobOn ? 'checkmark-circle' : 'ellipse-outline'}
+                        name={done ? 'flag' : card.jobSaved ? 'lock-closed' : card.jobOn ? 'checkmark-circle' : 'ellipse-outline'}
                         size={card.jobSaved ? 18 : 24}
-                        color={card.jobOn ? rc.c : C.faint}
-                        accessibilityLabel={card.jobSaved ? 'แจ้งแล้ว ยกเลิกไม่ได้' : undefined}
+                        color={done ? C.ok : card.jobOn ? rc.c : C.faint}
+                        accessibilityLabel={done ? 'จบรอบแล้ว' : card.jobSaved ? 'แจ้งแล้ว ยกเลิกไม่ได้' : undefined}
                       />
                     </TouchableOpacity>
                     {edit && (
@@ -3876,15 +4089,48 @@ export default function SiteItemCheckScreen() {
                       </TouchableOpacity>
                     )}
                   </View>
+                  {/* หมายเหตุจัดงาน (ผู้ใช้สั่ง 13 พ.ย. 69) ใต้วันที่ขึ้นของ · กติกาแก้ได้เหมือนวันที่ขึ้นของ · แสดงในหน้าแจ้งจัดงาน ไม่อยู่ในใบส่งของ */}
+                  {/* ยาวแสดงบรรทัดเดียว กดเปิดป๊อปอัปดูเต็ม/แก้ (JobNoteModal) · แก้ไม่ได้ = ดูอย่างเดียว */}
+                  <TouchableOpacity
+                    style={[s.jobNoteField, board.jobNoteChanged(round) && s.jobLoadChanged, loadLocked && { opacity: 0.75 }]}
+                    onPress={() => setJobNoteRound(round)}
+                    activeOpacity={0.8}
+                    accessibilityRole="button"
+                    accessibilityLabel={'หมายเหตุจัดงาน รอบ ' + round + ' กดเพื่อดูทั้งหมด'}
+                  >
+                    <Ionicons name="document-text-outline" size={15} color={C.warn} />
+                    <Text style={s.jobNoteLabel}>หมายเหตุ</Text>
+                    <Text style={[s.jobNoteInput, !card.head.job_note.trim() && { color: C.faint }]} numberOfLines={1}>
+                      {card.head.job_note.trim() || (loadLocked ? 'ไม่มีหมายเหตุ' : 'เพิ่มหมายเหตุจัดงาน (ถ้ามี)')}
+                    </Text>
+                    <Ionicons name="open-outline" size={14} color={C.muted} />
+                  </TouchableOpacity>
+                  {canFinish && (
+                    <TouchableOpacity
+                      style={[s.jobFinish, finishing === round && { opacity: 0.6 }]}
+                      onPress={() => askFinishRound(board, round)}
+                      disabled={board.saving || finishing !== 0}
+                      activeOpacity={0.8}
+                      accessibilityRole="button"
+                      accessibilityLabel={'ยืนยันจบรอบ ' + round}
+                    >
+                      <Ionicons name="flag" size={16} color="#fff" />
+                      <Text style={s.jobFinishText}>{finishing === round ? 'กำลังบันทึก...' : 'ยืนยันจบรอบ ' + round}</Text>
+                    </TouchableOpacity>
+                  )}
                   </View>
                 );
               })}
               {roundView.editing > 0 && (
                 <View style={s.jobView}>
                   <Ionicons name="eye-outline" size={15} color={C.warn} />
-                  <Text style={s.jobViewText}>กำลังแก้รอบ {roundView.editing} (ซ่อนรอบอื่น)</Text>
+                  <Text style={s.jobViewText}>
+                    กำลังแก้รอบ {roundView.editing} {roundView.editing === roundView.current ? '(ยืนยันจบแล้ว)' : '(ซ่อนรอบอื่น)'}
+                  </Text>
                   <TouchableOpacity onPress={() => board.setEditRound(0)} accessibilityLabel="กลับรอบล่าสุด">
-                    <Text style={s.jobViewBack}>{roundView.current ? 'กลับรอบ ' + roundView.current + ' (ล่าสุด)' : 'ซ่อนรอบนี้'}</Text>
+                    <Text style={s.jobViewBack}>
+                      {roundView.editing === roundView.current ? 'เสร็จแก้ไข' : roundView.current ? 'กลับรอบ ' + roundView.current + ' (ล่าสุด)' : 'ซ่อนรอบนี้'}
+                    </Text>
                   </TouchableOpacity>
                 </View>
               )}
@@ -3906,7 +4152,13 @@ export default function SiteItemCheckScreen() {
                   icon="car"
                   label="ข้อมูลใบส่ง"
                   disabled={card.locked}
+                  blocked={board.roundClosed(round)}
                   onPress={() => {
+                    // ยืนยันจบรอบแล้ว: แก้ข้อมูลใบส่งต้องกดแก้ไขรอบก่อน (เหมือนช่องจัด/ขึ้น)
+                    if (board.roundClosed(round)) {
+                      showToast(board.frozenText(round));
+                      return;
+                    }
                     setHeadRound(round);
                     setHeadDraft({ ...card.head });
                   }}
@@ -3943,7 +4195,7 @@ export default function SiteItemCheckScreen() {
                     <View style={{ flex: 1 }}>
                       <Text style={s.rcTitle}>
                         รอบ {round}
-                        {round === 3 ? ' (สุดท้าย)' : ''}
+                        
                       </Text>
                       <Text style={s.rcSub}>
                         ครบ <Text style={{ fontWeight: '900', color: C.text }}>{counts.perRound[round - 1]}</Text> รายการ
@@ -4251,6 +4503,7 @@ export default function SiteItemCheckScreen() {
                   organizer: d.organizer.trim(),
                   deliver_at: d.deliver_at.replace('T', ' '),
                   load_at: d.load_at,
+                  job_note: b.rounds[headRound].head.job_note, // กรอกที่กล่องสถานะจัดงาน ไม่อยู่ในป๊อปอัปนี้ คงค่าเดิม
                   note: d.note.trim(),
                 };
                 b.setHead(headRound, head);
@@ -4400,7 +4653,7 @@ export default function SiteItemCheckScreen() {
     const lines = b.checkLines();
     let number = 0;
     let section = 'goods';
-    const meta = [head.load_at ? 'วันที่ขึ้นของ ' + thaiDateTime(head.load_at) : '', head.deliver_at ? 'วันที่ส่ง ' + thaiDateTime(head.deliver_at) : '', head.driver ? headSummary(head) : '', head.organizer ? 'ผู้จัดงาน ' + head.organizer : ''].filter(Boolean).join(' · ');
+    const meta = [head.load_at ? 'วันที่ขึ้นของ ' + thaiDateTime(head.load_at) : '', head.deliver_at ? 'วันที่ส่ง ' + thaiDateTime(head.deliver_at) : '', head.driver ? headSummary(head) : '', head.organizer ? 'ผู้จัดงาน ' + head.organizer : '', head.job_note ? 'หมายเหตุจัดงาน: ' + head.job_note : ''].filter(Boolean).join(' · ');
     const subCount = lines.filter((l) => l.isSub).length;
     const rowsOut: ReactNode[] = [];
     lines.forEach((line, idx) => {
@@ -4440,7 +4693,7 @@ export default function SiteItemCheckScreen() {
       <SheetModal
         visible
         onClose={() => setSheetRound(0)}
-        title={'ใบเช็คของ รอบ ' + round + (round === 3 ? ' (สุดท้าย)' : '') + (card.do ? ' · ใบส่ง ' + card.do : '')}
+        title={'ใบเช็คของ รอบ ' + round + (card.do ? ' · ใบส่ง ' + card.do : '')}
         sub={[b.project.customer, 'หน้างาน ' + b.project.site + (b.project.company ? ' · ' + b.project.company.name : ''), meta].filter(Boolean).join('\n')}
         insetsTop={insets.top}
         insetsBottom={insets.bottom}
@@ -4528,8 +4781,8 @@ export default function SiteItemCheckScreen() {
       >
         <View style={s.whoTabs}>
           {ROUNDS.filter((round) => round === roundView.shown).map((round) => (
-            <TouchableOpacity key={round} style={[s.whoTab, who.round === round && { backgroundColor: ROUND_COLOR[round].c, borderColor: ROUND_COLOR[round].c }]} onPress={() => loadWho(round)}>
-              <Text style={[s.whoTabText, { color: who.round === round ? '#fff' : ROUND_COLOR[round].c }]}>รอบ {round}</Text>
+            <TouchableOpacity key={round} style={[s.whoTab, who.round === round && { backgroundColor: roundColor(round).c, borderColor: roundColor(round).c }]} onPress={() => loadWho(round)}>
+              <Text style={[s.whoTabText, { color: who.round === round ? '#fff' : roundColor(round).c }]}>รอบ {round}</Text>
             </TouchableOpacity>
           ))}
         </View>
@@ -4573,14 +4826,14 @@ export default function SiteItemCheckScreen() {
   function renderPhoto() {
     if (!photo || !b) return null;
     const { tr, round } = photo;
-    const locked = b.isLocked(round);
+    const locked = b.roundFrozen(round);
     const edit = b.photoEditOf(tr, round);
     const total = b.photoTotal(tr, round);
     const busy = b.photoBusy;
     const full = locked || busy || total >= b.photoMax;
     const left = b.photoMax - total;
     const msg = locked
-      ? ROUND_LOCK_TEXT + ' ดูรูปได้อย่างเดียว'
+      ? b.frozenText(round) + ' ดูรูปได้อย่างเดียว'
       : busy
         ? 'กำลังบันทึกรูป...'
         : photo.note ||
@@ -4825,6 +5078,18 @@ export default function SiteItemCheckScreen() {
       )}
 
       {renderConfirm()}
+      {/* หมายเหตุจัดงาน: แก้ได้ตามกติกาเดียวกับวันที่ขึ้นของ (ล็อกคนขับ/จบรอบ/ไม่มีสิทธิ์รอบเก่า = ดูอย่างเดียว) */}
+      <JobNoteModal
+        round={jobNoteRound}
+        value={jobNoteRound ? b.rounds[jobNoteRound].head.job_note : ''}
+        readOnly={!!jobNoteRound && (b.roundFrozen(jobNoteRound) || (!b.canEditRound && jobNoteRound !== roundView.current))}
+        lockText={jobNoteRound && b.roundFrozen(jobNoteRound) ? b.frozenText(jobNoteRound) : 'ไม่มีสิทธิ์แก้ไขรอบนี้'}
+        onSave={(text) => {
+          b.setJobNote(jobNoteRound, text);
+          setJobNoteRound(0);
+        }}
+        onClose={() => setJobNoteRound(0)}
+      />
       {renderLeave()}
       {renderHead()}
       {renderSheet()}
@@ -4948,7 +5213,7 @@ function sheetHtml(b: Board, round: number) {
   const esc = (v: string) => v.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
   const card = b.rounds[round];
   const head = card.head;
-  const meta = [head.load_at ? 'วันที่ขึ้นของ ' + thaiDateTime(head.load_at) : '', head.deliver_at ? 'วันที่ส่ง ' + thaiDateTime(head.deliver_at) : '', head.driver ? headSummary(head) : '', head.organizer ? 'ผู้จัดงาน ' + head.organizer : ''].filter(Boolean).join(' · ');
+  const meta = [head.load_at ? 'วันที่ขึ้นของ ' + thaiDateTime(head.load_at) : '', head.deliver_at ? 'วันที่ส่ง ' + thaiDateTime(head.deliver_at) : '', head.driver ? headSummary(head) : '', head.organizer ? 'ผู้จัดงาน ' + head.organizer : '', head.job_note ? 'หมายเหตุจัดงาน: ' + head.job_note : ''].filter(Boolean).join(' · ');
   let number = 0;
   let section = 'goods';
   const rows = b
@@ -4980,7 +5245,7 @@ function sheetHtml(b: Board, round: number) {
   return (
     '<!doctype html><html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ใบเช็คของ รอบ ' + round + '</title>' +
     '<style>body{font-family:Tahoma,sans-serif;margin:16px;color:#111}h1{font-size:18px;margin:0 0 4px}p{margin:2px 0;font-size:12px}table{width:100%;border-collapse:collapse;margin-top:8px;font-size:12px}th,td{border:1px solid #999;padding:4px;vertical-align:top}th{background:#eee}td small{display:block;color:#555}.n{width:28px;text-align:center}.q{width:80px;text-align:right;white-space:nowrap}.b{width:30px;text-align:center}.b span{display:inline-block;width:14px;height:14px;border:1px solid #333}.m{width:35%}.sec td{background:#fdf1d8;font-weight:bold}.sub td{background:#fafafa}</style></head><body>' +
-    '<h1>ใบเช็คของ รอบ ' + round + (round === 3 ? ' (สุดท้าย)' : '') + (card.do ? ' · ใบส่ง ' + esc(card.do) : '') + '</h1>' +
+    '<h1>ใบเช็คของ รอบ ' + round + (card.do ? ' · ใบส่ง ' + esc(card.do) : '') + '</h1>' +
     '<p>' + esc(SHEET_BASIS) + '</p><p>' + esc(b.project.customer) + '</p><p>หน้างาน ' + esc(b.project.site) + (b.project.company ? ' · ' + esc(b.project.company.name) : '') + '</p>' + (meta ? '<p>' + esc(meta) + '</p>' : '') +
     '<table><thead><tr><th>#</th><th>รายการ</th><th>ค้าง</th><th>จำนวนที่ส่ง<br>ในรอบนี้</th><th>ครบ</th><th>หมายเหตุ</th></tr></thead><tbody>' + rows + '</tbody></table>' +
     '<p>รวม ' + number + ' รายการ</p><script>setTimeout(function(){window.print&&window.print()},400)</script></body></html>'
@@ -5054,6 +5319,9 @@ const s = StyleSheet.create({
   returnPanel: { marginHorizontal: 12, marginBottom: 12, backgroundColor: '#fff', borderRadius: 18, borderWidth: 1, borderColor: '#F8C9D3', borderLeftWidth: 4, borderLeftColor: C.bad, padding: 12, gap: 8 },
   returnHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   returnTitle: { fontSize: 14, fontWeight: '800', color: C.bad },
+  returnSum: { marginLeft: 'auto', fontSize: 12, fontWeight: '700' },
+  returnStatus: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 9, paddingVertical: 2, borderRadius: 999 },
+  returnStatusText: { fontSize: 11.5, fontWeight: '800' },
   returnTarget: { fontSize: 12, color: C.soft },
   returnItem: { flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderColor: C.line, borderRadius: 12, padding: 10 },
   returnLine: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
@@ -5080,6 +5348,9 @@ const s = StyleSheet.create({
   jobChanged: { borderStyle: 'dashed', borderColor: C.warn, borderWidth: 1.5 },
   jobEdit: { alignItems: 'center', justifyContent: 'center', gap: 2, borderRadius: 16, backgroundColor: C.primarySoft, paddingHorizontal: 12 },
   jobEditText: { fontSize: 11.5, fontWeight: '800', color: C.primary },
+  // ยืนยันจบรอบ: ปุ่มเขียวเต็มกว้างใต้ช่องวันที่ขึ้นของ
+  jobFinish: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, minHeight: 42, borderRadius: 12, backgroundColor: C.ok },
+  jobFinishText: { fontSize: 13.5, fontWeight: '800', color: '#fff' },
   jobView: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, backgroundColor: C.warnBg, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 9 },
   jobViewText: { fontSize: 12.5, fontWeight: '800', color: C.warn },
   jobViewBack: { fontSize: 12.5, fontWeight: '900', color: C.primary, textDecorationLine: 'underline' },
@@ -5089,6 +5360,13 @@ const s = StyleSheet.create({
   jobLoadField: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.infoBg },
   jobLoadChanged: { borderColor: C.warn, backgroundColor: C.warnBg },
   jobLoadText: { fontSize: 12.5, fontWeight: '800', color: C.info },
+  jobNoteField: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.warnBg },
+  jobNoteLabel: { fontSize: 12.5, fontWeight: '800', color: C.warn },
+  jobNoteInput: { flex: 1, minHeight: 32, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 9, borderWidth: 1, borderColor: C.line, backgroundColor: '#fff', color: C.text, fontSize: 13.5, overflow: 'hidden' },
+  jobNoteSub: { fontSize: 12.5, color: C.soft, marginBottom: 10 },
+  jobNoteArea: { minHeight: 140, maxHeight: 260, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: C.line, backgroundColor: C.surface2, color: C.text, fontSize: 15, lineHeight: 22 },
+  jobNoteCount: { alignSelf: 'flex-end', marginTop: 4, fontSize: 11.5, color: C.muted },
+  jobNoteFull: { fontSize: 15, lineHeight: 24, color: C.text, padding: 12, borderRadius: 12, backgroundColor: C.surface2 },
   jobProg: { gap: 6, marginTop: 7 },
   jobProgTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   jobProgPill: { borderRadius: 50, paddingHorizontal: 9, paddingVertical: 2 },

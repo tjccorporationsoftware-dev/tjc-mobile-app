@@ -1,7 +1,8 @@
 /**
  * site_job_board.tsx — แจ้งจัดงาน (พอร์ตจากหน้าเว็บ site_job_board.php ครบทุกปุ่ม)
  * ------------------------------------------------------------------
- * หน้างาน-รอบที่แจ้งจัดงานแล้ว (แจ้งที่หน้าเช็คของส่งบนเว็บ) รอทีมจัดของขึ้นรถ · บันทึกขึ้นรถแล้วหายจากรายการเอง
+ * หน้างาน-รอบที่แจ้งจัดงานแล้ว (แจ้งที่หน้าเช็คของส่งบนเว็บ) รอทีมจัดของขึ้นรถ · ยืนยันจบรอบที่หน้าเช็คของส่งแล้วหายจากรายการเอง
+ *   (13 พ.ย. 69 เดิมบันทึกขึ้นรถแล้วหาย · ตอนนี้บันทึกขึ้นรถแล้ว = กำลังขึ้นรถ จนกดจบ · เซิร์ฟเวอร์ sjb_fetch)
  *  - ข้อมูลจาก tjc-api-server/mobile_api/modules/site_job_board_API_mobile.php (ฟังก์ชันชุดเดียวกับหน้าเว็บ ผลตรงกัน)
  *    list = รายการ (init=1 ตอนเปิดหน้าครั้งแรก) · sheet = ใบงาน · accept / release = รับงาน / ยกเลิกรับงาน
  *  - สถานะ: ยังไม่รับงาน → รับงานแล้ว → กำลังจัด (ยังไม่กดบันทึก) → รอขึ้น (บันทึกจัดแล้ว) → กำลังขึ้นรถ
@@ -70,7 +71,8 @@ const POLL_MAX_MS = 300000;
 
 type IonName = keyof typeof Ionicons.glyphMap;
 // ready = จัดแล้ว แต่ยังไม่ถึงวันที่ขึ้นของที่ตั้งไว้ (sjb_status ฝั่งเซิร์ฟเวอร์ · ถึงวันแล้วเป็น packed รอขึ้น เอง)
-type Status = 'open' | 'taken' | 'packing' | 'ready' | 'packed' | 'loading';
+// done = จบงาน (ยืนยันจบรอบ/คนขับยืนยันใบส่งแล้ว) ยังแสดงต่อ SJB_DONE_DAYS วัน (ผู้ใช้สั่ง 13 พ.ย. 69 ไม่ให้หายเลย)
+type Status = 'open' | 'taken' | 'packing' | 'ready' | 'packed' | 'loading' | 'done';
 type Tab = 'all' | Status;
 type Sort = 'at' | 'new' | 'site';
 type Grad = [string, string];
@@ -113,10 +115,11 @@ const STATUS: Record<Status, Tone> = {
   ready: { label: 'จัดแล้ว รอวันขึ้น', short: 'รอวัน', color: '#0F9488', grad: ['#5EEAD4', '#14B8A6'], soft: '#E6FBF7', icon: 'calendar' },
   packed: { label: 'รอขึ้น', short: 'รอขึ้น', color: '#0A8BD6', grad: ['#5CCBFF', '#0EA5E9'], soft: '#EAF7FF', icon: 'albums' },
   loading: { label: 'กำลังขึ้นรถ', short: 'ขึ้นรถ', color: '#7446F5', grad: ['#B79CFF', '#8B5CF6'], soft: '#F4F0FF', icon: 'bus' },
+  done: { label: 'จบงาน', short: 'จบงาน', color: '#5A667D', grad: ['#A9B3C6', '#64748B'], soft: '#F1F4F9', icon: 'flag' },
 };
 const ALL_TONE: Tone = { label: 'ทั้งหมด', short: 'ทั้งหมด', color: '#2459EA', grad: BRAND_GRAD, soft: '#EEF3FF', icon: 'layers' };
 const FALLBACK_TONE: Tone = { label: '', short: '', color: C.soft, grad: ['#A9B3C6', '#6B778E'], soft: C.track, icon: 'ellipse' };
-const TABS: Tab[] = ['all', 'open', 'taken', 'packing', 'ready', 'packed', 'loading'];
+const TABS: Tab[] = ['all', 'open', 'taken', 'packing', 'ready', 'packed', 'loading', 'done'];
 const toneOf = (tab: Tab) => (tab === 'all' ? ALL_TONE : STATUS[tab]);
 const TAB_INDEX = TABS.map((_, i) => i);
 const TAB_COLORS = TABS.map((t) => toneOf(t).grad[1]);
@@ -127,7 +130,16 @@ const ROUND_COLOR: Record<number, { color: string; grad: Grad }> = {
   2: { color: '#EA580C', grad: ['#FFB067', '#F2620F'] },
   3: { color: '#16A34A', grad: ['#5EE38E', '#16A34A'] },
 };
-const roundColor = (round: number) => ROUND_COLOR[round] ?? { color: C.soft, grad: ['#A9B3C6', '#6B778E'] as Grad };
+// รอบ 4 ขึ้นไป (เพิ่มรอบได้เรื่อย ๆ · 13 พ.ย. 69) วนชุดสีเดียวกับหน้าเว็บ ม่วง / ชมพู / น้ำเงิน / น้ำตาลทอง / เทาฟ้า / บานเย็น
+const ROUND_PALETTE: { color: string; grad: Grad }[] = [
+  { color: '#7C3AED', grad: ['#B69CFF', '#7C3AED'] },
+  { color: '#DB2777', grad: ['#F58BB8', '#DB2777'] },
+  { color: '#2563EB', grad: ['#8FB0FF', '#2563EB'] },
+  { color: '#A16207', grad: ['#E6B85C', '#A16207'] },
+  { color: '#475569', grad: ['#A3B1C4', '#475569'] },
+  { color: '#C026D3', grad: ['#E58AF0', '#C026D3'] },
+];
+const roundColor = (round: number) => ROUND_COLOR[round] ?? ROUND_PALETTE[Math.max(0, round - 4) % ROUND_PALETTE.length];
 
 const SORTS: { key: Sort; label: string; hint: string; icon: IonName }[] = [
   { key: 'at', label: 'แจ้งก่อนอยู่บน', hint: 'งานที่รอนานที่สุดขึ้นก่อน', icon: 'time-outline' },
@@ -161,6 +173,7 @@ interface Job {
   atText: string;
   deliver: string;
   load: string; // วันที่ขึ้นของ (ข้อมูลใบส่งของรอบในหน้าเช็คของส่ง)
+  jobNote: string; // หมายเหตุจัดงาน (กล่องสถานะจัดงาน หน้าเช็คของส่ง · ไม่อยู่ในใบส่ง)
   organizer: string;
   truck: string;
   printed: string;
@@ -170,7 +183,10 @@ interface Job {
   status: string;
   total: number;
   done: number;
+  doneAt: string; // เวลาจบงาน (ว่าง = ยังไม่จบ)
+  doneText: string; // ใครจบ เมื่อไร
 }
+const isDone = (job: Job) => job.status === 'done';
 
 interface SheetItem { name: string; unit: string; left: number | null; packs: Record<string, number>; pd: number }
 interface SheetBlock extends SheetItem { sec: string; subs: SheetItem[] }
@@ -198,6 +214,7 @@ function mapJob(r: any): Job {
     atText: str(r.at_text),
     deliver: str(r.deliver),
     load: str(r.load),
+    jobNote: str(r.job_note).trim(),
     organizer: str(r.organizer),
     truck: str(r.truck),
     printed: str(r.printed),
@@ -207,6 +224,8 @@ function mapJob(r: any): Job {
     status: str(r.status),
     total: num(r.total),
     done: num(r.done),
+    doneAt: str(r.done_at),
+    doneText: str(r.done_text),
   };
 }
 
@@ -570,14 +589,14 @@ function CompanyBadge({ company }: { company: Company }) {
   );
 }
 
-function InfoRow({ icon, label, value, sub, color, right }: { icon: IonName; label: string; value: string; sub?: string; color?: string; right?: ReactNode }) {
+function InfoRow({ icon, label, value, sub, color, right, lines }: { icon: IonName; label: string; value: string; sub?: string; color?: string; right?: ReactNode; lines?: number }) {
   return (
     <View style={s.info}>
       <View style={s.infoIcon}>
         <Ionicons name={icon} size={13} color={color ?? C.muted} />
       </View>
       <Text style={s.infoLabel}>{label}</Text>
-      <Text style={[s.infoValue, !!color && { color }]}>
+      <Text style={[s.infoValue, !!color && { color }]} numberOfLines={lines}>
         {value}
         {!!sub && <Text style={s.infoSub}>{'  '}{sub}</Text>}
       </Text>
@@ -588,8 +607,8 @@ function InfoRow({ icon, label, value, sub, color, right }: { icon: IonName; lab
 
 /** ปุ่มหลักของงาน: ยังไม่มีคนรับ = รับงาน · รับแล้ว (ใครก็ได้) = เปิดงาน (ของเรา = ปุ่มไล่สี / ของคนอื่น = ปุ่มขอบ) */
 function GoButton({ job, busy, onPress }: { job: Job; busy: string | null; onPress: () => void }) {
-  const taken = !!job.taker;
-  const primary = !taken || job.mine;
+  const taken = !!job.taker || isDone(job); // จบงานแล้ว = เปิดดูได้อย่างเดียว ไม่มีรับงาน
+  const primary = !isDone(job) && (!taken || job.mine);
   const working = busy === keyOf(job);
   const fg = primary ? '#FFFFFF' : C.brand;
   return (
@@ -622,7 +641,7 @@ function JobCard({ job, isNew, now, busy, run, onSheet, onGo, onRelease }: {
   const pct = job.total > 0 ? Math.round((job.done / job.total) * 100) : 0;
 
   return (
-    <View style={[s.card, isNew && s.cardNew]} accessibilityLabel={`หน้างาน ${job.site} รอบ ${job.round}`}>
+    <View style={[s.card, isNew && s.cardNew, isDone(job) && s.cardDone]} accessibilityLabel={`หน้างาน ${job.site} รอบ ${job.round}`}>
       {/* หัวการ์ด: รอบ + เลขหน้างาน + ชื่อโครงการ */}
       <View style={s.head}>
         <RoundBadge round={job.round} />
@@ -653,7 +672,11 @@ function JobCard({ job, isNew, now, busy, run, onSheet, onGo, onRelease }: {
             </LinearGradient>
             <Text style={[s.stateText, { color: st.color }]}>{st.label}</Text>
           </View>
-          {job.total > 0 ? (
+          {isDone(job) ? (
+            <Text style={s.stateDone} numberOfLines={2}>
+              {job.doneText || 'จบงานแล้ว'}
+            </Text>
+          ) : job.total > 0 ? (
             <Text style={s.stateCount} accessibilityLabel={`จัดแล้ว ${job.done} จาก ${job.total} รายการ`}>
               จัดแล้ว <Text style={s.stateNum}>{job.done}</Text>
               <Text style={s.stateOf}>/{job.total}</Text>
@@ -695,6 +718,13 @@ function JobCard({ job, isNew, now, busy, run, onSheet, onGo, onRelease }: {
         {!!job.organizer && <InfoRow icon="person-outline" label="ผู้จัดงาน" value={job.organizer} />}
         {!!job.truck && <InfoRow icon="car-outline" label="รถ" value={job.truck} />}
         {!!job.printed && <InfoRow icon="print-outline" label="ใบเช็ค" value={`พิมพ์แล้ว ${job.printed}`} color={C.ok} />}
+        {/* หมายเหตุจัดงาน (กรอกที่กล่องสถานะจัดงาน หน้าเช็คของส่ง) */}
+        {/* ยาวแสดง 2 บรรทัด กดดูเต็ม */}
+        {!!job.jobNote && (
+          <Press onPress={() => Alert.alert('หมายเหตุจัดงาน รอบ ' + job.round, job.jobNote)} accessibilityRole="button" accessibilityLabel="ดูหมายเหตุจัดงานทั้งหมด">
+            <InfoRow icon="document-text-outline" label="หมายเหตุ" value={job.jobNote} color={C.warn} lines={2} right={<Ionicons name="open-outline" size={14} color={C.muted} />} />
+          </Press>
+        )}
       </View>
 
       {/* ผู้รับงาน — ของเรามีปุ่มยกเลิกรับงาน */}
@@ -708,7 +738,7 @@ function JobCard({ job, isNew, now, busy, run, onSheet, onGo, onRelease }: {
               {!!job.takenText && <Text style={s.takerAt}>  {job.takenText}</Text>}
             </Text>
           </View>
-          {job.mine && (
+          {job.mine && !isDone(job) && (
             <Press style={[s.release, !!busy && s.btnDim]} disabled={!!busy} onPress={onRelease} accessibilityRole="button" accessibilityLabel="ยกเลิกรับงาน">
               <Ionicons name="arrow-undo" size={13} color={C.bad} />
               <Text style={s.releaseText}>ยกเลิกรับ</Text>
@@ -717,11 +747,14 @@ function JobCard({ job, isNew, now, busy, run, onSheet, onGo, onRelease }: {
         </View>
       )}
 
+      {/* จบงานแล้ว: ใบงาน (รายการค้าง) ไม่ใช่ของรอบนี้แล้ว เหลือแค่เปิดงาน */}
       <View style={s.actions}>
-        <Press style={[s.btn, s.btnSoft]} onPress={onSheet} accessibilityRole="button" accessibilityLabel="ดูใบงาน">
-          <Ionicons name="document-text-outline" size={17} color={C.brand} />
-          <Text style={[s.btnText, { color: C.brand }]}>ดูใบงาน</Text>
-        </Press>
+        {!isDone(job) && (
+          <Press style={[s.btn, s.btnSoft]} onPress={onSheet} accessibilityRole="button" accessibilityLabel="ดูใบงาน">
+            <Ionicons name="document-text-outline" size={17} color={C.brand} />
+            <Text style={[s.btnText, { color: C.brand }]}>ดูใบงาน</Text>
+          </Press>
+        )}
         <GoButton job={job} busy={busy} onPress={onGo} />
       </View>
     </View>
@@ -892,7 +925,12 @@ export default function SiteJobBoardScreen() {
         setFresh(seen.current ? new Set(keys.filter((k) => !seen.current!.has(k))) : new Set());
         seen.current = new Set(keys);
         setItems(list);
-        if (Array.isArray(res.rounds) && res.rounds.length) setRounds(res.rounds.map(Number));
+        if (Array.isArray(res.rounds)) {
+          const next = res.rounds.map(Number);
+          if (next.length) setRounds(next);
+          // รอบที่เลือกไว้ไม่มีในรายการแล้ว (จบ/ยกเลิก) กลับไปทุกรอบ ไม่ค้างกรองรอบที่ไม่มี (เดิมรายการว่างและไม่มีปุ่มไหนถูกเลือก)
+          setRound((cur) => (cur && !next.includes(cur) ? 0 : cur));
+        }
         if (typeof res.now === 'string') setClockOffset(toTime(res.now) - Date.now());
         setLoadError(null);
         setLive(true);
@@ -967,8 +1005,12 @@ export default function SiteJobBoardScreen() {
     const bySite = (a: Job, b: Job) => a.site.localeCompare(b.site, 'th', { numeric: true }) || a.round - b.round;
     if (sort === 'new') shown = shown.slice().sort((a, b) => toTime(b.at) - toTime(a.at) || bySite(a, b));
     else if (sort === 'site') shown = shown.slice().sort(bySite);
-    const sites = new Set(items.map((j) => j.project)).size;
-    return { counts, shown, sites, q };
+    // จบงานอยู่ท้ายสุด (แท็บทั้งหมด) เรียงจบล่าสุดก่อน · งานที่ยังทำอยู่คงลำดับเดิม (เหมือนหน้าเว็บ)
+    const doneShown = shown.filter(isDone).sort((a, b) => toTime(b.doneAt) - toTime(a.doneAt));
+    shown = shown.filter((j) => !isDone(j)).concat(doneShown);
+    const active = items.filter((j) => !isDone(j));
+    const sites = new Set(active.map((j) => j.project)).size;
+    return { counts, shown, sites, q, active: active.length, doneCount: items.length - active.length };
   }, [items, search, round, status, sort]);
 
   // -------------------- รับงาน / ยกเลิกรับงาน / เปิดหน้าเช็คของส่ง --------------------
@@ -1017,7 +1059,7 @@ export default function SiteJobBoardScreen() {
     ]);
   }
 
-  const go = (job: Job) => (job.taker ? openCheck(job) : accept(job));
+  const go = (job: Job) => (job.taker || isDone(job) ? openCheck(job) : accept(job));
 
   // -------------------- ใบงาน --------------------
 
@@ -1208,7 +1250,8 @@ export default function SiteJobBoardScreen() {
   };
 
   function renderEmpty() {
-    if (!items.length)
+    // ไม่มีงานที่ยังทำอยู่เลย (มีแต่จบงาน) ในแท็บสถานะงาน = ไม่มีงานรอจัด
+    if (!items.length || (!view.active && status !== 'all' && status !== 'done' && !view.q && round === 0))
       return <EmptyState icon="checkmark-done" grad={STATUS.taken.grad} tint={C.okSoft} title="ไม่มีงานรอจัด" text="แจ้งจัดงานที่หน้าเช็คของส่งแล้วจะขึ้นที่นี่" />;
     if (status === 'open' && !view.q && round === 0)
       return (
@@ -1307,7 +1350,7 @@ export default function SiteJobBoardScreen() {
                 <Text style={[s.summaryNum, { color: tone.color }]}>{view.shown.length} รอบ</Text>
               </View>
               <Text style={s.summarySub} numberOfLines={1}>
-                ค้างทั้งหมด {items.length} รอบ · {view.sites} หน้างาน · {sortLabel}
+                ค้างทั้งหมด {view.active} รอบ · {view.sites} หน้างาน{view.doneCount ? ` · จบงาน ${view.doneCount}` : ''} · {sortLabel}
               </Text>
             </View>
             <LivePill live={live} running={onScreen} onPress={() => load('refresh')} />
@@ -1463,6 +1506,7 @@ const s = StyleSheet.create({
     boxShadow: '0 1px 2px rgba(30,45,90,0.04), 0 8px 22px rgba(30,45,90,0.07)',
   },
   cardNew: { borderColor: '#FFC2D4', boxShadow: '0 0 0 3px rgba(255,61,127,0.10), 0 12px 28px rgba(255,61,127,0.16)' },
+  cardDone: { opacity: 0.8 },
   head: { flexDirection: 'row', gap: 12 },
   round: { alignItems: 'center', justifyContent: 'center' },
   roundSmall: { fontSize: 9.5, fontWeight: '700', lineHeight: 12, color: 'rgba(255,255,255,0.9)' },
@@ -1487,6 +1531,8 @@ const s = StyleSheet.create({
   stateNum: { fontSize: 15, fontWeight: '900', color: C.ink },
   stateOf: { fontSize: 12.5, fontWeight: '700', color: C.soft },
   stateEmpty: { fontSize: 12, fontWeight: '600', color: C.muted },
+  // จบงาน: ใครจบ เมื่อไร (แทนจัดแล้ว x/y) · การ์ดจางลงนิดแยกจากงานที่ยังทำอยู่
+  stateDone: { flexShrink: 1, textAlign: 'right', fontSize: 12, fontWeight: '700', color: C.soft },
   trackRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   track: { flex: 1, height: 10, borderRadius: 5, backgroundColor: '#E6EAF2', overflow: 'hidden' },
   trackFill: { height: '100%', borderRadius: 5, overflow: 'hidden' },
