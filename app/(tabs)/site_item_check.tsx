@@ -402,23 +402,15 @@ const doneAt = (tr: Tr) => {
   }
   return 0;
 };
+const isDone = (row: Row) => doneAt(row) > 0;
 /**
- * รอบที่รายการครบทั้งชุด (เหมือน rowDoneAt ในเว็บ · ผู้ใช้สั่ง 18 พ.ย. 69 "มีรายการย่อยด้วย ลืมนับจำนวนของมัน"):
- * รายการหลักครบตามยอด และรายการย่อยที่ใส่จำนวนครบตามยอดของมันเองทุกตัว → รอบที่ครบทีหลังสุด · 0 = ยังค้าง
- * ไม่นับรายการย่อยที่ไม่ใส่จำนวน / ยังไม่บันทึก · ใช้กับแท็บค้าง/ครบแล้ว และตัวนับ · ป้ายครบ/แถบสีแถว ยังดูรายบรรทัด
+ * รายการย่อยนับรวมกับรายการหลัก (เหมือนเว็บ · ผู้ใช้สั่ง 18 พ.ย. 69 "เอารายการย่อยหลักนับรวมกันเลย"):
+ * รายการย่อยที่ใส่จำนวน = 1 รายการในตัวนับ ค้าง/ครบตามยอดของมันเอง · รายการหลักตามยอดของมันเอง
+ * แท็บค้าง = รายการหลักค้าง หรือมีย่อยค้าง · แท็บครบแล้ว = รายการหลักครบ หรือมีย่อยครบ · ไม่นับย่อยที่ไม่ใส่จำนวน/ยังไม่บันทึก
  */
-const rowDoneAt = (row: Row) => {
-  let at = doneAt(row);
-  if (!at) return 0;
-  for (const sub of row.subs) {
-    if (!sub.saved || !(num(sub.saved.qty) > 0)) continue;
-    const subAt = doneAt(sub);
-    if (!subAt) return 0;
-    at = Math.max(at, subAt);
-  }
-  return at;
-};
-const isDone = (row: Row) => rowDoneAt(row) > 0;
+const countedSubs = (row: Row) => row.subs.filter((sub) => !!sub.saved && num(sub.saved.qty) > 0);
+const subLeft = (row: Row) => countedSubs(row).some((sub) => !doneAt(sub));
+const subDoneAny = (row: Row) => countedSubs(row).some((sub) => doneAt(sub) > 0);
 /** ป้ายครบในแถว (เหมือน paintDoneTag ในเว็บ): ไม่ถึงยอด = ไม่มีป้าย · ครบรอบเดียวกับที่ติ๊ก = ข้อความใครติ๊ก · ไม่ได้ติ๊ก = "ครบรอบ N" */
 const doneTagOf = (tr: Tr) => {
   const at = doneAt(tr);
@@ -2482,14 +2474,16 @@ class Board {
   // ---------- สรุปบนหัวหน้า ----------
   counts() {
     const rows = this.groups.filter((g) => g.sec === 'goods').flatMap((g) => g.rows);
-    const done = rows.filter(isDone).length;
     const extraRows = this.groups.filter((g) => g.sec === 'extra').flatMap((g) => g.rows);
+    // รายการที่นับ: รายการหลัก + ย่อยที่ใส่จำนวน (นับรวมกัน)
+    const items: Tr[] = (rows as Tr[]).concat(rows.flatMap(countedSubs));
+    const done = items.filter((tr) => doneAt(tr) > 0).length;
     return {
-      todo: rows.length - done,
+      todo: items.length - done,
       done,
-      all: rows.length,
-      pct: rows.length ? (done / rows.length) * 100 : 0,
-      perRound: ROUNDS.map((round) => rows.filter((row) => rowDoneAt(row) === round).length),
+      all: items.length,
+      pct: items.length ? (done / items.length) * 100 : 0,
+      perRound: ROUNDS.map((round) => items.filter((tr) => doneAt(tr) === round).length),
       extraDone: extraRows.filter(isDone).length,
       extraAll: extraRows.length,
       skipAll: this.groups.filter((g) => g.sec === 'skip').reduce((t, g) => t + g.rows.length, 0),
@@ -3876,7 +3870,9 @@ export default function SiteItemCheckScreen() {
       const collapsed = g.sec === 'skip' && !skipOpen && !q;
       const rows = g.rows.filter((row) => {
         // แถวที่กำลังแก้อยู่ไม่หายจากแท็บ แม้อีกคนบันทึกครบไปแล้ว
-        const inTab = tab === 'all' || (tab === 'done') === isDone(row) || b.trDirty(row) || row.subs.some((sb) => b.trDirty(sb)) || row === focusRow;
+        // แท็บค้าง: รายการหลักค้าง หรือมีย่อยค้าง · แท็บครบแล้ว: รายการหลักครบ หรือมีย่อยครบ (นับรวมกัน)
+        const inTab = tab === 'all' || (tab === 'done' ? isDone(row) || subDoneAny(row) : !isDone(row) || subLeft(row))
+          || b.trDirty(row) || row.subs.some((sb) => b.trDirty(sb)) || row === focusRow;
         return isMatch && !collapsed && inTab;
       });
       groupRows.set(g, rows);
