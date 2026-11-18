@@ -66,7 +66,7 @@ const ROUND_LOCK_TEXT = 'รอบนี้จัดส่งบันทึก�
 // load_at = วันที่ขึ้นของ · job_note = หมายเหตุจัดงาน (ไม่อยู่ในใบส่งของ แก้อย่างเดียวไม่ต้องเขียนใบส่งใหม่ · headDoChanged)
 const HEAD_KEYS = ['transport', 'driver', 'helper', 'vehicle', 'receiver', 'organizer', 'deliver_at', 'load_at', 'job_note', 'note'] as const;
 const JOB_NOTE_MAX = 500; // = SIC_JOB_NOTE_MAX
-const EMPTY_TEXT: Record<string, string> = { todo: 'ไม่มีรายการค้างแล้ว', done: 'ยังไม่มีรายการที่ติ๊กครบ', all: 'ไม่มีรายการ' };
+const EMPTY_TEXT: Record<string, string> = { todo: 'ไม่มีรายการค้างแล้ว', done: 'ยังไม่มีรายการที่ส่งครบ', all: 'ไม่มีรายการ' };
 const JOB_STATUS_TEXT: Record<string, string> = { waiting: 'รอจัด', packing: 'กำลังจัด', packed: 'รอขึ้น', loading: 'กำลังขึ้นรถ', loaded: 'ขึ้นครบแล้ว' };
 const STOCK_BLOCKED_TEXT: Record<string, string> = { parts: 'ซื้อเป็นชิ้นส่วน เบิกเองที่หน้าโครงการ', split: 'แยกทุนส่วนประกอบ เบิกเองที่หน้าโครงการ' };
 const SHEET_BASIS =
@@ -372,7 +372,42 @@ const returnsOf = (tr: Tr): [number, string, number][] => (tr.isSub ? [] : tr.ba
 const backQty = (tr: Tr) => returnsOf(tr).reduce((t, e) => t + e[2], 0);
 // ยอดที่ถึงหน้างาน: ของตีกลับนับกลับเข้ายอดค้าง
 const sentQty = (tr: Tr) => ROUNDS.reduce((t, r) => t + qtyOf(tr, r), 0) - backQty(tr);
-const isDone = (row: Row) => row.doneRound > 0;
+/**
+ * จำนวนเป้า: ติ๊ก 80% แล้วเหลือ 80% · ปัดเศษตามปกติเป็นจำนวนเต็ม ต่ำกว่า .5 ปัดลง .5 ขึ้นไปปัดขึ้น (4 → 3 · 6 → 5 · 7.5 → 6)
+ * ปัดแล้วเกินจำนวน = ปัดลง (1.9 → 1) · ได้ 0 = 1 (0.5 → 1) · ไม่มีทศนิยมเลย · ต้องตรงกับ sic_target_qty() / targetFor ในหน้าเว็บ
+ */
+const targetFor = (qty: number, p80: boolean) => {
+  if (!p80) return qty;
+  const exact = round2(qty * 0.8);
+  let near = Math.floor(exact + 0.5 + 0.000001);
+  if (near > round2(qty) + 0.000001) near = Math.floor(exact + 0.000001);
+  return near < 1 && qty > 0 ? 1 : Math.max(0, near);
+};
+/**
+ * ค้าง/ครบตามยอด ไม่ตามติ๊กครบ (เหมือน doneAt ในหน้าเว็บ · ผู้ใช้สั่ง 17 พ.ย. 69 "จับที่จำนวนค้าง"):
+ * รอบที่ครบ = รอบแรกที่ยอดขึ้นที่บันทึกแล้วสะสม (หักของตีกลับ) ถึงเป้า (ติ๊ก 80% ที่บันทึกแล้วใช้ยอด 80%)
+ * 0 = ยังค้าง แม้ติ๊กครบไว้ (ติ๊กครบแล้วมาแก้จำนวนลด) · ส่งครบยอดแล้วไม่ได้ติ๊ก = ครบ · ไม่มีจำนวนเป้า = ใช้ติ๊กครบเหมือนเดิม
+ * ใช้ค่าที่บันทึกแล้ว แถวไม่กระโดดแท็บระหว่างพิมพ์ · รายการย่อยใช้จำนวน/ยอดที่บันทึกของมันเอง · ติ๊กครบยังใช้เติมยอดที่เหลือเหมือนเดิม
+ */
+const doneAt = (tr: Tr) => {
+  if (tr.isSub && !tr.saved) return 0; // รายการย่อยใหม่ยังไม่บันทึก
+  const target = tr.isSub ? num(tr.saved!.qty) : targetFor(tr.qty, tr.p80Saved);
+  if (target <= 0) return savedDone(tr);
+  const returns = returnsOf(tr);
+  let acc = 0;
+  for (const round of ROUNDS) {
+    const back = returns.filter((e) => e[0] === round).reduce((t, e) => t + e[2], 0);
+    acc = round2(acc + num(savedLoadOf(tr, round - 1)) - back);
+    if (acc >= target - 0.005) return round;
+  }
+  return 0;
+};
+const isDone = (row: Row) => doneAt(row) > 0;
+/** ป้ายครบในแถว (เหมือน paintDoneTag ในเว็บ): ไม่ถึงยอด = ไม่มีป้าย · ครบรอบเดียวกับที่ติ๊ก = ข้อความใครติ๊ก · ไม่ได้ติ๊ก = "ครบรอบ N" */
+const doneTagOf = (tr: Tr) => {
+  const at = doneAt(tr);
+  return !at ? '' : savedDone(tr) === at && tr.doneText ? tr.doneText : 'ครบรอบ ' + at;
+};
 const trName = (tr: Tr) => (tr.isSub ? tr.name.trim() || 'รายการย่อย' : tr.name);
 // ค่าที่ส่งไปบันทึก (ทั้งค่าใหม่และ base) รูปแบบเดียวกับ sic_parse_sub() ใน PHP
 const subPayload = (v: SubSaved) => ({
@@ -692,17 +727,9 @@ class Board {
   }
 
   // ---------- ค่าที่กรอกเทียบค่าที่บันทึกแล้ว ----------
-  /**
-   * จำนวนเป้าของแถว: ติ๊ก 80% แล้วเหลือ 80% · ปัดเศษตามปกติเป็นจำนวนเต็ม ต่ำกว่า .5 ปัดลง .5 ขึ้นไปปัดขึ้น (4 → 3 · 6 → 5 · 7.5 → 6)
-   * ปัดแล้วเกินจำนวน = ปัดลง (1.9 → 1) · ได้ 0 = 1 (0.5 → 1) · ไม่มีทศนิยมเลย · ต้องตรงกับ sic_target_qty()
-   */
+  /** จำนวนเป้าของแถวตามช่องติ๊ก 80% ตอนนี้ (กติกาปัดเศษใน targetFor) */
   targetQty(row: Row) {
-    const qty = row.qty;
-    if (!row.p80) return qty;
-    const exact = round2(qty * 0.8);
-    let near = Math.floor(exact + 0.5 + 0.000001);
-    if (near > round2(qty) + 0.000001) near = Math.floor(exact + 0.000001);
-    return near < 1 && qty > 0 ? 1 : Math.max(0, near);
+    return targetFor(row.qty, row.p80);
   }
   targetOf(tr: Tr) {
     return tr.isSub ? Number(this.subValues(tr).qty) || 0 : this.targetQty(tr);
@@ -1242,12 +1269,14 @@ class Board {
     const returns = returnsOf(tr);
     const reach = this.reachRounds(tr);
     let sentSoFar = 0;
+    let liveReach = 0; // รอบแรกที่ยอดสะสม (ค่าในช่องตอนนี้) ถึงเป้า · สถานะ "ครบ" ตามยอด ไม่ตามติ๊ก (เหมือนเว็บ 17 พ.ย. 69)
     return ROUNDS.map((round, i) => {
       const norm = normQty(tr.load[i]);
       const qty = Number(norm) || 0;
       const roundBack = returns.filter((e) => e[0] === round);
       const backOfRound = roundBack.reduce((t, e) => t + e[2], 0);
       sentSoFar += qty - backOfRound;
+      if (!liveReach && total > 0 && round2(sentSoFar) >= total - 0.005) liveReach = round;
       const live = this.liveRound(tr, round, norm);
       const locked = this.roundFrozen(round); // คนขับยืนยันแล้ว หรือยืนยันจบรอบแล้ว (ยังไม่กดแก้ไข)
       const packNorm = normQty(tr.pack[i]);
@@ -1266,7 +1295,8 @@ class Board {
       } else if (overAt <= 0 && reach.target === round) {
         status = 'ครบ 80% · ' + fmt(round2(sentSoFar)) + '/' + fmt(full);
         tone = 'done';
-      } else if (done === round) {
+      } else if (overAt <= 0 && liveReach === round) {
+        // ครบตามยอด (ติ๊กครบไว้แต่แก้จำนวนลดจนไม่ถึงยอด = ไม่ขึ้นครบ บอกค้างแทน)
         status = 'ครบ';
         tone = 'done';
       } else if (qty > 0) {
@@ -2443,7 +2473,7 @@ class Board {
       done,
       all: rows.length,
       pct: rows.length ? (done / rows.length) * 100 : 0,
-      perRound: ROUNDS.map((round) => rows.filter((row) => row.doneRound === round).length),
+      perRound: ROUNDS.map((round) => rows.filter((row) => doneAt(row) === round).length),
       extraDone: extraRows.filter(isDone).length,
       extraAll: extraRows.length,
       skipAll: this.groups.filter((g) => g.sec === 'skip').reduce((t, g) => t + g.rows.length, 0),
@@ -2496,10 +2526,10 @@ class Board {
     });
     return bills;
   }
-  // ยอดเหลือของ 1 แถวในใบเช็ค · null = ครบแล้ว (ติ๊กครบรอบไหนก็ได้ หรือไม่เหลือยอด)
+  // ยอดเหลือของ 1 แถวในใบเช็ค · null = ไม่เหลือยอด · ติ๊กครบไว้แต่ยอดยังไม่ถึงก็ยังขึ้น (เหมือนเว็บ 17 พ.ย. 69 ค้างตามยอด ไม่ตามติ๊ก)
   sheetLine(tr: Tr, target: number) {
     const left = Math.max(round2(target - sentQty(tr)), 0);
-    return tr.pendingDone > 0 || left <= 0 ? null : left;
+    return left <= 0 ? null : left;
   }
   checkLines() {
     const lines: { tr: Tr; left: number; sec: string; isSub: boolean; parentName: string }[] = [];
@@ -2877,7 +2907,9 @@ const RowCard = memo(function RowCard({ b, row, shown, noteOnly, act }: { b: Boa
   const dirty = b.anyChange(row);
   const ids = row.ids;
   const [poOpen, setPoOpen] = useState(false);
-  const rc = row.doneRound ? roundColor(row.doneRound) : null;
+  const doneAtRound = doneAt(row); // ครบตามยอดที่บันทึกแล้ว ไม่ตามติ๊ก
+  const doneTag = doneTagOf(row);
+  const rc = doneAtRound ? roundColor(doneAtRound) : null;
   const poShow = row.po.length > 4 ? (poOpen ? row.po : row.po.slice(0, 3)) : row.po;
   const inSheet = row.sec !== 'skip' && b.sheetLine(row, b.targetQty(row)) !== null;
   const retOver = b.returnOver(row); // ส่งถึงหน้างานแล้วเกินจำนวน → รับกลับ
@@ -2885,7 +2917,7 @@ const RowCard = memo(function RowCard({ b, row, shown, noteOnly, act }: { b: Boa
   const retGot = b.returnPicked(row); // คนขับรับคืนแล้ว (ป้ายเขียว)
   const reachText = b.reachText(row); // ติ๊ก 80%: ครบ 80% รอบไหน · ครบเต็มรอบไหน
   const hasTags =
-    !!row.skipReason || ids.length > 1 || row.parts.length > 1 || !!row.where || row.namesDiffer || row.multiUnit || !!row.hint || row.otherDo > 0 || !!row.doneText || dirty
+    !!row.skipReason || ids.length > 1 || row.parts.length > 1 || !!row.where || row.namesDiffer || row.multiUnit || !!row.hint || row.otherDo > 0 || !!doneTag || dirty
     || retOver > 0 || retWait > 0 || retGot > 0 || !!reachText;
   const leftTone = left.tone === 'over' ? s.leftOver : left.tone === 'zero' ? s.leftZero : null;
   const leftColor = left.tone === 'over' ? C.bad : left.tone === 'zero' ? C.ok : C.warn;
@@ -2919,7 +2951,7 @@ const RowCard = memo(function RowCard({ b, row, shown, noteOnly, act }: { b: Boa
       {hasTags && (
         <View style={s.tags}>
           {!!reachText && <Chip text={reachText} color={C.ok} bg="#fff" bold />}
-          {!!row.doneText && <Chip text={row.doneText} color={C.ok} bg={C.okBg} icon="checkmark-circle" bold />}
+          {!!doneTag && <Chip text={doneTag} color={C.ok} bg={C.okBg} icon="checkmark-circle" bold />}
           {dirty && <Chip text="ยังไม่บันทึก" color={C.warn} bg={C.warnBg} icon="create" bold />}
           {!!row.skipReason && <Chip text={row.skipReason} />}
           {ids.length > 1 && <Chip text={'รวม ' + ids.length + ' รายการ'} color={C.info} bg={C.infoBg} />}
@@ -3048,7 +3080,7 @@ const SubCard = memo(function SubCard({ b, sub, shown, act }: { b: Board; sub: S
         </View>
         <View style={s.tags}>
           <Chip text="รายการย่อย" color={C.info} bg={C.infoBg} icon="return-down-forward" />
-          {!!sub.doneText && <Chip text={sub.doneText} color={C.ok} bg={C.okBg} icon="checkmark-circle" bold />}
+          {!!doneTagOf(sub) && <Chip text={doneTagOf(sub)} color={C.ok} bg={C.okBg} icon="checkmark-circle" bold />}
           {b.isNewSub(sub) && <Chip text="ยังไม่บันทึก" color={C.warn} bg={C.warnBg} icon="create" bold />}
           {sub.deleted && <Chip text="จะลบตอนบันทึก" color={C.bad} bg={C.badBg} icon="trash" bold />}
         </View>
