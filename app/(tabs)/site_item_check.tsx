@@ -402,7 +402,23 @@ const doneAt = (tr: Tr) => {
   }
   return 0;
 };
-const isDone = (row: Row) => doneAt(row) > 0;
+/**
+ * รอบที่รายการครบทั้งชุด (เหมือน rowDoneAt ในเว็บ · ผู้ใช้สั่ง 18 พ.ย. 69 "มีรายการย่อยด้วย ลืมนับจำนวนของมัน"):
+ * รายการหลักครบตามยอด และรายการย่อยที่ใส่จำนวนครบตามยอดของมันเองทุกตัว → รอบที่ครบทีหลังสุด · 0 = ยังค้าง
+ * ไม่นับรายการย่อยที่ไม่ใส่จำนวน / ยังไม่บันทึก · ใช้กับแท็บค้าง/ครบแล้ว และตัวนับ · ป้ายครบ/แถบสีแถว ยังดูรายบรรทัด
+ */
+const rowDoneAt = (row: Row) => {
+  let at = doneAt(row);
+  if (!at) return 0;
+  for (const sub of row.subs) {
+    if (!sub.saved || !(num(sub.saved.qty) > 0)) continue;
+    const subAt = doneAt(sub);
+    if (!subAt) return 0;
+    at = Math.max(at, subAt);
+  }
+  return at;
+};
+const isDone = (row: Row) => rowDoneAt(row) > 0;
 /** ป้ายครบในแถว (เหมือน paintDoneTag ในเว็บ): ไม่ถึงยอด = ไม่มีป้าย · ครบรอบเดียวกับที่ติ๊ก = ข้อความใครติ๊ก · ไม่ได้ติ๊ก = "ครบรอบ N" */
 const doneTagOf = (tr: Tr) => {
   const at = doneAt(tr);
@@ -2473,7 +2489,7 @@ class Board {
       done,
       all: rows.length,
       pct: rows.length ? (done / rows.length) * 100 : 0,
-      perRound: ROUNDS.map((round) => rows.filter((row) => doneAt(row) === round).length),
+      perRound: ROUNDS.map((round) => rows.filter((row) => rowDoneAt(row) === round).length),
       extraDone: extraRows.filter(isDone).length,
       extraAll: extraRows.length,
       skipAll: this.groups.filter((g) => g.sec === 'skip').reduce((t, g) => t + g.rows.length, 0),
