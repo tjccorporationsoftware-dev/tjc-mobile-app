@@ -1,5 +1,6 @@
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import axios from "axios";
+import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Location from "expo-location";
@@ -9,7 +10,10 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Image,
   Keyboard,
+  KeyboardAvoidingView,
+  Linking,
   Modal,
   Pressable,
   ScrollView,
@@ -23,7 +27,7 @@ import {
 import Animated, { FadeInDown } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { API_BASE } from "../../constants/config";
+import { API_BASE, IMG_BASE_URL } from "../../constants/config";
 import { useAuth } from "../_layout";
 
 const REGIONS = [
@@ -35,7 +39,14 @@ const REGIONS = [
   "ภาคตะวันออก",
   "ภาคตะวันตก",
 ];
+// ประเภทลูกค้า (ค่าเดียวกับ customer_type บนเว็บ Report.php)
+const CUSTOMER_TYPES = ["ลูกค้าเก่า", "ลูกค้าใหม่"];
 const PRIMARY_COLOR = "#004aad";
+// สี/ไอคอนของแต่ละประเภท (ธีมเดิมของช่องประเภท: เก่า = เขียว ✅ · ใหม่ = น้ำเงิน 🆕)
+const CUSTOMER_TYPE_STYLE: Record<string, { color: string; emoji: string }> = {
+  ลูกค้าเก่า: { color: "#10b981", emoji: "✅" },
+  ลูกค้าใหม่: { color: "#3b82f6", emoji: "🆕" },
+};
 const SECONDARY_COLOR = "#3b82f6";
 const COLORS = {
   primary: "#004aad",
@@ -44,6 +55,96 @@ const COLORS = {
   red: "#ef4444",
   slate: "#64748b",
   orange: "#f59e0b",
+};
+
+// 📎 เอกสารแนบค่าใช้จ่าย — ตรงกับ report_docs_lib.php ฝั่งเว็บ (คอลัมน์ reports.expense_docs)
+type ExpenseCat = "fuel" | "hotel" | "other";
+type DocType = "slip" | "tax_invoice" | "receipt" | "other";
+const EXPENSE_CATS: ExpenseCat[] = ["fuel", "hotel", "other"];
+const DOC_TYPES: { key: DocType; label: string }[] = [
+  { key: "slip", label: "สลิปโอนเงิน" },
+  { key: "tax_invoice", label: "ใบกำกับภาษี" },
+  { key: "receipt", label: "ใบเสร็จรับเงิน" },
+  { key: "other", label: "เอกสารอื่นๆ" },
+];
+const DOC_TYPE_LABEL = Object.fromEntries(
+  DOC_TYPES.map((d) => [d.key, d.label]),
+) as Record<DocType, string>;
+
+interface PickedFile {
+  uri: string;
+  name: string;
+  mimeType: string;
+}
+interface DocRow {
+  key: number;
+  type: DocType;
+  files: PickedFile[];
+}
+interface ExistingDoc {
+  cat: ExpenseCat;
+  type: DocType;
+  file: string;
+  name: string;
+  entry: number | null; // ลำดับรอบ/รายการที่เอกสารผูกอยู่ (0, 1, 2 …) · null = ข้อมูลเก่าที่ไม่ได้ผูก
+}
+
+let docRowSeq = 0;
+const newDocRow = (type: DocType = "slip"): DocRow => ({
+  key: ++docRowSeq,
+  type,
+  files: [],
+});
+
+// 🔁 รอบ/รายการของหมวดค่าใช้จ่าย (เหมือนกล่องในฟอร์มเว็บ Report.php)
+//   ค่าน้ำมัน = "รอบ N" · ที่พัก / อื่นๆ = "รายการที่ N" — แต่ละกล่องมียอด + สลิป + เอกสารของตัวเอง
+type RowList = "slipRows" | "docRows";
+interface ExpenseEntry {
+  key: number;
+  amount: string;
+  detail: string; // ใช้เฉพาะหมวดอื่นๆ
+  slipRows: DocRow[];
+  docRows: DocRow[];
+  existing: ExistingDoc[]; // เอกสารเดิมบนเซิร์ฟเวอร์ของกล่องนี้
+  legacy: string[]; // สลิปรูปแบบเดิม (คอลัมน์ fuel_receipt / accommodation_receipt / other_receipt)
+}
+interface ExpenseCatState {
+  enabled: boolean;
+  entries: ExpenseEntry[];
+}
+let entrySeq = 0;
+// กล่องใหม่มาพร้อมช่องสลิป 1 ช่อง และช่องแนบเอกสาร 1 ช่อง (เหมือนเว็บ)
+const newEntry = (init: Partial<ExpenseEntry> = {}): ExpenseEntry => ({
+  key: ++entrySeq,
+  amount: "",
+  detail: "",
+  slipRows: [newDocRow()],
+  docRows: [newDocRow()],
+  existing: [],
+  legacy: [],
+  ...init,
+});
+const emptyExpenses = (): Record<ExpenseCat, ExpenseCatState> => ({
+  fuel: { enabled: false, entries: [newEntry()] },
+  hotel: { enabled: false, entries: [newEntry()] },
+  other: { enabled: false, entries: [newEntry()] },
+});
+const ENTRY_LABEL: Record<ExpenseCat, string> = {
+  fuel: "รอบ",
+  hotel: "รายการที่",
+  other: "รายการที่",
+};
+const isImageFile = (name: string) => /\.(jpe?g|png|gif|webp|heic|heif)$/i.test(name);
+const fileExt = (name: string) => (name.split(".").pop() || "").toUpperCase();
+const csvFiles = (v: any) =>
+  String(v ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+const toNum = (v: any) => {
+  const n = parseFloat(String(v ?? "").replace(/,/g, ""));
+  return isNaN(n) ? 0 : n;
 };
 
 // ✅ เพิ่ม type นี้ก่อน export default WriteReportScreen
@@ -61,9 +162,27 @@ interface WorkBox {
   biddingMembers: string[]; // ✅ NEW
 }
 
-export default function WriteReportScreen() {
+// เปิดได้ 2 แบบ:
+//  1) เป็นหน้าในเมนู (route) — รับ edit_id / edit_data ทาง route params เหมือนเดิม
+//  2) ฝังเป็นป๊อปอัปเต็มจอในหน้าประวัติ (history/sales) — ส่ง editId / editData / onClose มาเป็น props
+//     บันทึกเสร็จเรียก onClose(true) แทนการเด้งไปหน้า Profile ผู้ใช้จึงอยู่หน้าประวัติต่อได้
+type WriteReportProps = {
+  editId?: string | number;
+  editData?: string;
+  onClose?: (saved: boolean) => void;
+};
+
+export default function WriteReportScreen({
+  editId,
+  editData,
+  onClose,
+}: WriteReportProps = {}) {
   const router = useRouter();
-  const params = useLocalSearchParams(); // ➕ เพิ่มบรรทัดนี้
+  const routeParams = useLocalSearchParams();
+  const params: any =
+    editData !== undefined
+      ? { edit_id: String(editId ?? ""), edit_data: editData }
+      : routeParams;
   const { user } = useAuth();
   const [loading, setLoading] = useState(false);
   // ✅ เพิ่มต่อจาก const [loading, setLoading] = useState(false);
@@ -115,26 +234,25 @@ export default function WriteReportScreen() {
   ]);
 
   // 💰 2. ส่วนค่าใช้จ่าย
-  const [expenses, setExpenses] = useState({
-    fuel: {
-      enabled: false,
-      items: [{ cost: "", image: null as string | null }],
-    },
-    hotel: { enabled: false, cost: "", image: null as string | null },
-    other: {
-      enabled: false,
-      cost: "",
-      detail: "",
-      image: null as string | null,
-    },
-  });
+  const [expenses, setExpenses] =
+    useState<Record<ExpenseCat, ExpenseCatState>>(emptyExpenses);
 
   const [problem, setProblem] = useState("");
   const [suggestion, setSuggestion] = useState("");
 
+  // 📎 ป๊อปอัปเลือกประเภทบิล/เอกสารของช่องที่กด
+  const [docTypePicker, setDocTypePicker] = useState<{
+    cat: ExpenseCat;
+    entryKey: number;
+    list: RowList;
+    rowKey: number;
+  } | null>(null);
+
   // --- UI States ---
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [selectorVisible, setSelectorVisible] = useState(false);
+  // กล่องงานที่เปิดดรอปดาวน์ประเภทลูกค้าอยู่ (null = ปิด)
+  const [typeDropdownBox, setTypeDropdownBox] = useState<number | null>(null);
   const [selectorConfig, setSelectorConfig] = useState({
     title: "",
     data: [] as string[],
@@ -272,7 +390,11 @@ export default function WriteReportScreen() {
             customer: customers[i],
             project: pjName,
             value: pjVal,
-            type: "ลูกค้าเก่า", // จะอัปเดตเองถ้ามีข้อมูลใน masterCustomerList
+            // ฐานข้อมูลเก็บประเภทไว้ช่องเดียว (customer_type = ของงานแรก) · งานอื่นถือเป็นลูกค้าเก่า
+            type:
+              parsedBoxes.length === 0 && editData.customer_type === "ลูกค้าใหม่"
+                ? "ลูกค้าใหม่"
+                : "ลูกค้าเก่า",
             status: statuses[i] || "",
             summary: cleanSum,
             notes: cleanNote,
@@ -283,42 +405,104 @@ export default function WriteReportScreen() {
         }
         if (parsedBoxes.length > 0) setWorkBoxes(parsedBoxes);
 
-        // 4. เซ็ตค่าใช้จ่าย
-        // 4. เซ็ตค่าใช้จ่าย (แก้ไขตรงนี้)
-        const rawFuelCosts = editData.fuel_cost
-          ? String(editData.fuel_cost).split(",")
-          : [];
-        const rawFuelReceipts = editData.fuel_receipt
-          ? String(editData.fuel_receipt).split(",")
-          : [];
+        // 4. ค่าใช้จ่าย → กล่องรอบ/รายการ (กติกาเดียวกับ Report.php ตอนแก้ไข)
+        // 📎 เอกสารแนบเดิม (expense_docs เป็น JSON string จาก get_history)
+        let parsedDocs: ExistingDoc[] = [];
+        try {
+          const rawDocs =
+            typeof editData.expense_docs === "string"
+              ? JSON.parse(editData.expense_docs || "[]")
+              : editData.expense_docs;
+          if (Array.isArray(rawDocs)) {
+            parsedDocs = rawDocs
+              .filter((d: any) => d && d.file)
+              .map((d: any) => ({
+                cat: EXPENSE_CATS.includes(d.cat) ? d.cat : "other",
+                type: DOC_TYPE_LABEL[d.type as DocType] ? d.type : "other",
+                file: String(d.file),
+                name: String(d.name || ""),
+                entry:
+                  d.entry !== null && d.entry !== undefined && !isNaN(Number(d.entry))
+                    ? Number(d.entry)
+                    : null,
+              }));
+          }
+        } catch {
+          parsedDocs = [];
+        }
 
-        // สร้าง array ของ items ใหม่จากข้อมูลที่ได้
-        const fuelItems = rawFuelCosts.map((cost, idx) => ({
-          cost: cost.trim(),
-          image: rawFuelReceipts[idx] ? rawFuelReceipts[idx].trim() : null,
+        // ยอดแยกรายการของที่พัก/อื่นๆ อยู่ใน expense_rounds · รายงานเก่าที่ไม่มี = 1 รายการรวม
+        let roundAmounts: any[] = [];
+        try {
+          const rx =
+            typeof editData.expense_rounds === "string"
+              ? JSON.parse(editData.expense_rounds || "{}")
+              : editData.expense_rounds;
+          if (rx && Array.isArray(rx.amounts)) roundAmounts = rx.amounts;
+        } catch {
+          roundAmounts = [];
+        }
+        const amountsOf = (cat: ExpenseCat) =>
+          roundAmounts
+            .filter((a) => a && a.cat === cat)
+            .map((a) => ({
+              amount: String(a.amount ?? ""),
+              detail: String(a.detail ?? ""),
+            }));
+
+        const fuelSeed = csvFiles(editData.fuel_cost).map((a) => ({
+          amount: a,
+          detail: "",
         }));
+        let hotelSeed = amountsOf("hotel");
+        if (hotelSeed.length === 0 && toNum(editData.accommodation_cost) > 0)
+          hotelSeed = [{ amount: String(editData.accommodation_cost), detail: "" }];
+        let otherSeed = amountsOf("other");
+        if (otherSeed.length === 0 && toNum(editData.other_cost) > 0)
+          otherSeed = [
+            {
+              amount: String(editData.other_cost),
+              detail: String(editData.other_cost_detail || ""),
+            },
+          ];
+
+        const legacyOf: Record<ExpenseCat, string[]> = {
+          fuel: csvFiles(editData.fuel_receipt),
+          hotel: csvFiles(editData.accommodation_receipt),
+          other: csvFiles(editData.other_receipt),
+        };
+
+        const buildCat = (
+          cat: ExpenseCat,
+          seed: { amount: string; detail: string }[],
+        ): ExpenseCatState => {
+          const docs = parsedDocs.filter((d) => d.cat === cat);
+          const legacy = legacyOf[cat];
+          const entries = (seed.length > 0 ? seed : [{ amount: "", detail: "" }]).map(
+            (s) => newEntry({ amount: s.amount, detail: s.detail }),
+          );
+          const last = entries.length - 1;
+          docs.forEach((d) => {
+            // ค่าน้ำมันที่ไม่ระบุรอบ → รอบล่าสุด · ที่พัก/อื่นๆ ที่ไม่ระบุ → รายการแรก (เหมือนเว็บ)
+            const ok = d.entry !== null && d.entry >= 0 && d.entry <= last;
+            const at = ok ? (d.entry as number) : cat === "fuel" ? last : 0;
+            entries[at].existing.push(d);
+          });
+          // สลิปรูปแบบเดิม: ค่าน้ำมันเรียงตามรอบ (เกินจำนวนรอบ → รอบสุดท้าย) · ที่พัก/อื่นๆ อยู่รายการแรก
+          legacy.forEach((f, i) => {
+            const at = cat === "fuel" ? Math.min(i, last) : 0;
+            entries[at].legacy.push(f);
+          });
+          return {
+            enabled: seed.length > 0 || docs.length > 0 || legacy.length > 0,
+            entries,
+          };
+        };
 
         setExpenses({
-          fuel: {
-            enabled: rawFuelCosts.length > 0 && rawFuelCosts[0] !== "",
-            items:
-              fuelItems.length > 0 ? fuelItems : [{ cost: "", image: null }],
-          },
-          hotel: {
-            enabled:
-              parseFloat(editData.accommodation_cost || 0) > 0 ||
-              !!editData.accommodation_receipt,
-            cost: editData.accommodation_cost || "",
-            image: editData.accommodation_receipt || null,
-          },
-          other: {
-            enabled:
-              parseFloat(editData.other_cost || 0) > 0 ||
-              !!editData.other_receipt,
-            cost: editData.other_cost || "",
-            detail: editData.other_cost_detail || "",
-            image: editData.other_receipt || null,
-          },
+          fuel: buildCat("fuel", fuelSeed),
+          hotel: buildCat("hotel", hotelSeed),
+          other: buildCat("other", otherSeed),
         });
 
         setProblem(editData.problem || "");
@@ -371,9 +555,11 @@ export default function WriteReportScreen() {
       setWorkBoxes(workBoxes.filter((b) => b.id !== id));
   };
 
+  // อัปเดตจากค่าล่าสุดเสมอ (functional update) — Android ส่ง onChangeText ถี่ๆ ระหว่างพิมพ์ (โดยเฉพาะคีย์บอร์ดไทย)
+  // ถ้าอ้าง workBoxes ตอน render ตัวอักษรที่พิมพ์ติดกันจะทับกันจนพิมพ์ไม่ติด
   const updateWorkBox = (id: number, field: string, value: any) => {
-    setWorkBoxes(
-      workBoxes.map((b) => (b.id === id ? { ...b, [field]: value } : b)),
+    setWorkBoxes((prev) =>
+      prev.map((b) => (b.id === id ? { ...b, [field]: value } : b)),
     );
   };
 
@@ -381,8 +567,8 @@ export default function WriteReportScreen() {
     const isExisting = masterCustomerList.some(
       (c) => c.trim().toLowerCase() === name.trim().toLowerCase(),
     );
-    setWorkBoxes(
-      workBoxes.map((b) =>
+    setWorkBoxes((prev) =>
+      prev.map((b) =>
         b.id === boxId
           ? {
             ...b,
@@ -408,8 +594,8 @@ export default function WriteReportScreen() {
       (c) => c.trim().toLowerCase() === text.trim().toLowerCase(),
     );
 
-    setWorkBoxes(
-      workBoxes.map((b) =>
+    setWorkBoxes((prev) =>
+      prev.map((b) =>
         b.id === id
           ? {
             ...b,
@@ -456,54 +642,155 @@ export default function WriteReportScreen() {
     );
   };
 
-  const addFuelRow = () => {
-    setExpenses({
-      ...expenses,
-      fuel: {
-        ...expenses.fuel,
-        items: [...expenses.fuel.items, { cost: "", image: null }],
+  const toggleExpense = (cat: ExpenseCat) => {
+    setExpenses((prev) => ({
+      ...prev,
+      [cat]: { ...prev[cat], enabled: !prev[cat].enabled },
+    }));
+  };
+
+  // 🔁 จัดการกล่องรอบ/รายการ
+  const updateEntry = (
+    cat: ExpenseCat,
+    entryKey: number,
+    fn: (e: ExpenseEntry) => ExpenseEntry,
+  ) =>
+    setExpenses((prev) => ({
+      ...prev,
+      [cat]: {
+        ...prev[cat],
+        entries: prev[cat].entries.map((e) => (e.key === entryKey ? fn(e) : e)),
       },
-    });
-  };
+    }));
 
-  const removeFuelRow = (index: number) => {
-    const newItems = expenses.fuel.items.filter((_, i) => i !== index);
-    setExpenses({ ...expenses, fuel: { ...expenses.fuel, items: newItems } });
-  };
+  const addEntry = (cat: ExpenseCat) =>
+    setExpenses((prev) => ({
+      ...prev,
+      [cat]: { ...prev[cat], entries: [...prev[cat].entries, newEntry()] },
+    }));
 
-  const pickImage = async (type: "fuel" | "hotel" | "other", index = 0) => {
+  const removeEntry = (cat: ExpenseCat, entryKey: number) =>
+    setExpenses((prev) => ({
+      ...prev,
+      [cat]: {
+        ...prev[cat],
+        entries: prev[cat].entries.filter((e) => e.key !== entryKey),
+      },
+    }));
+
+  // 📎 ช่องสลิป / ช่องแนบเอกสารในกล่อง
+  const addRow = (cat: ExpenseCat, entryKey: number, list: RowList) =>
+    updateEntry(cat, entryKey, (e) => ({ ...e, [list]: [...e[list], newDocRow()] }));
+
+  const removeRow = (cat: ExpenseCat, entryKey: number, list: RowList, rowKey: number) =>
+    updateEntry(cat, entryKey, (e) => ({
+      ...e,
+      [list]: e[list].filter((r) => r.key !== rowKey),
+    }));
+
+  const setRowType = (
+    cat: ExpenseCat,
+    entryKey: number,
+    list: RowList,
+    rowKey: number,
+    type: DocType,
+  ) =>
+    updateEntry(cat, entryKey, (e) => ({
+      ...e,
+      [list]: e[list].map((r) => (r.key === rowKey ? { ...r, type } : r)),
+    }));
+
+  const removePickedFile = (
+    cat: ExpenseCat,
+    entryKey: number,
+    list: RowList,
+    rowKey: number,
+    idx: number,
+  ) =>
+    updateEntry(cat, entryKey, (e) => ({
+      ...e,
+      [list]: e[list].map((r) =>
+        r.key === rowKey ? { ...r, files: r.files.filter((_, i) => i !== idx) } : r,
+      ),
+    }));
+
+  const removeExistingDoc = (cat: ExpenseCat, entryKey: number, file: string) =>
+    updateEntry(cat, entryKey, (e) => ({
+      ...e,
+      existing: e.existing.filter((d) => d.file !== file),
+    }));
+
+  // สลิปรูปแบบเดิมลบได้เฉพาะค่าน้ำมัน (ที่พัก/อื่นๆ API เก็บไฟล์เดิมไว้เสมอ)
+  const removeLegacy = (cat: ExpenseCat, entryKey: number, file: string) =>
+    updateEntry(cat, entryKey, (e) => ({
+      ...e,
+      legacy: e.legacy.filter((f) => f !== file),
+    }));
+
+  // เลือกไฟล์แบบสะสม: กดเลือกเพิ่มได้เรื่อยๆ ไม่ทับไฟล์เดิมในช่อง
+  //   ช่องสลิป = รูปจากคลังภาพ (บีบอัด) · ช่องแนบเอกสาร = รูปหรือ PDF
+  const pickRowFiles = async (
+    cat: ExpenseCat,
+    entryKey: number,
+    list: RowList,
+    rowKey: number,
+  ) => {
+    let added: PickedFile[] = [];
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        quality: 0.2, // 📉 บีบอัดให้เล็กลงเหลือ 20% (ลดภาระเซิร์ฟเวอร์)
-        allowsEditing: true,
-      });
-
-      if (!result.canceled && result.assets && result.assets.length > 0) {
-        const imageUri = result.assets[0].uri;
-
-        if (type === "fuel") {
-          const newItems = [...expenses.fuel.items];
-          newItems[index].image = imageUri;
-          setExpenses({
-            ...expenses,
-            fuel: { ...expenses.fuel, items: newItems },
-          });
-        } else {
-          setExpenses({
-            ...expenses,
-            [type]: { ...expenses[type], image: imageUri },
-          });
-        }
+      if (list === "slipRows") {
+        const result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ["images"],
+          quality: 0.2, // 📉 บีบอัดให้เล็กลงเหลือ 20% (ลดภาระเซิร์ฟเวอร์)
+          allowsMultipleSelection: true,
+          selectionLimit: 0, // 0 = ไม่จำกัด
+        });
+        if (result.canceled || !result.assets?.length) return;
+        added = result.assets.map((a, i) => ({
+          uri: a.uri,
+          name: a.fileName || `slip_${Date.now()}_${i}.jpg`,
+          mimeType: a.mimeType || "image/jpeg",
+        }));
+      } else {
+        const res = await DocumentPicker.getDocumentAsync({
+          type: ["image/*", "application/pdf"],
+          multiple: true,
+          copyToCacheDirectory: true,
+        });
+        if (res.canceled || !res.assets?.length) return;
+        added = res.assets.map((a) => {
+          const name = a.name || `file_${Date.now()}.jpg`;
+          return {
+            uri: a.uri,
+            name,
+            mimeType:
+              a.mimeType ||
+              (name.toLowerCase().endsWith(".pdf") ? "application/pdf" : "image/jpeg"),
+          };
+        });
       }
     } catch (error) {
-      console.log("ImagePicker Error: ", error);
+      console.log("File picker Error: ", error);
       Alert.alert(
         "เกิดข้อผิดพลาด",
-        "ไม่สามารถเลือกรูปภาพนี้ได้ อาจเป็นไฟล์ที่ถูกสำรองไว้ใน iCloud หรือไฟล์ไม่สมบูรณ์ กรุณาลองเลือกรูปอื่นครับ",
+        "ไม่สามารถเลือกไฟล์นี้ได้ อาจเป็นไฟล์ที่ถูกสำรองไว้ใน iCloud หรือไฟล์ไม่สมบูรณ์ กรุณาลองใหม่",
       );
+      return;
     }
+    updateEntry(cat, entryKey, (e) => ({
+      ...e,
+      [list]: e[list].map((r) =>
+        r.key === rowKey ? { ...r, files: [...r.files, ...added] } : r,
+      ),
+    }));
   };
+
+  const expenseTotal = EXPENSE_CATS.reduce(
+    (sum, cat) =>
+      expenses[cat].enabled
+        ? sum + expenses[cat].entries.reduce((s, e) => s + toNum(e.amount), 0)
+        : sum,
+    0,
+  );
 
   const handleGetLocation = async () => {
     let { status } = await Location.requestForegroundPermissionsAsync();
@@ -555,11 +842,7 @@ export default function WriteReportScreen() {
         biddingMembers: [],
       },
     ]);
-    setExpenses({
-      fuel: { enabled: false, items: [{ cost: "", image: null }] },
-      hotel: { enabled: false, cost: "", image: null },
-      other: { enabled: false, cost: "", detail: "", image: null },
-    });
+    setExpenses(emptyExpenses());
     setProblem("");
     setSuggestion("");
   };
@@ -623,55 +906,57 @@ export default function WriteReportScreen() {
       }
     });
 
-    // แทนที่ส่วนเดิมที่คุณเขียนไว้ใน handleSubmit
-
-    // ⛽ ส่วนของค่าน้ำมัน
-    if (expenses.fuel.enabled) {
-      const keptFuelReceipts: string[] = [];
-      expenses.fuel.items.forEach((item, idx) => {
-        postData.append("fuel_cost[]", item.cost || "0");
-        if (item.image) {
-          if (item.image.startsWith("file://") || item.image.startsWith("content://")) {
-            postData.append("fuel_receipt_file[]", {
-              uri: item.image,
-              name: `fuel_${idx}.jpg`,
-              type: "image/jpeg",
-            } as any);
-          } else {
-            keptFuelReceipts.push(item.image);
-          }
-        }
+    // 💰 ค่าใช้จ่าย — แต่ละรอบ/รายการ = 1 กล่อง (รูปแบบเดียวกับ Report.php)
+    //   ยอด: fuel_cost[] / accommodation_cost[] / other_cost[] + other_cost_detail[] เรียงตามกล่อง
+    //   ไฟล์: doc_cat[i] / doc_type[i] / doc_entry[i] / doc_files[i][] · ไฟล์เดิม: existing_doc[] + existing_doc_entry[]
+    //   doc_entry = ลำดับกล่องที่ส่ง → เซิร์ฟเวอร์ผูกเป็นรอบของเอกสาร
+    // expense_docs_sent บอกเซิร์ฟเวอร์ว่าแอปรุ่นนี้ส่งรายการเอกสารครบ — แอปรุ่นเก่าไม่ส่ง จึงไม่ไปลบเอกสารเดิม
+    postData.append("expense_docs_sent", "1");
+    const AMOUNT_FIELD: Record<ExpenseCat, string> = {
+      fuel: "fuel_cost[]",
+      hotel: "accommodation_cost[]",
+      other: "other_cost[]",
+    };
+    const keptFuelLegacy: string[] = [];
+    let docIdx = 0;
+    EXPENSE_CATS.forEach((cat) => {
+      if (!expenses[cat].enabled) return;
+      // กล่องที่ว่างทั้งหมด (ไม่มียอด รายละเอียด หรือไฟล์) ไม่ต้องส่ง
+      const sent = expenses[cat].entries.filter(
+        (e) =>
+          e.amount.trim() !== "" ||
+          e.detail.trim() !== "" ||
+          e.existing.length > 0 ||
+          e.legacy.length > 0 ||
+          [...e.slipRows, ...e.docRows].some((r) => r.files.length > 0),
+      );
+      sent.forEach((e, entryIdx) => {
+        postData.append(AMOUNT_FIELD[cat], e.amount.replace(/,/g, "").trim() || "0");
+        if (cat === "other") postData.append("other_cost_detail[]", e.detail.trim());
+        if (cat === "fuel") keptFuelLegacy.push(...e.legacy);
+        e.existing.forEach((d) => {
+          postData.append("existing_doc[]", d.file);
+          postData.append("existing_doc_entry[]", String(entryIdx));
+        });
+        [...e.slipRows, ...e.docRows].forEach((row) => {
+          if (row.files.length === 0) return;
+          const i = docIdx++;
+          postData.append(`doc_cat[${i}]`, cat);
+          postData.append(`doc_type[${i}]`, row.type);
+          postData.append(`doc_entry[${i}]`, String(entryIdx));
+          row.files.forEach((f) =>
+            postData.append(`doc_files[${i}][]`, {
+              uri: f.uri,
+              name: f.name,
+              type: f.mimeType,
+            } as any),
+          );
+        });
       });
-      postData.append("kept_fuel_receipts", JSON.stringify(keptFuelReceipts));
-    }
-
-    // 🏨 ส่วนของค่าที่พัก
-    if (expenses.hotel.enabled) {
-      postData.append("accommodation_cost", expenses.hotel.cost || "0");
-      if (expenses.hotel.image) {
-        if (expenses.hotel.image.startsWith("file://") || expenses.hotel.image.startsWith("content://")) {
-          postData.append("accommodation_receipt_file", {
-            uri: expenses.hotel.image,
-            name: "hotel.jpg",
-            type: "image/jpeg",
-          } as any);
-        }
-      }
-    }
-
-    // 🧩 ส่วนของค่าใช้จ่ายอื่นๆ
-    if (expenses.other.enabled) {
-      postData.append("other_cost", expenses.other.cost || "0");
-      postData.append("other_cost_detail", expenses.other.detail || "");
-      if (expenses.other.image) {
-        if (expenses.other.image.startsWith("file://") || expenses.other.image.startsWith("content://")) {
-          postData.append("other_receipt_file", {
-            uri: expenses.other.image,
-            name: "other.jpg",
-            type: "image/jpeg",
-          } as any);
-        }
-      }
+    });
+    // สลิปค่าน้ำมันรูปแบบเดิม (คอลัมน์ fuel_receipt) ที่ยังเก็บไว้
+    if (expenses.fuel.enabled) {
+      postData.append("kept_fuel_receipts", JSON.stringify(keptFuelLegacy));
     }
 
     postData.append("problem", problem);
@@ -689,7 +974,8 @@ export default function WriteReportScreen() {
             text: "ตกลง",
             onPress: () => {
               resetForm();
-              router.replace("/(tabs)/Profile");
+              if (onClose) onClose(true); // แก้ไขจากหน้าประวัติ → ปิดป๊อปอัป กลับหน้าประวัติ
+              else router.replace("/(tabs)/Profile");
             },
           },
         ]);
@@ -705,16 +991,241 @@ export default function WriteReportScreen() {
     }
   };
 
+  // 🖼️ รูปย่อของไฟล์ (รูป = ภาพจริง · ไฟล์อื่น = ไอคอน + นามสกุล) พร้อมปุ่ม ✕ (ถ้าลบได้)
+  const renderThumb = (
+    key: string,
+    opts: { uri?: string; name: string; onOpen?: () => void; onRemove?: () => void },
+  ) => (
+    <View key={key} style={styles.slipThumbWrap}>
+      <TouchableOpacity activeOpacity={0.8} onPress={opts.onOpen} disabled={!opts.onOpen}>
+        {opts.uri && isImageFile(opts.name) ? (
+          <Image source={{ uri: opts.uri }} style={styles.slipThumb} />
+        ) : (
+          <View style={[styles.slipThumb, styles.fileThumb]}>
+            <Ionicons name="document-text" size={22} color="#dc2626" />
+            <Text style={styles.fileThumbExt} numberOfLines={1}>
+              {fileExt(opts.name)}
+            </Text>
+          </View>
+        )}
+      </TouchableOpacity>
+      {opts.onRemove && (
+        <TouchableOpacity style={styles.slipThumbDel} onPress={opts.onRemove} hitSlop={8}>
+          <Ionicons name="close" size={12} color="#fff" />
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+
+  const openUpload = (file: string) =>
+    Linking.openURL(`${IMG_BASE_URL}/${encodeURIComponent(file)}`);
+
+  // 📎 ส่วน "สลิป" หรือ "แนบเอกสาร" ในกล่องรอบ (หน้าตาเหมือนฟอร์มเว็บ Report.php)
+  const renderRowSection = (cat: ExpenseCat, entry: ExpenseEntry, list: RowList) => {
+    const isSlip = list === "slipRows";
+    const rows = entry[list];
+    // ไฟล์เดิมของกล่อง: ประเภทสลิปโอนเงินแสดงในส่วนสลิป · ประเภทอื่นแสดงในส่วนแนบเอกสาร
+    const existing = entry.existing.filter((d) => (d.type === "slip") === isSlip);
+    const legacy = isSlip ? entry.legacy : [];
+    const pickLabel = isSlip ? "เลือกสลิป" : "เลือกไฟล์";
+    return (
+      <View style={styles.secWrap}>
+        <View style={styles.secHead}>
+          <View style={styles.docBoxTitleRow}>
+            <Ionicons
+              name={isSlip ? "receipt" : "attach"}
+              size={15}
+              color="#334155"
+            />
+            <Text style={styles.docBoxTitle}>{isSlip ? "สลิป" : "แนบเอกสาร"}</Text>
+          </View>
+          <TouchableOpacity
+            style={styles.secAddBtn}
+            onPress={() => addRow(cat, entry.key, list)}
+          >
+            <Text style={styles.secAddBtnText}>
+              {isSlip ? "+ เพิ่มสลิป" : "+ เพิ่มเอกสาร"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {(existing.length > 0 || legacy.length > 0) && (
+          <View style={styles.thumbWrap}>
+            {legacy.map((f, i) =>
+              renderThumb(`legacy-${f}-${i}`, {
+                uri: `${IMG_BASE_URL}/${encodeURIComponent(f)}`,
+                name: f,
+                onOpen: () => openUpload(f),
+                onRemove:
+                  cat === "fuel" ? () => removeLegacy(cat, entry.key, f) : undefined,
+              }),
+            )}
+            {existing.map((d) =>
+              renderThumb(`doc-${d.file}`, {
+                uri: `${IMG_BASE_URL}/${encodeURIComponent(d.file)}`,
+                name: d.file,
+                onOpen: () => openUpload(d.file),
+                onRemove: () => removeExistingDoc(cat, entry.key, d.file),
+              }),
+            )}
+          </View>
+        )}
+
+        {rows.length > 0 && (
+          <View style={styles.docRowsWrap}>
+            {rows.map((row) => {
+              const n = row.files.length;
+              return (
+                <View key={row.key} style={{ gap: 8 }}>
+                  <View style={styles.docRow}>
+                    <TouchableOpacity
+                      style={styles.docTypeSelect}
+                      onPress={() =>
+                        setDocTypePicker({ cat, entryKey: entry.key, list, rowKey: row.key })
+                      }
+                    >
+                      <Text style={styles.docTypeText} numberOfLines={1}>
+                        {DOC_TYPE_LABEL[row.type]}
+                      </Text>
+                      <Ionicons name="chevron-down" size={16} color="#334155" />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.docPick, n > 0 && styles.docPickActive]}
+                      onPress={() => pickRowFiles(cat, entry.key, list, row.key)}
+                    >
+                      <Ionicons
+                        name={n > 0 ? "add-circle" : "cloud-upload-outline"}
+                        size={16}
+                        color={n > 0 ? "#166534" : "#334155"}
+                      />
+                      <Text
+                        style={[styles.docPickText, n > 0 && { color: "#166534" }]}
+                        numberOfLines={1}
+                      >
+                        {n === 0 ? pickLabel : `เลือกแล้ว ${n} ไฟล์ · กดเพื่อเพิ่ม`}
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.docDelBtn}
+                      onPress={() => removeRow(cat, entry.key, list, row.key)}
+                    >
+                      <Ionicons name="trash" size={16} color="#dc2626" />
+                    </TouchableOpacity>
+                  </View>
+                  {n > 0 && (
+                    <View style={styles.thumbWrap}>
+                      {row.files.map((f, i) =>
+                        renderThumb(`${row.key}-${i}`, {
+                          uri: f.uri,
+                          name: f.name,
+                          onRemove: () =>
+                            removePickedFile(cat, entry.key, list, row.key, i),
+                        }),
+                      )}
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+          </View>
+        )}
+      </View>
+    );
+  };
+
+  // 📦 กล่องรอบ/รายการ 1 กล่อง: หัว "รอบ N" + ปุ่มลบ · ยอดเงิน · สลิป · แนบเอกสาร
+  const renderEntry = (cat: ExpenseCat, entry: ExpenseEntry, idx: number) => (
+    <View key={entry.key} style={styles.entryBox}>
+      <View style={styles.entryHead}>
+        <Text style={styles.entryTitle}>
+          {ENTRY_LABEL[cat]} {idx + 1}
+        </Text>
+        <TouchableOpacity
+          style={styles.entryDelBtn}
+          onPress={() => removeEntry(cat, entry.key)}
+          hitSlop={6}
+        >
+          <Ionicons name="trash" size={15} color="#1e293b" />
+        </TouchableOpacity>
+      </View>
+      {cat === "other" && (
+        <TextInput
+          style={styles.expInput}
+          placeholder="รายละเอียด"
+          placeholderTextColor="#94a3b8"
+          value={entry.detail}
+          onChangeText={(t) => updateEntry(cat, entry.key, (e) => ({ ...e, detail: t }))}
+        />
+      )}
+      <TextInput
+        style={styles.expInput}
+        placeholder="บาท"
+        placeholderTextColor="#94a3b8"
+        keyboardType="decimal-pad"
+        value={entry.amount}
+        onChangeText={(t) => updateEntry(cat, entry.key, (e) => ({ ...e, amount: t }))}
+      />
+      {renderRowSection(cat, entry, "slipRows")}
+      {renderRowSection(cat, entry, "docRows")}
+    </View>
+  );
+
+  const renderEntries = (cat: ExpenseCat) => (
+    <>
+      {expenses[cat].entries.map((e, i) => renderEntry(cat, e, i))}
+      <TouchableOpacity
+        style={styles.addEntryBtn}
+        onPress={() => addEntry(cat)}
+        activeOpacity={0.7}
+      >
+        <Ionicons name="add-circle" size={22} color="#2563eb" />
+        <Text style={styles.addEntryBtnText}>
+          {cat === "fuel" ? "เพิ่มรอบ" : "เพิ่มรายการ"}
+        </Text>
+      </TouchableOpacity>
+    </>
+  );
+
+  const currentPickerType = docTypePicker
+    ? expenses[docTypePicker.cat].entries
+        .find((e) => e.key === docTypePicker.entryKey)
+        ?.[docTypePicker.list].find((r) => r.key === docTypePicker.rowKey)?.type
+    : undefined;
+
   return (
     <SafeAreaView
       style={{ flex: 1, backgroundColor: "#f8f9fd" }}
       edges={["top"]}
     >
+      {/* แถบหัวเมื่อเปิดเป็นป๊อปอัปจากหน้าประวัติ: ปุ่มปิดกลับหน้าประวัติ */}
+      {onClose && (
+        <View style={styles.embedBar}>
+          <TouchableOpacity
+            onPress={() =>
+              Alert.alert("ปิดหน้าแก้ไข", "ข้อมูลที่แก้ไขยังไม่ได้บันทึก ต้องการปิดใช่หรือไม่?", [
+                { text: "แก้ไขต่อ", style: "cancel" },
+                { text: "ปิด", style: "destructive", onPress: () => onClose(false) },
+              ])
+            }
+            style={styles.embedCloseBtn}
+            hitSlop={8}
+          >
+            <Ionicons name="close" size={22} color="#334155" />
+          </TouchableOpacity>
+          <Text style={styles.embedTitle}>แก้ไขรายงาน</Text>
+          <View style={{ width: 40 }} />
+        </View>
+      )}
+      {/* Android (RN 0.88) เป็น edge-to-edge: หน้าจอไม่หดหนีคีย์บอร์ดเองแล้ว ช่องด้านล่างจึงโดนคีย์บอร์ดบังจนพิมพ์ไม่ได้
+          → ดันเนื้อหาขึ้นเองทั้ง iOS และ Android */}
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
       <ScrollView
         contentContainerStyle={styles.container}
         keyboardShouldPersistTaps="handled"
       >
-        <Text style={styles.mainHeader}>📝 รายงานฝ่ายขาย (Sales Report)</Text>
+        {!onClose && (
+          <Text style={styles.mainHeader}>📝 รายงานฝ่ายขาย (Sales Report)</Text>
+        )}
 
         {/* --- 0. ประเภทการรายงาน --- */}
         <View style={[styles.card, { marginBottom: 15 }]}>
@@ -1093,6 +1604,11 @@ export default function WriteReportScreen() {
                   value={box.customer}
                   onChangeText={(t) => handleCustomerInput(box.id, t)}
                   onFocus={() => updateWorkBox(box.id, "showSuggestions", true)}
+                  // ออกจากช่องแล้วปิดรายการค้นหา ไม่ให้ค้างทับช่องด้านล่าง (ประเภท / มูลค่า / ชื่อโครงการ)
+                  // หน่วงไว้เล็กน้อยให้การแตะเลือกชื่อลูกค้าทำงานก่อน
+                  onBlur={() =>
+                    setTimeout(() => updateWorkBox(box.id, "showSuggestions", false), 200)
+                  }
                 />
                 {box.showSuggestions && box.filteredCustomers.length > 0 && (
                   <View style={styles.suggestionBox}>
@@ -1122,34 +1638,81 @@ export default function WriteReportScreen() {
                 )}
               </View>
 
-              <View style={styles.row}>
+              <View
+                style={[
+                  styles.row,
+                  // รายการดรอปดาวน์ต้องอยู่เหนือช่องถัดไป (Android เรียงชั้นตาม zIndex/elevation ของแถว)
+                  typeDropdownBox === box.id && { zIndex: 999, elevation: 10 },
+                ]}
+              >
                 <View style={{ flex: 1 }}>
                   <Text style={styles.subLabel}>ประเภท</Text>
-                  <View
+                  {/* ดรอปดาวน์ประเภทลูกค้า: กดแล้วรายการเลื่อนลงมาจากกรอบ (ธีมเดิม: ขอบ/ตัวอักษรสีตามประเภท)
+                      ระบบยังเลือกให้อัตโนมัติตามชื่อลูกค้าใน master */}
+                  <View style={{ position: "relative", zIndex: 10 }}>
+                  <TouchableOpacity
+                    activeOpacity={0.7}
+                    onPress={() =>
+                      setTypeDropdownBox((cur) => (cur === box.id ? null : box.id))
+                    }
                     style={[
                       styles.miniSelector,
-                      {
-                        borderColor:
-                          box.type === "ลูกค้าใหม่"
-                            ? COLORS.blue
-                            : COLORS.emerald,
-                      },
+                      styles.custTypeSelector,
+                      { borderColor: CUSTOMER_TYPE_STYLE[box.type]?.color || COLORS.slate },
                     ]}
                   >
                     <Text
-                      style={{
-                        color:
-                          box.type === "ลูกค้าใหม่"
-                            ? COLORS.blue
-                            : COLORS.emerald,
-                        fontWeight: "700",
-                        fontSize: 12,
-                      }}
+                      style={[
+                        styles.custTypeText,
+                        { color: CUSTOMER_TYPE_STYLE[box.type]?.color || COLORS.slate },
+                      ]}
+                      numberOfLines={1}
                     >
-                      {box.type === "ลูกค้าใหม่"
-                        ? "🆕 ลูกค้าใหม่"
-                        : "✅ ลูกค้าเก่า"}
+                      {CUSTOMER_TYPE_STYLE[box.type]
+                        ? `${CUSTOMER_TYPE_STYLE[box.type].emoji} ${box.type}`
+                        : "เลือกประเภท"}
                     </Text>
+                    <Ionicons
+                      name={typeDropdownBox === box.id ? "chevron-up" : "chevron-down"}
+                      size={14}
+                      color={CUSTOMER_TYPE_STYLE[box.type]?.color || COLORS.slate}
+                    />
+                  </TouchableOpacity>
+                  {typeDropdownBox === box.id && (
+                    <Animated.View
+                      entering={FadeInDown.duration(160)}
+                      style={styles.custTypeDropdown}
+                    >
+                      {CUSTOMER_TYPES.map((t, i) => {
+                        const on = box.type === t;
+                        const c = CUSTOMER_TYPE_STYLE[t].color;
+                        return (
+                          <TouchableOpacity
+                            key={t}
+                            onPress={() => {
+                              updateWorkBox(box.id, "type", t);
+                              setTypeDropdownBox(null);
+                            }}
+                            style={[
+                              styles.custTypeOption,
+                              i === CUSTOMER_TYPES.length - 1 && { borderBottomWidth: 0 },
+                              on && { backgroundColor: c + "14" },
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.custTypeOptionText,
+                                on && { color: c, fontWeight: "700" },
+                              ]}
+                            >
+                              {CUSTOMER_TYPE_STYLE[t].emoji} {t}
+                            </Text>
+                            {on && <Ionicons name="checkmark" size={16} color={c} />}
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </Animated.View>
+                  )}
                   </View>
                 </View>
                 <View style={{ flex: 1.5, marginLeft: 10 }}>
@@ -1235,114 +1798,102 @@ export default function WriteReportScreen() {
             color="#e17055"
           />
 
-          <View style={styles.expenseItem}>
-            <View style={styles.expenseHeader}>
-              <Text style={styles.expenseTitle}>⛽ ค่าน้ำมัน</Text>
-              <Switch
-                value={expenses.fuel.enabled}
-                onValueChange={(v) =>
-                  setExpenses({
-                    ...expenses,
-                    fuel: { ...expenses.fuel, enabled: v },
-                  })
-                }
-              />
-            </View>
-            {expenses.fuel.enabled && (
-              <View style={{ marginTop: 10 }}>
-                {expenses.fuel.items.map((item, idx) => (
-                  <View key={idx} style={styles.fuelRow}>
-                    <TextInput
-                      style={[styles.input, { flex: 1 }]}
-                      placeholder="บาท"
-                      keyboardType="decimal-pad"
-                      value={item.cost}
-                      onChangeText={(t) => {
-                        const newItems = [...expenses.fuel.items];
-                        newItems[idx].cost = t;
-                        setExpenses({
-                          ...expenses,
-                          fuel: { ...expenses.fuel, items: newItems },
-                        });
-                      }}
-                    />
-                    <TouchableOpacity
-                      onPress={() => pickImage("fuel", idx)}
-                      style={styles.miniPhotoBtn}
-                    >
-                      <Ionicons
-                        name={item.image ? "checkmark-circle" : "camera"}
-                        size={22}
-                        color={item.image ? COLORS.emerald : PRIMARY_COLOR}
-                      />
-                    </TouchableOpacity>
-                    {idx > 0 && (
-                      <TouchableOpacity onPress={() => removeFuelRow(idx)}>
-                        <Ionicons name="trash" size={20} color={COLORS.red} />
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                ))}
-                <TouchableOpacity
-                  onPress={addFuelRow}
-                  style={styles.addMoreBtn}
-                >
-                  <Text style={{ color: "white", fontSize: 12 }}>
-                    + เพิ่มบิล
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            )}
-          </View>
+          {/* ⛽ ค่าน้ำมัน — แยกเป็นรอบ */}
+          <ExpenseCard
+            icon="gas-station"
+            title="ค่าน้ำมัน"
+            enabled={expenses.fuel.enabled}
+            onToggle={() => toggleExpense("fuel")}
+          >
+            {renderEntries("fuel")}
+          </ExpenseCard>
 
-          <ExpenseItem
-            title="🏨 ค่าที่พัก"
-            data={expenses.hotel}
-            onToggle={(v: boolean) =>
-              setExpenses({
-                ...expenses,
-                hotel: { ...expenses.hotel, enabled: v },
-              })
-            }
-            onChange={(t: string) =>
-              setExpenses({
-                ...expenses,
-                hotel: { ...expenses.hotel, cost: t },
-              })
-            }
-            onPick={() => pickImage("hotel")}
-          />
-          <ExpenseItem
-            title="🧩 อื่นๆ"
-            data={expenses.other}
-            onToggle={(v: boolean) =>
-              setExpenses({
-                ...expenses,
-                other: { ...expenses.other, enabled: v },
-              })
-            }
-            onChange={(t: string) =>
-              setExpenses({
-                ...expenses,
-                other: { ...expenses.other, cost: t },
-              })
-            }
-            onPick={() => pickImage("other")}
-          />
-          {expenses.other.enabled && (
-            <TextInput
-              style={[styles.input, { marginTop: 5 }]}
-              placeholder="รายละเอียดค่าใช้จ่ายอื่นๆ..."
-              value={expenses.other.detail}
-              onChangeText={(t) =>
-                setExpenses({
-                  ...expenses,
-                  other: { ...expenses.other, detail: t },
-                })
-              }
-            />
-          )}
+          {/* 🏨 ค่าที่พัก */}
+          <ExpenseCard
+            icon="office-building"
+            title="ค่าที่พัก"
+            enabled={expenses.hotel.enabled}
+            onToggle={() => toggleExpense("hotel")}
+          >
+            {renderEntries("hotel")}
+          </ExpenseCard>
+
+          {/* 🧩 อื่นๆ */}
+          <ExpenseCard
+            icon="dots-horizontal"
+            title="อื่นๆ"
+            enabled={expenses.other.enabled}
+            onToggle={() => toggleExpense("other")}
+          >
+            {renderEntries("other")}
+          </ExpenseCard>
+
+          {/* 💰 รวม */}
+          <LinearGradient
+            colors={["#0047b3", "#0a84ff"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.totalBar}
+          >
+            <Text style={styles.totalBarText}>รวม:</Text>
+            <Text style={styles.totalBarAmount}>
+              {expenseTotal.toLocaleString("en-US", {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })}
+            </Text>
+            <Text style={styles.totalBarText}>บาท</Text>
+          </LinearGradient>
         </View>
+
+        {/* 📎 เลือกประเภทเอกสาร */}
+        <Modal
+          visible={!!docTypePicker}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setDocTypePicker(null)}
+        >
+          <Pressable
+            style={styles.docTypeOverlay}
+            onPress={() => setDocTypePicker(null)}
+          >
+            <View style={styles.docTypeSheet}>
+              <Text style={styles.docTypeSheetTitle}>ประเภทเอกสาร</Text>
+              {DOC_TYPES.map((opt) => {
+                const active = currentPickerType === opt.key;
+                return (
+                  <TouchableOpacity
+                    key={opt.key}
+                    style={styles.docTypeOption}
+                    onPress={() => {
+                      if (docTypePicker)
+                        setRowType(
+                          docTypePicker.cat,
+                          docTypePicker.entryKey,
+                          docTypePicker.list,
+                          docTypePicker.rowKey,
+                          opt.key,
+                        );
+                      setDocTypePicker(null);
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.docTypeOptionText,
+                        active && { color: "#2563eb", fontWeight: "700" },
+                      ]}
+                    >
+                      {opt.label}
+                    </Text>
+                    {active && (
+                      <Ionicons name="checkmark" size={18} color="#2563eb" />
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </Pressable>
+        </Modal>
 
         <View style={[styles.card, { marginTop: 15 }]}>
           <SectionHeader
@@ -1715,6 +2266,7 @@ export default function WriteReportScreen() {
           </Pressable>
         </Modal>
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -1726,35 +2278,47 @@ const SectionHeader = ({ icon, title, color }: any) => (
   </View>
 );
 
-const ExpenseItem = ({ title, data, onToggle, onChange, onPick }: any) => (
-  <View style={styles.expenseItem}>
-    <View style={styles.expenseHeader}>
-      <Text style={styles.expenseTitle}>{title}</Text>
-      <Switch value={data.enabled} onValueChange={onToggle} />
-    </View>
-    {data.enabled && (
-      <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
-        <TextInput
-          style={[styles.input, { flex: 1 }]}
-          placeholder="บาท"
-          keyboardType="decimal-pad"
-          value={data.cost}
-          onChangeText={onChange}
-        />
-        <TouchableOpacity onPress={onPick} style={styles.miniPhotoBtn}>
-          <Ionicons
-            name={data.image ? "checkmark-circle" : "camera"}
-            size={22}
-            color={data.image ? COLORS.emerald : PRIMARY_COLOR}
-          />
-        </TouchableOpacity>
-      </View>
-    )}
+// การ์ดหมวดค่าใช้จ่าย: ติ๊กเปิด/ปิด แล้วขอบซ้ายเป็นสีน้ำเงินแบบฟอร์มเว็บ
+const ExpenseCard = ({ icon, title, enabled, onToggle, children }: any) => (
+  <View style={[styles.expCard, enabled && styles.expCardActive]}>
+    <TouchableOpacity
+      style={styles.expCardHeader}
+      onPress={onToggle}
+      activeOpacity={0.7}
+    >
+      <Ionicons
+        name={enabled ? "checkbox" : "square-outline"}
+        size={22}
+        color={enabled ? "#2563eb" : "#64748b"}
+      />
+      <MaterialCommunityIcons name={icon} size={18} color="#1e293b" />
+      <Text style={styles.expCardTitle}>{title}</Text>
+    </TouchableOpacity>
+    {enabled && <View style={styles.expCardBody}>{children}</View>}
   </View>
 );
 
 const styles = StyleSheet.create({
   container: { padding: 15 },
+  embedBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: "#fff",
+    borderBottomWidth: 1,
+    borderBottomColor: "#e2e8f0",
+  },
+  embedCloseBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: "#f1f5f9",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  embedTitle: { fontSize: 17, fontWeight: "800", color: "#1e293b" },
   mainHeader: {
     fontSize: 20,
     fontWeight: "bold",
@@ -1830,6 +2394,41 @@ const styles = StyleSheet.create({
     marginBottom: 5,
   },
   workBoxTitle: { fontWeight: "800", color: PRIMARY_COLOR, fontSize: 15 },
+  // ช่องประเภทลูกค้า + รายการที่เลื่อนลงมาทับเนื้อหาด้านล่าง (แบบ select บนเว็บ)
+  custTypeSelector: {
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 6,
+    minHeight: 44,
+  },
+  custTypeText: { fontWeight: "700", fontSize: 12, flexShrink: 1 },
+  custTypeDropdown: {
+    position: "absolute",
+    top: 48,
+    left: 0,
+    right: 0,
+    backgroundColor: "#fff",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    overflow: "hidden",
+    zIndex: 9999,
+    elevation: 10,
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+  },
+  custTypeOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f3f4f6",
+  },
+  custTypeOptionText: { fontSize: 13, color: "#334155" },
   miniSelector: {
     padding: 10,
     borderWidth: 1,
@@ -1849,45 +2448,236 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   addWorkBtnText: { color: "white", fontWeight: "bold", fontSize: 16 },
-  expenseItem: {
-    marginBottom: 10,
-    padding: 10,
-    backgroundColor: "#f8fafc",
-    borderRadius: 12,
+  // --- เบิกค่าใช้จ่าย (แบบฟอร์มเว็บ) ---
+  expCard: {
+    backgroundColor: "#fff",
     borderWidth: 1,
     borderColor: "#e2e8f0",
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 12,
   },
-  expenseHeader: {
+  expCardActive: {
+    backgroundColor: "#f8fafc",
+    borderColor: "#2563eb",
+    borderLeftWidth: 4,
+  },
+  expCardHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
+  expCardTitle: { fontWeight: "bold", fontSize: 15, color: "#1e293b" },
+  expCardBody: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#e8edf3",
+    gap: 10,
+  },
+  expRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  expInput: {
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    height: 46,
+    fontSize: 15,
+    backgroundColor: "#fff",
+    color: "#1e293b",
+  },
+  // กล่องรอบ/รายการ (เส้นประแบบฟอร์มเว็บ)
+  entryBox: {
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    borderStyle: "dashed",
+    borderRadius: 12,
+    padding: 12,
+    gap: 10,
+    backgroundColor: "#fff",
+  },
+  entryHead: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
-  expenseTitle: { fontWeight: "bold", fontSize: 14, color: "#334155" },
-  fuelRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    marginTop: 8,
-  },
-  miniPhotoBtn: {
-    width: 42,
-    height: 42,
-    backgroundColor: "#fff",
-    borderRadius: 8,
+  entryTitle: { fontWeight: "800", color: "#1d4ed8", fontSize: 14 },
+  entryDelBtn: {
+    width: 32,
+    height: 28,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: "#64748b",
+    backgroundColor: "#f1f5f9",
     alignItems: "center",
     justifyContent: "center",
+  },
+  secWrap: { gap: 8 },
+  secHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  secAddBtn: {
+    borderWidth: 1,
+    borderColor: "#94a3b8",
+    borderStyle: "dashed",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    backgroundColor: "#fff",
+  },
+  secAddBtnText: { fontSize: 12, fontWeight: "700", color: "#1d4ed8" },
+  addEntryBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 16,
+    borderWidth: 2,
+    borderColor: "#3b82f6",
+    borderStyle: "dashed",
+    borderRadius: 14,
+    backgroundColor: "#f8fafc",
+  },
+  addEntryBtnText: { fontSize: 16, fontWeight: "700", color: "#2563eb" },
+  thumbWrap: { flexDirection: "row", flexWrap: "wrap", gap: 10, paddingTop: 4 },
+  fileThumb: { alignItems: "center", justifyContent: "center", backgroundColor: "#fef2f2" },
+  fileThumbExt: { fontSize: 9, fontWeight: "700", color: "#dc2626" },
+  slipThumbWrap: { width: 64, height: 64 },
+  slipThumb: {
+    width: 64,
+    height: 64,
+    borderRadius: 10,
+    backgroundColor: "#e2e8f0",
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+  },
+  slipThumbDel: {
+    position: "absolute",
+    top: -6,
+    right: -6,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: "#dc2626",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "#fff",
+  },
+  docBox: {
+    marginTop: 2,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#e8edf3",
+    gap: 8,
+  },
+  docBoxTitleRow: { flexDirection: "row", alignItems: "center", gap: 4 },
+  docBoxTitle: { fontSize: 13, fontWeight: "600", color: "#475569" },
+  docRowsWrap: {
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    borderStyle: "dashed",
+    borderRadius: 10,
+    padding: 8,
+    gap: 8,
+  },
+  docRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  docTypeSelect: {
+    width: 122,
+    height: 42,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 10,
     borderWidth: 1,
     borderColor: "#e2e8f0",
+    borderRadius: 10,
+    backgroundColor: "#fff",
   },
-  addMoreBtn: {
-    backgroundColor: SECONDARY_COLOR,
-    padding: 6,
-    borderRadius: 8,
+  docTypeText: { fontSize: 13, color: "#1e293b", flex: 1 },
+  docPick: {
+    flex: 1,
+    height: 42,
+    flexDirection: "row",
     alignItems: "center",
-    marginTop: 8,
-    width: 80,
-    alignSelf: "flex-end",
+    gap: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: "#f1f5f9",
   },
+  docPickActive: { backgroundColor: "#dcfce7" },
+  docPickText: { fontSize: 13, color: "#334155", flex: 1, fontWeight: "600" },
+  docDelBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: "#fee2e2",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  docAddBtn: {
+    borderWidth: 1,
+    borderColor: "#94a3b8",
+    borderRadius: 6,
+    backgroundColor: "#f1f5f9",
+    paddingVertical: 6,
+    alignItems: "center",
+  },
+  docAddBtnText: { fontSize: 13, color: "#1e293b" },
+  docChipWrap: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  docChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingLeft: 10,
+    paddingRight: 4,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: "#eff6ff",
+    maxWidth: "100%",
+  },
+  docChipText: { fontSize: 12, color: "#1d4ed8", flexShrink: 1 },
+  docChipDel: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: "#fee2e2",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  totalBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    borderRadius: 14,
+    marginTop: 4,
+  },
+  totalBarText: { color: "#fff", fontWeight: "800", fontSize: 16 },
+  totalBarAmount: { color: "#fff", fontWeight: "800", fontSize: 18 },
+  docTypeOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    justifyContent: "center",
+    padding: 30,
+  },
+  docTypeSheet: { backgroundColor: "#fff", borderRadius: 16, paddingVertical: 8 },
+  docTypeSheetTitle: {
+    fontWeight: "bold",
+    fontSize: 15,
+    color: "#334155",
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+  },
+  docTypeOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    borderTopWidth: 1,
+    borderTopColor: "#f1f5f9",
+  },
+  docTypeOptionText: { fontSize: 15, color: "#1e293b" },
   submitBtnContainer: { marginTop: 20 },
   submitBtn: { padding: 16, borderRadius: 15, alignItems: "center" },
   submitBtnText: { color: "white", fontWeight: "bold", fontSize: 18 },
