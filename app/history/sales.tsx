@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Image,
   Linking,
   Modal,
   RefreshControl,
@@ -19,12 +20,13 @@ import {
   View,
 } from "react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 
 import { API_BASE, IMG_BASE_URL } from "../../constants/config";
 // 🌟 รูปแบบวันที่สั้น "d/m/yy" มาตรฐานเดียวกันทั้งแอป (แทน toLocaleDateString("th-TH") ที่โชว์ปี ค.ศ. 4 หลัก)
 import { formatShortThaiDate } from "../../components/DateTimeField";
 import { useAuth } from "../_layout";
+import WriteReportScreen from "../(tabs)/write_report";
 
 const PRIMARY_COLOR = "#2563eb";
 const SUCCESS_COLOR = "#10b981";
@@ -57,6 +59,32 @@ const formatTimeHM = (dt?: string | null) => {
   const m = String(dt).match(/(\d{2}):(\d{2})(?::\d{2})?$/);
   return m ? `${m[1]}:${m[2]} น.` : "-";
 };
+
+// 📎 เอกสารแนบเพิ่ม (reports.expense_docs JSON) → แยกตามหมวด fuel / hotel / other
+const DOC_LABEL: Record<string, string> = {
+  slip: "สลิป",
+  tax_invoice: "ใบกำกับภาษี",
+  receipt: "ใบเสร็จ",
+  other: "เอกสารอื่น",
+};
+const parseExpenseDocs = (
+  item: any,
+): { cat: string; type: string; file: string }[] => {
+  try {
+    const raw =
+      typeof item?.expense_docs === "string"
+        ? JSON.parse(item.expense_docs || "[]")
+        : item?.expense_docs;
+    return Array.isArray(raw) ? raw.filter((d: any) => d && d.file) : [];
+  } catch {
+    return [];
+  }
+};
+const splitFiles = (v: any) =>
+  String(v ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 
 export default function HistorySales() {
   const router = useRouter();
@@ -91,6 +119,22 @@ export default function HistorySales() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
+
+  // ✏️ รายงานที่กำลังแก้ไข (เปิดฟอร์ม write_report เป็นป๊อปอัปเต็มจอในหน้านี้)
+  const [editTarget, setEditTarget] = useState<any>(null);
+
+  // 🗑️ ลบรายงาน (ย้ายไปถังขยะ) / ♻️ กู้คืน
+  const [deleteTarget, setDeleteTarget] = useState<any>(null); // รายงานที่รอยืนยันลบ
+  const [deleting, setDeleting] = useState(false);
+  const [undoInfo, setUndoInfo] = useState<{ trashId: number; label: string } | null>(null);
+  const undoTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [trashVisible, setTrashVisible] = useState(false);
+  const [trashItems, setTrashItems] = useState<any[]>([]);
+  const [trashLoading, setTrashLoading] = useState(false);
+  const [restoringId, setRestoringId] = useState<number | null>(null);
+  // ☑️ เลือกหลายรายการในถังขยะเพื่อกู้คืนพร้อมกัน
+  const [selectedTrash, setSelectedTrash] = useState<number[]>([]);
+  const [bulkRestoring, setBulkRestoring] = useState(false);
 
   // ... (States เดิม)
 
@@ -593,9 +637,11 @@ export default function HistorySales() {
     }
   };
 
+  const imageUrl = (filename: string) =>
+    `${IMG_BASE_URL}/${encodeURIComponent(filename.trim())}`;
+
   const openImage = (filename: string) => {
-    const fullUrl = `${IMG_BASE_URL}/${filename.trim()}`;
-    Linking.openURL(fullUrl).catch(() =>
+    Linking.openURL(imageUrl(filename)).catch(() =>
       Alert.alert("Error", "เปิดไฟล์ไม่ได้"),
     );
   };
@@ -879,31 +925,12 @@ export default function HistorySales() {
               {hasOther && (
                 <FontAwesome5 name="receipt" size={12} color="#a16207" />
               )}
-              <TouchableOpacity
-                style={styles.withdrawBtnSmall}
-                onPress={() => openExpenseModal(item)}
-              >
-                <FontAwesome5
-                  name="hand-holding-usd"
-                  size={12}
-                  color="#b45309"
-                />
-                <Text style={styles.withdrawTextSmall}>เบิกเงิน</Text>
-              </TouchableOpacity>
             </View>
             <View style={{ flexDirection: "row", gap: 6 }}>
               {/* ➕ ปุ่มแก้ไข */}
               <TouchableOpacity
                 style={[styles.viewBtn, { backgroundColor: "#fef2f2" }]}
-                onPress={() => {
-                  router.push({
-                    pathname: "/write_report", // ⚠️ ปรับ path ตรงนี้ให้ตรงกับ Routing จริงของไฟล์ write_report
-                    params: {
-                      edit_id: item.id,
-                      edit_data: JSON.stringify(item),
-                    },
-                  });
-                }}
+                onPress={() => setEditTarget(item)} // แก้ไขในป๊อปอัปเต็มจอ อยู่หน้าประวัติต่อ
               >
                 <Text
                   style={{
@@ -914,6 +941,14 @@ export default function HistorySales() {
                 >
                   <Ionicons name="create-outline" size={12} /> แก้ไข
                 </Text>
+              </TouchableOpacity>
+
+              {/* 🗑️ ปุ่มลบ (ถามยืนยันก่อน · กู้คืนได้) */}
+              <TouchableOpacity
+                style={[styles.viewBtn, styles.deleteBtn]}
+                onPress={() => setDeleteTarget(item)}
+              >
+                <Ionicons name="trash-outline" size={14} color="#fff" />
               </TouchableOpacity>
 
               {/* ปุ่มรายละเอียด (เดิม) */}
@@ -941,6 +976,176 @@ export default function HistorySales() {
     );
   };
 
+  // ================= 🗑️ ลบ / ♻️ กู้คืน รายงาน =================
+  // ลบ = ย้ายไปถังขยะบนเซิร์ฟเวอร์ (report_trash) กู้คืนได้ทั้งจากแถบ "เลิกทำ" และหน้าถังขยะ
+  const reportLabel = (it: any) => {
+    const customers = cleanSplit(it?.work_result).join(", ");
+    return `${formatShortThaiDate(it?.report_date)}${customers ? " · " + customers : ""}`;
+  };
+
+  const showUndo = (trashId: number, label: string) => {
+    if (undoTimer.current) clearTimeout(undoTimer.current);
+    setUndoInfo({ trashId, label });
+    undoTimer.current = setTimeout(() => setUndoInfo(null), 7000);
+  };
+
+  useEffect(
+    () => () => {
+      if (undoTimer.current) clearTimeout(undoTimer.current);
+    },
+    [],
+  );
+
+  const doDeleteReport = async () => {
+    const item = deleteTarget;
+    if (!item || deleting) return;
+    setDeleting(true);
+    try {
+      const fd = new FormData();
+      fd.append("report_id", String(item.id));
+      fd.append("user_id", String(user?.id ?? ""));
+      const res = await axios.post(
+        `${API_BASE}/api_mobile.php?action=delete_report`,
+        fd,
+        { headers: { "Content-Type": "multipart/form-data" } },
+      );
+      if (res.data?.status !== "success")
+        throw new Error(res.data?.message || "ลบไม่สำเร็จ");
+      setDeleteTarget(null);
+      if (detailModalVisible && String(selectedItem?.id) === String(item.id))
+        setDetailModalVisible(false);
+      showUndo(res.data.trash_id, reportLabel(item));
+      fetchHistory();
+    } catch (e: any) {
+      Alert.alert("ลบไม่สำเร็จ", e?.message || "กรุณาลองใหม่อีกครั้ง");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const fetchTrash = async () => {
+    setSelectedTrash([]);
+    setTrashLoading(true);
+    try {
+      const res = await axios.get(
+        `${API_BASE}/api_mobile.php?action=get_deleted_reports&user_id=${encodeURIComponent(String(user?.id ?? ""))}`,
+      );
+      setTrashItems(res.data?.status === "success" ? res.data.items || [] : []);
+    } catch {
+      setTrashItems([]);
+    } finally {
+      setTrashLoading(false);
+    }
+  };
+
+  // เรียก API กู้คืน 1 รายการ (โยน error พร้อมข้อความจากเซิร์ฟเวอร์ถ้าไม่สำเร็จ)
+  const callRestore = async (trashId: number) => {
+    const fd = new FormData();
+    fd.append("trash_id", String(trashId));
+    fd.append("user_id", String(user?.id ?? ""));
+    const res = await axios.post(
+      `${API_BASE}/api_mobile.php?action=restore_report`,
+      fd,
+      { headers: { "Content-Type": "multipart/form-data" } },
+    );
+    if (res.data?.status !== "success")
+      throw new Error(res.data?.message || "กู้คืนไม่สำเร็จ");
+  };
+
+  const toggleTrashSelect = (trashId: number) =>
+    setSelectedTrash((sel) =>
+      sel.includes(trashId) ? sel.filter((x) => x !== trashId) : [...sel, trashId],
+    );
+
+  // ♻️ กู้คืนรายการที่เลือกทั้งหมด (ทีละรายการ แล้วสรุปผล)
+  const restoreSelected = async () => {
+    if (bulkRestoring || selectedTrash.length === 0) return;
+    setBulkRestoring(true);
+    const done: number[] = [];
+    const failed: string[] = [];
+    for (const tid of selectedTrash) {
+      try {
+        await callRestore(tid);
+        done.push(tid);
+      } catch (e: any) {
+        const t = trashItems.find((x) => x.trash_id === tid);
+        failed.push(
+          `• ${formatShortThaiDate(t?.report_date)} ${cleanSplit(t?.work_result).join(", ")}: ${e?.message || "ไม่สำเร็จ"}`,
+        );
+      }
+    }
+    setTrashItems((list) => list.filter((t) => !done.includes(t.trash_id)));
+    setSelectedTrash((sel) => sel.filter((x) => !done.includes(x)));
+    if (undoInfo && done.includes(undoInfo.trashId)) setUndoInfo(null);
+    if (done.length > 0) fetchHistory();
+    setBulkRestoring(false);
+    Alert.alert(
+      failed.length ? "กู้คืนได้บางส่วน" : "กู้คืนสำเร็จ",
+      `กู้คืนแล้ว ${done.length} รายการ` +
+        (failed.length ? `\nไม่สำเร็จ ${failed.length} รายการ\n${failed.join("\n")}` : ""),
+    );
+  };
+
+  const restoreReport = async (trashId: number): Promise<boolean> => {
+    if (restoringId || bulkRestoring) return false;
+    setRestoringId(trashId);
+    try {
+      await callRestore(trashId);
+      if (undoInfo?.trashId === trashId) setUndoInfo(null);
+      setTrashItems((list) => list.filter((t) => t.trash_id !== trashId));
+      setSelectedTrash((sel) => sel.filter((x) => x !== trashId));
+      fetchHistory();
+      return true;
+    } catch (e: any) {
+      Alert.alert("กู้คืนไม่สำเร็จ", e?.message || "กรุณาลองใหม่อีกครั้ง");
+      return false;
+    } finally {
+      setRestoringId(null);
+    }
+  };
+
+  // ♻️ กู้คืนจากหน้ารายละเอียด (เปิดมาจากถังขยะ) → สำเร็จแล้วปิดป๊อปอัป กลับหน้าประวัติที่มีรายการนี้แล้ว
+  const restoreFromDetail = async () => {
+    const tid = selectedItem?.__trash?.trash_id;
+    if (!tid) return;
+    const ok = await restoreReport(tid);
+    if (ok) {
+      setDetailModalVisible(false);
+      setSelectedItem(null);
+    }
+  };
+
+  // 👁️ ดูรายละเอียดรายงานในถังขยะ (เหมือนก่อนลบ · ดูอย่างเดียว)
+  // iOS เปิด Modal ทับ Modal ไม่ได้ → ปิดถังขยะก่อน แล้วค่อยเปิดป๊อปอัปรายละเอียด
+  const viewTrashItem = (t: any) => {
+    if (!t?.row) return;
+    setTrashVisible(false);
+    setTimeout(() => {
+      setSelectedItem({
+        ...t.row,
+        __trash: {
+          trash_id: t.trash_id,
+          deleted_at: t.deleted_at,
+          deleted_by: t.deleted_by,
+        },
+      });
+      setDetailModalVisible(true);
+    }, 350);
+  };
+
+  // ปิดป๊อปอัปรายละเอียด — ถ้าเปิดมาจากถังขยะ ให้กลับไปที่ถังขยะ
+  const closeDetail = () => {
+    const fromTrash = !!selectedItem?.__trash;
+    setDetailModalVisible(false);
+    if (fromTrash) setTimeout(() => setTrashVisible(true), 350);
+  };
+
+  const fmtDeletedAt = (at?: string) => {
+    if (!at) return "";
+    const [d, t] = String(at).split(" ");
+    return `${formatShortThaiDate(d)}${t ? " " + t.slice(0, 5) + " น." : ""}`;
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
       <View style={styles.header}>
@@ -952,10 +1157,22 @@ export default function HistorySales() {
           <Text style={styles.headerSub}>ประวัติการทำงานของฉัน</Text>
         </View>
 
+        {/* 🗑️ ถังขยะ (กู้คืนรายงานที่ลบ) */}
+        <TouchableOpacity
+          onPress={() => {
+            setTrashVisible(true);
+            fetchTrash();
+          }}
+          style={[styles.filterBtn, { marginRight: 8 }]}
+        >
+          <Ionicons name="trash-bin-outline" size={21} color="#333" />
+        </TouchableOpacity>
+
         <TouchableOpacity
           onPress={() => setShowFilter(!showFilter)}
           style={[
             styles.filterBtn,
+            { marginLeft: 0 },
             showFilter && { backgroundColor: PRIMARY_COLOR },
           ]}
         >
@@ -1270,10 +1487,42 @@ export default function HistorySales() {
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>รายละเอียด</Text>
-              <TouchableOpacity onPress={() => setDetailModalVisible(false)}>
+              <TouchableOpacity onPress={closeDetail}>
                 <Ionicons name="close" size={28} color="#999" />
               </TouchableOpacity>
             </View>
+            {/* 🗑️ เปิดมาจากถังขยะ: ดูได้อย่างเดียว */}
+            {selectedItem?.__trash && (
+              <View style={styles.trashBanner}>
+                <Ionicons name="trash" size={16} color="#b91c1c" />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.trashBannerTitle}>
+                    รายงานนี้อยู่ในถังขยะ
+                  </Text>
+                  <Text style={styles.trashBannerMeta}>
+                    ลบเมื่อ {fmtDeletedAt(selectedItem.__trash.deleted_at)}
+                    {selectedItem.__trash.deleted_by
+                      ? ` โดย ${selectedItem.__trash.deleted_by}`
+                      : ""}
+                  </Text>
+                </View>
+                {/* ♻️ กู้คืนจากหน้านี้ได้เลย */}
+                <TouchableOpacity
+                  disabled={!!restoringId}
+                  style={styles.restoreBtn}
+                  onPress={restoreFromDetail}
+                >
+                  {restoringId === selectedItem.__trash.trash_id ? (
+                    <ActivityIndicator color="#fff" size="small" />
+                  ) : (
+                    <>
+                      <Ionicons name="refresh" size={14} color="#fff" />
+                      <Text style={styles.restoreBtnText}>กู้คืน</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </View>
+            )}
             <ScrollView>
               {(() => {
                 // ✅ 1. ดึงข้อมูลล่าสุดจาก rawData โดยใช้ ID (เพื่อให้ค่าใช้จ่ายอัปเดตทันที)
@@ -1536,27 +1785,111 @@ export default function HistorySales() {
                     <Text style={styles.detailSectionTitle}>
                       💸 รายละเอียดค่าใช้จ่าย
                     </Text>
-                    <View style={styles.costGrid}>
-                      <View style={styles.costBox}>
-                        <Text style={styles.costLabel}>น้ำมัน</Text>
-                        <Text style={styles.costNum}>
-                          {fuelTotal.toLocaleString()} ฿
-                        </Text>
-                      </View>
-                      <View style={styles.costBox}>
-                        <Text style={styles.costLabel}>ที่พัก</Text>
-                        <Text style={styles.costNum}>
-                          {hotelTotal.toLocaleString()} ฿
-                        </Text>
-                      </View>
-                      <View style={styles.costBox}>
-                        <Text style={styles.costLabel}>
-                          อื่นๆ ({currentItem.other_cost_detail || "-"})
-                        </Text>
-                        <Text style={styles.costNum}>
-                          {otherTotal.toLocaleString()} ฿
-                        </Text>
-                      </View>
+                    {/* แต่ละหมวด: ยอดเงิน + หลักฐานเป็นรูปจริงของหมวดนั้น (แบบเดียวกับหน้าภาพรวมฝ่ายขาย) */}
+                    <View style={styles.expCatBox}>
+                      {(() => {
+                        const docs = parseExpenseDocs(currentItem);
+                        const fuelSlips = splitFiles(currentItem.fuel_receipt);
+                        return [
+                          {
+                            cat: "fuel",
+                            label: "น้ำมัน",
+                            icon: "flame-outline",
+                            val: fuelTotal,
+                            color: "#c2410c",
+                            slips: fuelSlips.map((f, i) => ({
+                              file: f,
+                              label: fuelSlips.length > 1 ? `สลิป ${i + 1}` : "สลิป",
+                            })),
+                          },
+                          {
+                            cat: "hotel",
+                            label: "ที่พัก",
+                            icon: "bed-outline",
+                            val: hotelTotal,
+                            color: "#1d4ed8",
+                            slips: splitFiles(currentItem.accommodation_receipt).map((f) => ({
+                              file: f,
+                              label: "สลิป",
+                            })),
+                          },
+                          {
+                            cat: "other",
+                            label: `อื่นๆ (${currentItem.other_cost_detail || "-"})`,
+                            icon: "receipt-outline",
+                            val: otherTotal,
+                            color: "#a16207",
+                            slips: splitFiles(currentItem.other_receipt).map((f) => ({
+                              file: f,
+                              label: "สลิป",
+                            })),
+                          },
+                        ].map((row) => {
+                          const evidence = [
+                            ...row.slips,
+                            ...docs
+                              .filter((d) => d.cat === row.cat)
+                              .map((d) => ({
+                                file: d.file,
+                                label: DOC_LABEL[d.type] || "เอกสาร",
+                              })),
+                          ];
+                          return (
+                            <View key={row.cat} style={styles.expCatBlock}>
+                              <View style={styles.expCatRow}>
+                                <View style={styles.expCatLabelWrap}>
+                                  <Ionicons
+                                    name={row.icon as any}
+                                    size={16}
+                                    color="#64748b"
+                                  />
+                                  <Text style={styles.expCatLabel}>{row.label}</Text>
+                                </View>
+                                <Text style={styles.expCatVal}>
+                                  {row.val.toLocaleString()} ฿
+                                </Text>
+                              </View>
+                              {evidence.length > 0 && (
+                                <View style={styles.evThumbRow}>
+                                  {evidence.map((ev, i) => {
+                                    const isPdf = /\.pdf$/i.test(ev.file);
+                                    return (
+                                      <View key={ev.file + i} style={styles.evThumbWrap}>
+                                        <TouchableOpacity
+                                          activeOpacity={0.8}
+                                          onPress={() => openImage(ev.file)}
+                                          style={[styles.evThumb, { borderColor: row.color }]}
+                                        >
+                                          {isPdf ? (
+                                            <View style={styles.evThumbPdf}>
+                                              <FontAwesome5
+                                                name="file-pdf"
+                                                size={20}
+                                                color={row.color}
+                                              />
+                                            </View>
+                                          ) : (
+                                            <Image
+                                              source={{ uri: imageUrl(ev.file) }}
+                                              style={styles.evThumbImg}
+                                            />
+                                          )}
+                                        </TouchableOpacity>
+                                        <Text
+                                          style={[styles.evThumbLabel, { color: row.color }]}
+                                          numberOfLines={1}
+                                        >
+                                          {ev.label}
+                                        </Text>
+                                      </View>
+                                    );
+                                  })}
+                                </View>
+                              )}
+                            </View>
+                          );
+                        });
+                      })()}
                     </View>
                     <View
                       style={{
@@ -1584,66 +1917,6 @@ export default function HistorySales() {
                       </Text>
                     </View>
 
-                    {/* --- ส่วนแสดงหลักฐาน --- */}
-                    <Text
-                      style={[styles.detailSectionTitle, { marginTop: 15 }]}
-                    >
-                      📸 หลักฐาน
-                    </Text>
-                    <View
-                      style={{
-                        flexDirection: "row",
-                        gap: 10,
-                        flexWrap: "wrap",
-                      }}
-                    >
-                      {currentItem.fuel_receipt &&
-                        currentItem.fuel_receipt
-                          .split(",")
-                          .map((img: string, i: number) => (
-                            <TouchableOpacity
-                              key={i}
-                              onPress={() => openImage(img)}
-                              style={[styles.evBtn, { borderColor: "#c2410c" }]}
-                            >
-                              <FontAwesome5 name="gas-pump" color="#c2410c" />
-                              <Text style={{ fontSize: 10, color: "#c2410c" }}>
-                                น้ำมัน {i + 1}
-                              </Text>
-                            </TouchableOpacity>
-                          ))}
-                      {currentItem.accommodation_receipt && (
-                        <TouchableOpacity
-                          onPress={() =>
-                            openImage(currentItem.accommodation_receipt)
-                          }
-                          style={[styles.evBtn, { borderColor: "#1d4ed8" }]}
-                        >
-                          <FontAwesome5 name="bed" color="#1d4ed8" />
-                          <Text style={{ fontSize: 10, color: "#1d4ed8" }}>
-                            ที่พัก
-                          </Text>
-                        </TouchableOpacity>
-                      )}
-                      {currentItem.other_receipt && (
-                        <TouchableOpacity
-                          onPress={() => openImage(currentItem.other_receipt)}
-                          style={[styles.evBtn, { borderColor: "#a16207" }]}
-                        >
-                          <FontAwesome5 name="receipt" color="#a16207" />
-                          <Text style={{ fontSize: 10, color: "#a16207" }}>
-                            อื่นๆ
-                          </Text>
-                        </TouchableOpacity>
-                      )}
-                      {!currentItem.fuel_receipt &&
-                        !currentItem.accommodation_receipt &&
-                        !currentItem.other_receipt && (
-                          <Text style={{ color: "#999", fontStyle: "italic" }}>
-                            ไม่มีหลักฐานแนบ
-                          </Text>
-                        )}
-                    </View>
                   </>
                 );
               })()}
@@ -1946,6 +2219,277 @@ export default function HistorySales() {
           </View>
         </View>
       </Modal>
+
+      {/* 🗑️ ยืนยันการลบรายงาน */}
+      <Modal
+        visible={!!deleteTarget}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => {
+          if (!deleting) setDeleteTarget(null);
+        }}
+      >
+        <TouchableOpacity
+          activeOpacity={1}
+          style={styles.delOverlay}
+          onPress={() => {
+            if (!deleting) setDeleteTarget(null);
+          }}
+        >
+          <TouchableOpacity activeOpacity={1} style={styles.delBox}>
+            <View style={styles.delIcon}>
+              <Ionicons name="trash" size={30} color={DANGER_COLOR} />
+            </View>
+            <Text style={styles.delTitle}>ยืนยันการลบรายงาน</Text>
+            <Text style={styles.delMsg}>
+              ต้องการลบรายงาน{" "}
+              <Text style={{ fontWeight: "800", color: "#1e293b" }}>
+                {reportLabel(deleteTarget)}
+              </Text>{" "}
+              ใช่หรือไม่?
+            </Text>
+            <View style={styles.delNote}>
+              <Ionicons name="information-circle" size={15} color="#0369a1" />
+              <Text style={styles.delNoteText}>
+                รายงานจะถูกย้ายไปที่ถังขยะ กู้คืนได้ภายหลังจากปุ่มถังขยะด้านบน
+              </Text>
+            </View>
+            <View style={styles.delBtns}>
+              <TouchableOpacity
+                disabled={deleting}
+                style={[styles.delBtn, { backgroundColor: "#f1f5f9" }]}
+                onPress={() => setDeleteTarget(null)}
+              >
+                <Text style={{ fontWeight: "700", color: "#475569" }}>ยกเลิก</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                disabled={deleting}
+                style={[styles.delBtn, { backgroundColor: DANGER_COLOR }]}
+                onPress={doDeleteReport}
+              >
+                {deleting ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <>
+                    <Ionicons name="trash" size={15} color="#fff" />
+                    <Text style={{ fontWeight: "800", color: "#fff" }}>ลบรายงาน</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* ♻️ ถังขยะ: รายงานที่ลบ กดกู้คืนได้ */}
+      <Modal
+        visible={trashVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setTrashVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, styles.trashSheet]}>
+            <View style={styles.trashHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.modalTitle}>ถังขยะ</Text>
+                <Text style={{ fontSize: 12, color: "#64748b" }}>
+                  ติ๊กเลือกรายการ หรือกด "กู้คืน" ทีละรายการ
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setTrashVisible(false)}>
+                <Ionicons name="close-circle" size={30} color="#94a3b8" />
+              </TouchableOpacity>
+            </View>
+
+            {trashLoading ? (
+              <ActivityIndicator
+                size="large"
+                color={PRIMARY_COLOR}
+                style={{ marginVertical: 30 }}
+              />
+            ) : trashItems.length === 0 ? (
+              <View style={{ alignItems: "center", paddingVertical: 36 }}>
+                <Ionicons name="trash-bin-outline" size={40} color="#cbd5e1" />
+                <Text style={{ color: "#94a3b8", marginTop: 8 }}>
+                  ไม่มีรายงานในถังขยะ
+                </Text>
+              </View>
+            ) : (
+              <>
+              {/* ☑️ เลือกทั้งหมด */}
+              {(() => {
+                const allOn =
+                  trashItems.length > 0 &&
+                  selectedTrash.length === trashItems.length;
+                return (
+                  <TouchableOpacity
+                    disabled={bulkRestoring}
+                    style={styles.trashSelectAll}
+                    onPress={() =>
+                      setSelectedTrash(
+                        allOn ? [] : trashItems.map((t) => t.trash_id),
+                      )
+                    }
+                  >
+                    <Ionicons
+                      name={allOn ? "checkbox" : "square-outline"}
+                      size={22}
+                      color={allOn ? SUCCESS_COLOR : "#94a3b8"}
+                    />
+                    <Text style={styles.trashSelectAllText}>
+                      เลือกทั้งหมด ({trashItems.length})
+                    </Text>
+                    {selectedTrash.length > 0 && (
+                      <Text style={styles.trashSelectedCount}>
+                        เลือกแล้ว {selectedTrash.length}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                );
+              })()}
+              <FlatList
+                data={trashItems}
+                keyExtractor={(t) => String(t.trash_id)}
+                contentContainerStyle={{ paddingBottom: 20, gap: 10 }}
+                renderItem={({ item: t }) => {
+                  const restoring = restoringId === t.trash_id;
+                  const checked = selectedTrash.includes(t.trash_id);
+                  return (
+                    <View
+                      style={[styles.trashItem, checked && styles.trashItemChecked]}
+                    >
+                      {/* ☑️ ติ๊กเลือก */}
+                      <TouchableOpacity
+                        disabled={bulkRestoring}
+                        onPress={() => toggleTrashSelect(t.trash_id)}
+                        hitSlop={8}
+                        style={{ paddingRight: 10 }}
+                      >
+                        <Ionicons
+                          name={checked ? "checkbox" : "square-outline"}
+                          size={24}
+                          color={checked ? SUCCESS_COLOR : "#94a3b8"}
+                        />
+                      </TouchableOpacity>
+                      {/* แตะเพื่อดูรายละเอียดเหมือนก่อนลบ */}
+                      <TouchableOpacity
+                        activeOpacity={0.7}
+                        style={{ flex: 1, paddingRight: 10 }}
+                        onPress={() => viewTrashItem(t)}
+                      >
+                        <Text style={styles.trashDate}>
+                          {formatShortThaiDate(t.report_date)}
+                          {Number(t.total_expense) > 0
+                            ? `  ·  เบิก ${Number(t.total_expense).toLocaleString()} ฿`
+                            : ""}
+                        </Text>
+                        <Text style={styles.trashCustomer} numberOfLines={2}>
+                          {cleanSplit(t.work_result).join(", ") || "-"}
+                        </Text>
+                        <Text style={styles.trashMeta} numberOfLines={1}>
+                          ลบเมื่อ {fmtDeletedAt(t.deleted_at)}
+                          {t.deleted_by ? ` โดย ${t.deleted_by}` : ""}
+                        </Text>
+                        <Text style={styles.trashViewLink}>
+                          <Ionicons name="eye-outline" size={12} /> ดูรายละเอียด
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        disabled={!!restoringId || bulkRestoring}
+                        style={[
+                          styles.restoreBtn,
+                          (bulkRestoring || (!!restoringId && !restoring)) && {
+                            opacity: 0.4,
+                          },
+                        ]}
+                        onPress={() => restoreReport(t.trash_id)}
+                      >
+                        {restoring ? (
+                          <ActivityIndicator color="#fff" size="small" />
+                        ) : (
+                          <>
+                            <Ionicons name="refresh" size={14} color="#fff" />
+                            <Text style={styles.restoreBtnText}>กู้คืน</Text>
+                          </>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  );
+                }}
+              />
+
+              {/* ♻️ กู้คืนรายการที่เลือก */}
+              {selectedTrash.length > 0 && (
+                <TouchableOpacity
+                  disabled={bulkRestoring}
+                  style={styles.bulkRestoreBtn}
+                  onPress={restoreSelected}
+                >
+                  {bulkRestoring ? (
+                    <>
+                      <ActivityIndicator color="#fff" size="small" />
+                      <Text style={styles.bulkRestoreText}>กำลังกู้คืน...</Text>
+                    </>
+                  ) : (
+                    <>
+                      <Ionicons name="refresh" size={18} color="#fff" />
+                      <Text style={styles.bulkRestoreText}>
+                        กู้คืนที่เลือก ({selectedTrash.length})
+                      </Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              )}
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* ✏️ แก้ไขรายงานในหน้านี้เลย (ฟอร์มเดียวกับหน้าเขียนรายงาน) — บันทึกแล้วปิดและโหลดรายการใหม่ */}
+      <Modal
+        visible={!!editTarget}
+        animationType="slide"
+        onRequestClose={() => setEditTarget(null)}
+      >
+        {/* Modal บน Android ไม่ได้ inset ขอบจอเอง → ครอบ SafeAreaProvider ใหม่ให้คำนวณใหม่ */}
+        <SafeAreaProvider>
+          {editTarget && (
+            <WriteReportScreen
+              key={String(editTarget.id)}
+              editId={editTarget.id}
+              editData={JSON.stringify(editTarget)}
+              onClose={(saved) => {
+                setEditTarget(null);
+                if (saved) fetchHistory();
+              }}
+            />
+          )}
+        </SafeAreaProvider>
+      </Modal>
+
+      {/* ↩️ แถบ "ลบแล้ว · เลิกทำ" หลังลบ (หายเองใน 7 วินาที) */}
+      {undoInfo && (
+        <View style={styles.undoBar}>
+          <Ionicons name="trash" size={16} color="#fca5a5" />
+          <Text style={styles.undoText} numberOfLines={1}>
+            ลบแล้ว: {undoInfo.label}
+          </Text>
+          <TouchableOpacity
+            disabled={!!restoringId}
+            onPress={() => restoreReport(undoInfo.trashId)}
+            style={styles.undoBtn}
+          >
+            {restoringId === undoInfo.trashId ? (
+              <ActivityIndicator color="#93c5fd" size="small" />
+            ) : (
+              <Text style={styles.undoBtnText}>เลิกทำ</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
     </SafeAreaView>
   );
 }
@@ -2163,6 +2707,150 @@ const styles = StyleSheet.create({
     marginBottom: 15,
   },
   modalTitle: { fontSize: 18, fontWeight: "bold" },
+
+  // ===== 🗑️ ลบ / ♻️ กู้คืน =====
+  deleteBtn: {
+    backgroundColor: DANGER_COLOR,
+    paddingHorizontal: 9,
+  },
+  delOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15,23,42,0.5)",
+    justifyContent: "center",
+    padding: 28,
+  },
+  delBox: {
+    backgroundColor: "#fff",
+    borderRadius: 18,
+    padding: 20,
+    alignItems: "center",
+  },
+  delIcon: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: "#fee2e2",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 10,
+  },
+  delTitle: { fontSize: 17, fontWeight: "800", color: "#1e293b", marginBottom: 6 },
+  delMsg: { fontSize: 14, color: "#475569", textAlign: "center", lineHeight: 21 },
+  delNote: {
+    flexDirection: "row",
+    gap: 6,
+    alignItems: "flex-start",
+    backgroundColor: "#f0f9ff",
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 12,
+    alignSelf: "stretch",
+  },
+  delNoteText: { flex: 1, fontSize: 12, color: "#0369a1", lineHeight: 18 },
+  delBtns: { flexDirection: "row", gap: 10, marginTop: 16, alignSelf: "stretch" },
+  delBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 12,
+    flexDirection: "row",
+    gap: 5,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  trashSheet: { width: "94%", maxHeight: "85%" },
+  trashHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 14,
+    gap: 10,
+  },
+  trashItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    backgroundColor: "#f8fafc",
+  },
+  trashDate: { fontSize: 12, fontWeight: "700", color: "#334155" },
+  trashCustomer: { fontSize: 14, fontWeight: "700", color: PRIMARY_COLOR, marginTop: 2 },
+  trashMeta: { fontSize: 11, color: "#94a3b8", marginTop: 3 },
+  trashItemChecked: { borderColor: SUCCESS_COLOR, backgroundColor: "#ecfdf5" },
+  trashSelectAll: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    marginBottom: 6,
+  },
+  trashSelectAllText: { fontSize: 14, fontWeight: "700", color: "#334155" },
+  trashSelectedCount: {
+    marginLeft: "auto",
+    fontSize: 12,
+    fontWeight: "700",
+    color: SUCCESS_COLOR,
+  },
+  bulkRestoreBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: SUCCESS_COLOR,
+    height: 48,
+    borderRadius: 14,
+    marginTop: 6,
+  },
+  bulkRestoreText: { color: "#fff", fontWeight: "800", fontSize: 15 },
+  trashViewLink: { fontSize: 12, color: PRIMARY_COLOR, fontWeight: "700", marginTop: 4 },
+  trashBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#fef2f2",
+    borderWidth: 1,
+    borderColor: "#fecaca",
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 10,
+  },
+  trashBannerTitle: { fontSize: 13, fontWeight: "800", color: "#b91c1c" },
+  trashBannerMeta: { fontSize: 11, color: "#991b1b", marginTop: 1 },
+  restoreBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: SUCCESS_COLOR,
+    paddingHorizontal: 12,
+    height: 36,
+    borderRadius: 10,
+    minWidth: 82,
+    justifyContent: "center",
+  },
+  restoreBtnText: { color: "#fff", fontWeight: "800", fontSize: 13 },
+  undoBar: {
+    position: "absolute",
+    left: 14,
+    right: 14,
+    bottom: 24,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#1e293b",
+    borderRadius: 14,
+    paddingLeft: 14,
+    paddingRight: 6,
+    paddingVertical: 6,
+    elevation: 8,
+    shadowColor: "#000",
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+  },
+  undoText: { flex: 1, color: "#e2e8f0", fontSize: 13 },
+  undoBtn: { paddingHorizontal: 14, height: 36, justifyContent: "center" },
+  undoBtnText: { color: "#93c5fd", fontWeight: "800", fontSize: 14 },
   detailRow: { flexDirection: "row", marginBottom: 6 },
   detailLabel: { width: 90, fontSize: 11, color: "#64748b", fontWeight: "600" },
   detailValue: { flex: 1, fontSize: 12, color: "#333" },
@@ -2173,6 +2861,48 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   costGrid: { flexDirection: "row", gap: 10, marginBottom: 10 },
+  // ===== 💸 ค่าใช้จ่ายรายหมวด + 📸 รูปหลักฐาน =====
+  expCatBox: {
+    backgroundColor: "#f8fafc",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    marginBottom: 10,
+  },
+  expCatBlock: {
+    borderBottomWidth: 1,
+    borderBottomColor: "#eef2f7",
+    paddingVertical: 8,
+  },
+  expCatRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  expCatLabelWrap: { flexDirection: "row", alignItems: "center", gap: 8, flex: 1 },
+  expCatLabel: { fontSize: 13, color: "#64748b", flexShrink: 1 },
+  expCatVal: { fontSize: 13, fontWeight: "600", color: "#333" },
+  evThumbRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    paddingLeft: 24,
+    paddingTop: 8,
+  },
+  evThumbWrap: { width: 60, alignItems: "center" },
+  evThumb: {
+    width: 56,
+    height: 56,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    overflow: "hidden",
+    backgroundColor: "#eef2f7",
+  },
+  evThumbImg: { width: "100%", height: "100%" },
+  evThumbPdf: { flex: 1, alignItems: "center", justifyContent: "center" },
+  evThumbLabel: { fontSize: 9, marginTop: 2, fontWeight: "600" },
   costBox: {
     flex: 1,
     backgroundColor: "#f8fafc",

@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Image,
   Linking,
   Modal,
   RefreshControl,
@@ -21,6 +22,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { API_BASE, IMG_BASE_URL } from "../../constants/config";
 // 🌟 รูปแบบวันที่สั้น "d/m/yy" มาตรฐานเดียวกันทั้งแอป แทน toLocaleDateString("th-TH")/ชื่อเดือนย่อ
 import { formatShortThaiDate } from "../../components/DateTimeField";
+import { useAuth } from "../_layout";
 
 // โทนน้ำเงินชุดเดียวกับ sidebar / หน้า login (navy → blue → sky)
 const PRIMARY_COLOR = "#1d4ed8";
@@ -74,6 +76,121 @@ const CARD_SHADOW = {
   elevation: 2,
 };
 
+// 📎 เอกสารแนบเพิ่ม (reports.expense_docs JSON) → แยกตามหมวด fuel / hotel / other
+const DOC_LABEL: Record<string, string> = {
+  slip: "สลิป",
+  tax_invoice: "ใบกำกับภาษี",
+  receipt: "ใบเสร็จ",
+  other: "เอกสารอื่น",
+};
+const parseExpenseDocs = (
+  item: any,
+): { cat: string; type: string; file: string }[] => {
+  try {
+    const raw =
+      typeof item?.expense_docs === "string"
+        ? JSON.parse(item.expense_docs || "[]")
+        : item?.expense_docs;
+    return Array.isArray(raw) ? raw.filter((d: any) => d && d.file) : [];
+  } catch {
+    return [];
+  }
+};
+// fuel_cost เก็บแยกบิลคั่นด้วยคอมม่า เช่น "500,300"
+const sumCsv = (v: any) =>
+  String(v ?? "")
+    .split(",")
+    .reduce((s, x) => s + (parseFloat(x) || 0), 0);
+const splitFiles = (v: any) =>
+  String(v ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+// 🗂️ หลักฐานแยกรอบ (เหมือน renderEvidenceByRound ใน js/dashboard_script.js ฝั่งเว็บ)
+type EvCat = "fuel" | "hotel" | "other";
+interface EvDoc {
+  cat: EvCat;
+  file: string;
+  type: string; // ป้ายภาษาไทย: สลิป / ใบกำกับภาษี / ใบเสร็จ / เอกสาร
+  round: number;
+  entry: number | null;
+}
+interface EvAmount {
+  cat: EvCat;
+  amount: number;
+  detail: string;
+  round: number;
+  idx: number; // ลำดับรายการในหมวด (ตรงกับ entry ของเอกสาร)
+}
+const EV_CATS: { key: EvCat; label: string; color: string; icon: string }[] = [
+  { key: "fuel", label: "น้ำมัน", color: "#ea580c", icon: "gas-pump" },
+  { key: "hotel", label: "ที่พัก", color: "#2563eb", icon: "bed" },
+  { key: "other", label: "อื่นๆ", color: "#d97706", icon: "receipt" },
+];
+const EV_TYPE_ORDER = ["สลิป", "ใบกำกับภาษี", "ใบเสร็จ", "เอกสาร"];
+const EV_TYPE_NAME: Record<string, string> = {
+  slip: "สลิป",
+  tax_invoice: "ใบกำกับภาษี",
+  receipt: "ใบเสร็จ",
+  other: "เอกสาร",
+};
+const asCat = (c: any): EvCat => (c === "fuel" || c === "hotel" ? c : "other");
+
+// รายการหลักฐานทั้งหมดของรายงาน: สลิปรูปแบบเดิม (นับเป็นรอบ 1) + เอกสารแนบ (expense_docs)
+const buildEvidence = (item: any): EvDoc[] => {
+  const docs: EvDoc[] = [];
+  const legacy = (v: any, cat: EvCat) =>
+    splitFiles(v)
+      .filter((f) => f !== "0" && f !== "null")
+      .forEach((f) => docs.push({ cat, file: f, type: "สลิป", round: 1, entry: null }));
+  legacy(item?.fuel_receipt, "fuel");
+  legacy(item?.accommodation_receipt, "hotel");
+  legacy(item?.other_receipt, "other");
+  parseExpenseDocs(item).forEach((d: any) =>
+    docs.push({
+      cat: asCat(d.cat),
+      file: String(d.file),
+      type: EV_TYPE_NAME[d.type] || "เอกสาร",
+      round: Math.max(1, parseInt(d.round, 10) || 1),
+      entry: Number.isInteger(d.entry) ? d.entry : null,
+    }),
+  );
+  return docs;
+};
+
+// expense_rounds: {round, round_at: {"1": "...", "2": "..."}, amounts: [{cat, amount, detail, round}]}
+const parseRounds = (item: any): { roundAt: Record<string, string>; amounts: EvAmount[] } => {
+  let rx: any = {};
+  try {
+    rx =
+      typeof item?.expense_rounds === "string"
+        ? JSON.parse(item.expense_rounds || "{}")
+        : item?.expense_rounds || {};
+  } catch {
+    rx = {};
+  }
+  const seen: Record<string, number> = {};
+  const amounts: EvAmount[] = (Array.isArray(rx?.amounts) ? rx.amounts : []).map((a: any) => {
+    const cat = asCat(a?.cat);
+    const idx = seen[cat] ?? 0;
+    seen[cat] = idx + 1;
+    return {
+      cat,
+      amount: parseFloat(a?.amount) || 0,
+      detail: String(a?.detail ?? ""),
+      round: Math.max(1, parseInt(a?.round, 10) || 1),
+      idx,
+    };
+  });
+  const roundAt =
+    rx?.round_at && typeof rx.round_at === "object" ? (rx.round_at as Record<string, string>) : {};
+  return { roundAt, amounts };
+};
+
+// 💰 รายงานนี้ติ๊ก "จ่ายแล้ว" หรือยัง (API แนบ is_paid มากับ get_dashboard_stats tab=sales)
+const isPaid = (item: any) => String(item?.is_paid ?? "0") === "1";
+
 // ย่อเงินก้อนใหญ่ให้อ่านง่ายในที่แคบ: 63,583,333.33 → "63.58 ล้าน"
 const fmtMoneyShort = (n: number) =>
   Math.abs(n) >= 1e6
@@ -92,6 +209,7 @@ const initialOf = (name: string) => {
 export default function ManagerSales() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -112,10 +230,16 @@ export default function ManagerSales() {
   const [successKeyword, setSuccessKeyword] = useState("เซ็นสัญญา"); // ➕ เก็บคำว่าสถานะไหนคือได้งาน
   const [kpiList, setKpiList] = useState<any[]>([]);
   const [recentList, setRecentList] = useState<any[]>([]);
+  // 💰 แท็บ/สถานะ จ่ายแล้ว-ยังไม่จ่าย ("" = ทั้งหมด)
+  const [payFilter, setPayFilter] = useState<"" | "paid" | "unpaid">("");
+  const [payingId, setPayingId] = useState<string | null>(null);
+  const [payConfirm, setPayConfirm] = useState<{
+    item: any;
+    paid: boolean;
+  } | null>(null);
   const [employeeStats, setEmployeeStats] = useState<any[]>([]);
 
   // Filter States
-  const [reporters, setReporters] = useState<string[]>([]);
   const [filterReporter, setFilterReporter] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
 
@@ -200,17 +324,27 @@ export default function ManagerSales() {
   };
 
   // UI States
+  // แผ่นตัวกรอง (bottom sheet): เลือกค่าแบบร่างก่อน กด "ดู N รายงาน" ค่อยใช้จริง
   const [showFilter, setShowFilter] = useState(false);
+  const [fStart, setFStart] = useState<Date | null>(null);
+  const [fEnd, setFEnd] = useState<Date | null>(null);
+  const [fReporter, setFReporter] = useState("");
+  const [fStatus, setFStatus] = useState("");
+  // รายงานของช่วงวันที่ในแบบร่าง (null = กำลังโหลด) ไว้นับจำนวนข้างตัวเลือก
+  const [sheetList, setSheetList] = useState<any[] | null>(null);
+  const sheetReq = useRef(0);
 
   // Modals
   const [detailModalVisible, setDetailModalVisible] = useState(false);
   const [selectedItem, setSelectedItem] = useState<any>(null);
+  // ตัวกรองหลักฐานในป๊อปอัปรายละเอียด: รอบที่เลือก + ประเภทเอกสารของแต่ละกล่องรอบ
+  const [evRound, setEvRound] = useState<string>("all");
+  const [evTypeOf, setEvTypeOf] = useState<Record<string, string>>({});
   const [historyModalVisible, setHistoryModalVisible] = useState(false);
   const [empModalVisible, setEmpModalVisible] = useState(false); // ➕ State สำหรับ Popup พนักงาน
   const [customerHistory, setCustomerHistory] = useState<any[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState("");
   const [loadingHistory, setLoadingHistory] = useState(false);
-  const [selectorVisible, setSelectorVisible] = useState(false);
 
   // --- Custom Date Picker States ---
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -510,7 +644,6 @@ export default function ManagerSales() {
 
         // นำข้อมูลไปแสดงในรายการตารางด้านล่างสุด
         setRecentList(finalFilteredData);
-        fetchFilterOptions();
         fetchYearSales(targetReporter);
       }
     } catch (error) {
@@ -521,13 +654,59 @@ export default function ManagerSales() {
     }
   };
 
-  const fetchFilterOptions = async () => {
+  // ---------- แผ่นตัวกรอง ----------
+  const ymd = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+  // โหลดรายงานของช่วงวันที่ในแบบร่าง (ยิงซ้อนกันได้ — ผลของรอบล่าสุดชนะ)
+  const loadSheetList = async (s: Date | null, e: Date | null) => {
+    const id = ++sheetReq.current;
+    setSheetList(null);
     try {
-      const res = await axios.get(
-        `${API_BASE}/api_mobile.php?action=get_users`,
-      );
-      if (Array.isArray(res.data)) setReporters(res.data);
-    } catch (e) { }
+      let url = `${API_BASE}/api_mobile.php?action=get_dashboard_stats&tab=sales`;
+      if (s) url += `&start_date=${ymd(s)}`;
+      if (e) url += `&end_date=${ymd(e)}`;
+      const res = await axios.get(url);
+      if (id === sheetReq.current) setSheetList(res.data?.recent || []);
+    } catch (err) {
+      if (id === sheetReq.current) setSheetList([]);
+    }
+  };
+
+  const openFilterSheet = () => {
+    setFStart(startDate);
+    setFEnd(endDate);
+    setFReporter(filterReporter);
+    setFStatus(filterStatus);
+    setShowDatePicker(false);
+    setShowFilter(true);
+    loadSheetList(startDate, endDate);
+  };
+
+  const setDraftRange = (s: Date | null, e: Date | null) => {
+    setFStart(s);
+    setFEnd(e);
+    loadSheetList(s, e);
+  };
+
+  // ล้างแบบร่าง (ยังไม่ใช้จริงจนกว่าจะกด "ดู N รายงาน")
+  const clearDraft = () => {
+    const now = new Date();
+    setFReporter("");
+    setFStatus("");
+    setDraftRange(
+      new Date(now.getFullYear(), now.getMonth(), 1),
+      new Date(now.getFullYear(), now.getMonth() + 1, 0),
+    );
+  };
+
+  const applyDraft = () => {
+    setStartDate(fStart);
+    setEndDate(fEnd);
+    setFilterReporter(fReporter);
+    setFilterStatus(fStatus);
+    setShowFilter(false);
+    fetchData(fReporter, fStatus, fStart, fEnd);
   };
 
   // ล้างตัวกรองทั้งหมด กลับไปเดือนปัจจุบัน (ใช้ร่วมกันทั้งแถบ chip / ปุ่มรีเซ็ต / empty state)
@@ -567,17 +746,235 @@ export default function ManagerSales() {
     );
   };
 
+  // 🖼️ รูปย่อหลักฐาน 1 ชิ้น: กรอบสีตามหมวด + ป้ายประเภท + รอบ (showLabel=false = รูปอย่างเดียว ใช้ในกรอบรายการอื่นๆ)
+  const renderEvThumb = (d: EvDoc, color: string, key: string, showLabel = true) => {
+    const isImg = /\.(jpe?g|png|gif|webp|heic|heif)$/i.test(d.file);
+    return (
+      <TouchableOpacity
+        key={key}
+        activeOpacity={0.8}
+        onPress={() => openImage(encodeURIComponent(d.file))}
+        style={styles.evrThumbWrap}
+      >
+        <View style={[styles.evrThumb, { borderColor: color }]}>
+          {isImg ? (
+            <Image
+              source={{ uri: `${IMG_BASE_URL}/${encodeURIComponent(d.file)}` }}
+              style={styles.evThumbImg}
+            />
+          ) : (
+            <View style={styles.evThumbPdf}>
+              <FontAwesome5 name="file-alt" size={24} color="#dc2626" />
+              <Text style={styles.evrExt}>{(d.file.split(".").pop() || "").toUpperCase()}</Text>
+            </View>
+          )}
+        </View>
+        {showLabel && (
+          <>
+            <Text style={[styles.evrThumbType, { color }]} numberOfLines={1}>
+              {d.type}
+            </Text>
+            <Text style={styles.evrThumbRound}>รอบ {d.round}</Text>
+          </>
+        )}
+      </TouchableOpacity>
+    );
+  };
+
+  // 🗂️ หลักฐานของ 1 กล่อง (ทั้งรายงาน หรือ 1 รอบ): แถวกรองประเภท + แยกตามหมวด น้ำมัน / ที่พัก / อื่นๆ
+  //   amountOf(cat) = ยอดของหมวดในกล่องนี้ · otherItems = ค่าใช้จ่ายอื่นๆ ทีละรายการ (แยกกรอบตามรายการ)
+  const renderEvView = (
+    boxKey: string,
+    docs: EvDoc[],
+    amountOf: (cat: EvCat) => number,
+    otherItems: EvAmount[],
+    otherLabel: string,
+  ) => {
+    const types = [
+      ...EV_TYPE_ORDER.filter((t) => docs.some((d) => d.type === t)),
+      ...[...new Set(docs.map((d) => d.type))].filter((t) => !EV_TYPE_ORDER.includes(t)),
+    ];
+    const want = evTypeOf[boxKey] || "all";
+    const match = (d: EvDoc) => want === "all" || d.type === want;
+    const chips = [
+      { key: "all", label: "ทุกประเภท", n: docs.length },
+      ...types.map((t) => ({ key: t, label: t, n: docs.filter((d) => d.type === t).length })),
+    ];
+    const blocks = EV_CATS.filter(
+      (c) => docs.some((d) => d.cat === c.key) || amountOf(c.key) > 0,
+    ).filter(
+      // กำลังกรองประเภท → ซ่อนหมวดที่ไม่มีรูปตรงเงื่อนไข
+      (c) => want === "all" || docs.some((d) => d.cat === c.key && match(d)),
+    );
+
+    return (
+      <View>
+        {docs.length > 0 && (
+          <View style={styles.evrSegWrap}>
+            {renderSeg(
+              chips,
+              want,
+              (k) => setEvTypeOf((p) => ({ ...p, [boxKey]: k })),
+              true,
+              true,
+            )}
+          </View>
+        )}
+        {blocks.map((c) => {
+          const amt = amountOf(c.key);
+          const cDocs = docs.filter((d) => d.cat === c.key);
+          let body: React.ReactNode;
+          if (c.key === "other" && otherItems.length > 0) {
+            // อื่นๆ: กรอบละรายการ (รายละเอียด + ยอด + สลิปของรายการนั้น)
+            const used = new Set<EvDoc>();
+            const frames = otherItems.map((it) => {
+              const fDocs = cDocs.filter((d) => d.entry === it.idx);
+              fDocs.forEach((d) => used.add(d));
+              return { title: it.detail || "ไม่ระบุรายละเอียด", amount: it.amount, docs: fDocs };
+            });
+            const rest = cDocs.filter((d) => !used.has(d));
+            if (rest.length) frames.push({ title: "สลิปที่ยังไม่ระบุรายการ", amount: 0, docs: rest });
+            body = frames.map((f, i) => {
+              const shown = f.docs.filter(match);
+              if (want !== "all" && shown.length === 0) return null;
+              return (
+                <View key={i} style={styles.evrOtherFrame}>
+                  <View style={styles.evrCatHead}>
+                    <Text style={[styles.evrOtherTitle, { color: c.color }]}>{f.title}</Text>
+                    {f.amount > 0 && (
+                      <Text style={styles.evrOtherAmt}>฿{f.amount.toLocaleString()}</Text>
+                    )}
+                  </View>
+                  {shown.length > 0 ? (
+                    <View style={styles.evrGrid}>
+                      {shown.map((d, k) => renderEvThumb(d, c.color, `${d.file}-${k}`, false))}
+                    </View>
+                  ) : (
+                    <Text style={styles.cardMetaSm}>ไม่มีสลิป</Text>
+                  )}
+                </View>
+              );
+            });
+          } else {
+            const shown = cDocs.filter(match);
+            body =
+              shown.length > 0 ? (
+                <View style={styles.evrGrid}>
+                  {shown.map((d, k) => renderEvThumb(d, c.color, `${d.file}-${k}`))}
+                </View>
+              ) : null;
+          }
+          return (
+            <View key={c.key} style={styles.evrCat}>
+              <View style={styles.evrCatHead}>
+                <View style={styles.evrCatTitleRow}>
+                  <FontAwesome5 name={c.icon} size={16} color={c.color} solid />
+                  <Text style={styles.evrCatTitle}>
+                    {c.key === "other" && otherItems.length === 0 ? otherLabel : c.label}
+                  </Text>
+                </View>
+                {amt > 0 && <Text style={styles.evrCatAmt}>฿{amt.toLocaleString()}</Text>}
+              </View>
+              {body}
+            </View>
+          );
+        })}
+        {docs.length === 0 && blocks.length === 0 && (
+          <Text style={styles.cardMetaSm}>ไม่มีหลักฐานแนบ</Text>
+        )}
+      </View>
+    );
+  };
+
+  // 🔁 หลักฐานทั้งรายงาน: หลายรอบ → แถวกรอง ทั้งหมด / รอบ 1 / รอบ 2 … + กล่องละรอบ · รอบเดียว → แสดงรวม
+  const renderEvidenceByRound = (item: any) => {
+    const docs = buildEvidence(item);
+    const { roundAt, amounts } = parseRounds(item);
+    const rounds = [
+      ...new Set([
+        ...docs.map((d) => d.round),
+        ...amounts.map((a) => a.round),
+        ...Object.keys(roundAt).map(Number),
+      ]),
+    ]
+      .filter((n) => n > 0)
+      .sort((a, b) => a - b);
+    const otherAll = amounts.filter((a) => a.cat === "other");
+    const otherLabel = `อื่นๆ (${item.other_cost_detail || "-"})`;
+
+    if (rounds.length <= 1) {
+      // รอบเดียว: ยอดของแต่ละหมวดจากคอลัมน์หลักของรายงาน
+      const totals: Record<EvCat, number> = {
+        fuel: sumCsv(item.fuel_cost),
+        hotel: sumCsv(item.accommodation_cost),
+        other: sumCsv(item.other_cost),
+      };
+      return renderEvView("all", docs, (c) => totals[c], otherAll, otherLabel);
+    }
+
+    // จำนวนข้างปุ่มรอบ = จำนวนไฟล์หลักฐานของรอบนั้น
+    const roundChips = [
+      { key: "all", label: "ทั้งหมด", n: docs.length },
+      ...rounds.map((r) => ({
+        key: String(r),
+        label: `รอบ ${r}`,
+        n: docs.filter((d) => d.round === r).length,
+      })),
+    ];
+    return (
+      <View>
+        <View style={styles.evrSegWrap}>
+          {renderSeg(roundChips, evRound, setEvRound, roundChips.length > 4, true)}
+        </View>
+        {rounds
+          .filter((r) => evRound === "all" || String(r) === evRound)
+          .map((r) => {
+            const rDocs = docs.filter((d) => d.round === r);
+            const sumOf = (c: EvCat) =>
+              amounts
+                .filter((a) => a.cat === c && a.round === r)
+                .reduce((s, a) => s + a.amount, 0);
+            // รายการอื่นๆ ของรอบนี้ = บันทึกในรอบนี้ หรือมีสลิปของรอบนี้ผูกอยู่
+            const rOther = otherAll.filter(
+              (a) =>
+                a.round === r || rDocs.some((d) => d.cat === "other" && d.entry === a.idx),
+            );
+            const hasAmount = EV_CATS.some((c) => sumOf(c.key) > 0);
+            return (
+              <View key={r} style={styles.evrBox}>
+                <View style={styles.evrBoxHead}>
+                  <View style={styles.evrCatTitleRow}>
+                    <FontAwesome5 name="layer-group" size={15} color="#1d4ed8" />
+                    <Text style={styles.evrBoxTitle}>รอบ {r}</Text>
+                  </View>
+                  <Text style={styles.evrBoxAt}>{roundAt[String(r)] || ""}</Text>
+                </View>
+                {rDocs.length > 0 || hasAmount ? (
+                  renderEvView(`r${r}`, rDocs, sumOf, rOther, otherLabel)
+                ) : (
+                  <Text style={styles.cardMetaSm}>
+                    รอบนี้แก้ไขข้อมูลอื่น (ไม่มียอดหรือเอกสารใหม่)
+                  </Text>
+                )}
+              </View>
+            );
+          })}
+      </View>
+    );
+  };
+
   const openCustomDatePicker = (mode: "start" | "end") => {
     setDateMode(mode);
-    setPickerDate((mode === "start" ? startDate : endDate) || new Date());
+    setPickerDate((mode === "start" ? fStart : fEnd) || new Date());
     setPickerView("day");
     setShowDatePicker(true);
   };
 
+  // ปฏิทินเปิดจากแผ่นตัวกรองเท่านั้น → เลือกวันแล้วแก้แบบร่าง
   const handleDateSelect = (day: number) => {
     const d = new Date(pickerDate.getFullYear(), pickerDate.getMonth(), day);
-    if (dateMode === "start") setStartDate(d);
-    else setEndDate(d);
+    if (dateMode === "start") setDraftRange(d, fEnd);
+    else setDraftRange(fStart, d);
     setShowDatePicker(false);
   };
 
@@ -660,7 +1057,7 @@ export default function ManagerSales() {
     for (let i = 0; i < firstDay; i++)
       days.push(<View key={`empty-${i}`} style={styles.calDayEmpty} />);
     for (let i = 1; i <= daysInMonth; i++) {
-      const currentCheck = dateMode === "start" ? startDate : endDate;
+      const currentCheck = dateMode === "start" ? fStart : fEnd;
       const isSelected =
         currentCheck &&
         currentCheck.getDate() === i &&
@@ -926,7 +1323,7 @@ export default function ManagerSales() {
     </View>
   );
 
-  // ================= ช่วงเวลาลัด: แตะแล้วค้นหาเลย ไม่ต้องกดปุ่มค้นหาซ้ำ =================
+  // ================= ช่วงเวลาลัดในแผ่นตัวกรอง =================
   const RANGE_PRESETS = [
     {
       label: "เดือนนี้",
@@ -949,106 +1346,482 @@ export default function ManagerSales() {
     a.getFullYear() === b.getFullYear() &&
     a.getMonth() === b.getMonth() &&
     a.getDate() === b.getDate();
-  const activePreset = RANGE_PRESETS.find(
-    (p) => sameDay(startDate, p.s) && sameDay(endDate, p.e),
-  )?.label;
-  const applyRange = (s: Date, e: Date) => {
-    setStartDate(s);
-    setEndDate(e);
-    fetchData(undefined, undefined, s, e);
+  // ================= แผ่นตัวกรอง (bottom sheet) =================
+  // กลุ่มปุ่มแบบ segmented: ปุ่มละ label + จำนวน (wrap = ขึ้นบรรทัดใหม่ได้เมื่อมีหลายตัวเลือก)
+  const renderSeg = (
+    opts: { key: string; label: string; n?: number | null; dot?: string }[],
+    value: string,
+    onPick: (k: string) => void,
+    wrap = false,
+    compact = false, // ขนาดเล็กสำหรับใช้ในกล่องรายละเอียด
+  ) => (
+    <View style={[styles.fsSeg, wrap && styles.fsSegWrap, compact && styles.fsSegCompact]}>
+      {opts.map((o) => {
+        const on = o.key === value;
+        return (
+          <TouchableOpacity
+            key={o.key || "_all"}
+            activeOpacity={0.8}
+            style={[
+              styles.fsSegItem,
+              wrap ? { flexGrow: 1 } : { flex: 1 },
+              compact && styles.fsSegItemCompact,
+              on && styles.fsSegItemOn,
+            ]}
+            onPress={() => onPick(o.key)}
+          >
+            {o.dot && !on && (
+              <View style={[styles.pillDot, { backgroundColor: o.dot }]} />
+            )}
+            <Text
+              style={[
+                styles.fsSegText,
+                compact && { fontSize: FS.sm + 1 },
+                on && styles.fsSegTextOn,
+              ]}
+              numberOfLines={1}
+            >
+              {o.label}
+            </Text>
+            {o.n !== undefined && (
+              <Text
+                style={[
+                  styles.fsSegNum,
+                  compact && { fontSize: FS.xs },
+                  on && styles.fsSegNumOn,
+                ]}
+              >
+                {o.n === null ? "–" : compact ? `(${o.n})` : o.n}
+              </Text>
+            )}
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+
+  // ปฏิทินเลือกวัน (แสดงซ้อนในแผ่นตัวกรอง)
+  const renderDatePickerCard = () => (
+    <View style={[styles.modalContent, { width: 320, padding: 0 }]}>
+      <View style={styles.calHeader}>
+        <TouchableOpacity
+          onPress={() => changeMonth(-1)}
+          style={styles.calNavBtn}
+        >
+          <Ionicons name="chevron-back" size={20} color="#fff" />
+        </TouchableOpacity>
+        <View style={{ flexDirection: "row", alignItems: "center" }}>
+          <TouchableOpacity onPress={() => setPickerView("month")}>
+            <Text style={styles.calTitle}>
+              {TH_MONTHS_FULL[pickerDate.getMonth()]}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setPickerView("year")}>
+            <Text style={styles.calTitle}>
+              {" "}
+              {pickerDate.getFullYear()}
+            </Text>
+          </TouchableOpacity>
+        </View>
+        <TouchableOpacity
+          onPress={() => changeMonth(1)}
+          style={styles.calNavBtn}
+        >
+          <Ionicons name="chevron-forward" size={20} color="#fff" />
+        </TouchableOpacity>
+      </View>
+      <View style={{ padding: 15 }}>
+        {pickerView === "day" && (
+          <>
+            <View style={styles.calWeekRow}>
+              {["อา", "จ", "อ", "พ", "พฤ", "ศ", "ส"].map((d, i) => (
+                <Text key={i} style={styles.calWeekText}>
+                  {d}
+                </Text>
+              ))}
+            </View>
+            {renderCalendar()}
+          </>
+        )}
+        {pickerView === "month" && renderMonthSelector()}
+        {pickerView === "year" && renderYearSelector()}
+      </View>
+      <TouchableOpacity
+        style={styles.calCloseBtn}
+        onPress={() => setShowDatePicker(false)}
+      >
+        <Text style={{ color: "#666" }}>ปิด</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
+  const renderFilterSheet = () => {
+    const loadingCounts = sheetList === null;
+    const sl = sheetList || [];
+    const hasStatus = (i: any, s: string) => cleanSplit(i.job_status).includes(s);
+    const draftPreset = RANGE_PRESETS.find(
+      (p) => sameDay(fStart, p.s) && sameDay(fEnd, p.e),
+    )?.label;
+    const draftCount =
+      (fReporter ? 1 : 0) +
+      (fStatus ? 1 : 0) +
+      (draftPreset === "เดือนนี้" ? 0 : 1);
+
+    // จำนวนข้างสถานะ = รายงานของพนักงานที่เลือก ที่มีสถานะนั้นอย่างน้อย 1 งาน
+    const byReporter = fReporter
+      ? sl.filter((i) => displayNameOf(i) === fReporter)
+      : sl;
+    const statusCount: Record<string, number> = {};
+    byReporter.forEach((i) =>
+      new Set(cleanSplit(i.job_status)).forEach((s) => {
+        if (s && s !== "-") statusCount[s] = (statusCount[s] || 0) + 1;
+      }),
+    );
+    if (fStatus && !(fStatus in statusCount)) statusCount[fStatus] = 0;
+    const statusOpts = Object.entries(statusCount).sort((a, b) => b[1] - a[1]);
+
+    // จำนวนข้างพนักงาน = รายงานของคนนั้นตามสถานะที่เลือก
+    const byStatus = fStatus ? sl.filter((i) => hasStatus(i, fStatus)) : sl;
+    const nameCount: Record<string, number> = {};
+    byStatus.forEach((i) => {
+      const n = displayNameOf(i);
+      nameCount[n] = (nameCount[n] || 0) + 1;
+    });
+    if (fReporter && !(fReporter in nameCount)) nameCount[fReporter] = 0;
+    const nameOpts = Object.entries(nameCount).sort(
+      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "th"),
+    );
+
+    const resultCount = byReporter.filter(
+      (i) => !fStatus || hasStatus(i, fStatus),
+    ).length;
+    const num = (n: number) => (loadingCounts ? null : n);
+
+    return (
+      <Modal
+        visible={showFilter}
+        transparent
+        animationType="slide"
+        statusBarTranslucent
+        navigationBarTranslucent
+        onRequestClose={() =>
+          showDatePicker ? setShowDatePicker(false) : setShowFilter(false)
+        }
+      >
+        <View style={styles.sheetOverlay}>
+          <TouchableOpacity
+            style={{ flex: 1 }}
+            activeOpacity={1}
+            onPress={() => setShowFilter(false)}
+          />
+          <View style={[styles.fsSheet, { paddingBottom: insets.bottom + 12 }]}>
+            <View style={styles.fsHandle} />
+            <View style={styles.fsHead}>
+              <Text style={styles.fsTitle}>ตัวกรอง</Text>
+              {draftCount > 0 && (
+                <Text style={styles.fsHeadCount}>เลือกอยู่ {draftCount}</Text>
+              )}
+              <View style={{ flex: 1 }} />
+              <TouchableOpacity
+                style={styles.fsClose}
+                onPress={() => setShowFilter(false)}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              >
+                <Ionicons name="close" size={18} color={T.textSub} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView
+              style={{ flexGrow: 0, flexShrink: 1 }}
+              contentContainerStyle={styles.fsBody}
+              showsVerticalScrollIndicator={false}
+            >
+              {/* ช่วงเวลา */}
+              <Text style={styles.fsLabel}>ช่วงเวลา</Text>
+              {renderSeg(
+                RANGE_PRESETS.map((p) => ({ key: p.label, label: p.label })),
+                draftPreset || "",
+                (k) => {
+                  const p = RANGE_PRESETS.find((x) => x.label === k)!;
+                  setDraftRange(p.s, p.e);
+                },
+              )}
+              <View style={styles.fsDateRow}>
+                {(["start", "end"] as const).map((m) => {
+                  const d = m === "start" ? fStart : fEnd;
+                  return (
+                    <TouchableOpacity
+                      key={m}
+                      style={styles.fsDateField}
+                      activeOpacity={0.8}
+                      onPress={() => openCustomDatePicker(m)}
+                    >
+                      <Ionicons
+                        name="calendar-outline"
+                        size={15}
+                        color={PRIMARY_COLOR}
+                      />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.fsDateCap}>
+                          {m === "start" ? "ตั้งแต่" : "ถึง"}
+                        </Text>
+                        <Text
+                          style={[styles.fieldText, !d && styles.fieldPlaceholder]}
+                          numberOfLines={1}
+                        >
+                          {d ? fmtShort(d) : "ทั้งหมด"}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {/* สถานะงาน */}
+              <Text style={styles.fsLabel}>สถานะงาน</Text>
+              {renderSeg(
+                [
+                  { key: "", label: "ทั้งหมด", n: num(byReporter.length) },
+                  ...statusOpts.map(([s, n]) => ({
+                    key: s,
+                    label: s,
+                    n: num(n),
+                    dot: getStatusColor(s),
+                  })),
+                ],
+                fStatus,
+                (k) => setFStatus(k),
+                true,
+              )}
+
+              {/* พนักงาน / ทีม */}
+              <View style={styles.fsLabelRow}>
+                <Text style={[styles.fsLabel, { marginBottom: 0 }]}>
+                  พนักงาน / ทีม
+                </Text>
+                <Text style={styles.fsLabelSub}>แตะอีกครั้งเพื่อยกเลิก</Text>
+              </View>
+              <View style={styles.fsList}>
+                {loadingCounts ? (
+                  <ActivityIndicator
+                    color={PRIMARY_COLOR}
+                    style={{ paddingVertical: 18 }}
+                  />
+                ) : nameOpts.length === 0 ? (
+                  <Text style={styles.fsEmpty}>ไม่มีรายงานในช่วงนี้</Text>
+                ) : (
+                  nameOpts.map(([name, n], idx) => {
+                    const on = fReporter === name;
+                    return (
+                      <TouchableOpacity
+                        key={name}
+                        activeOpacity={0.7}
+                        style={[styles.fsListRow, idx > 0 && styles.fsListLine]}
+                        onPress={() => setFReporter(on ? "" : name)}
+                      >
+                        <Text
+                          style={[styles.fsListName, on && { color: PRIMARY_COLOR }]}
+                          numberOfLines={1}
+                        >
+                          {name}
+                        </Text>
+                        <Text style={styles.fsListNum}>{n}</Text>
+                        <View style={[styles.fsCheck, on && styles.fsCheckOn]}>
+                          {on && <Ionicons name="checkmark" size={15} color="#fff" />}
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })
+                )}
+              </View>
+            </ScrollView>
+
+            <View style={styles.fsFooter}>
+              <TouchableOpacity
+                style={styles.fsClearBtn}
+                activeOpacity={0.8}
+                onPress={clearDraft}
+              >
+                <Text style={styles.fsClearText}>ล้างทั้งหมด</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.fsApplyBtn}
+                activeOpacity={0.85}
+                onPress={applyDraft}
+              >
+                <Text style={styles.fsApplyText}>
+                  {loadingCounts ? "ดูรายงาน" : `ดู ${resultCount} รายงาน`}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* ปฏิทินซ้อนอยู่ใน Modal นี้เลย (iOS เปิด Modal ซ้อน Modal ไม่ได้) */}
+          {showDatePicker && (
+            <View style={styles.fsPickerOverlay}>{renderDatePickerCard()}</View>
+          )}
+        </View>
+      </Modal>
+    );
   };
 
-  // ================= แผงตัวกรอง (การ์ดขาวในพื้นน้ำเงินของ hero) =================
-  const renderFilterPanel = () => (
-    <Animated.View
-      entering={FadeInDown.duration(220)}
-      style={styles.filterCard}
-    >
-      <Text style={styles.filterLabel}>ช่วงเวลาด่วน</Text>
-      <View style={styles.presetRow}>
-        {RANGE_PRESETS.map((p) => {
-          const on = activePreset === p.label;
+  // ================= 💰 จ่ายแล้ว / ยังไม่จ่าย =================
+  // ติ๊กเองครั้งเดียวต่อ 1 รายงาน · ตารางเดียวกับหน้าเว็บ Dashboard.php (report_customer_payments)
+  // กล่องยืนยัน จ่ายแล้ว / ยังไม่จ่าย (ใช้ทั้งใน Modal ของตัวเอง และซ้อนในป๊อปอัปรายละเอียด)
+  const renderPayConfirm = () => {
+    if (!payConfirm) return null;
+    const { item, paid } = payConfirm;
+    const color = paid ? SUCCESS_COLOR : DANGER_COLOR;
+    return (
+      <TouchableOpacity
+        activeOpacity={1}
+        style={styles.payConfirmOverlay}
+        onPress={() => setPayConfirm(null)}
+      >
+        <TouchableOpacity activeOpacity={1} style={styles.payConfirmBox}>
+          <View style={[styles.payConfirmIcon, { backgroundColor: color + "1a" }]}>
+            <Ionicons
+              name={paid ? "checkmark-circle" : "close-circle"}
+              size={34}
+              color={color}
+            />
+          </View>
+          <Text style={styles.payConfirmTitle}>
+            {paid ? "ยืนยันการจ่ายเงิน" : "ยืนยันสถานะยังไม่จ่าย"}
+          </Text>
+          <Text style={styles.payConfirmMsg}>
+            เปลี่ยนสถานะรายงานของ{" "}
+            <Text style={{ fontWeight: "700", color: T.text }}>
+              {displayNameOf(item)}
+            </Text>{" "}
+            ({formatShortThaiDate(item.report_date)}) เป็น{" "}
+            <Text style={{ fontWeight: "800", color }}>
+              "{paid ? "จ่ายแล้ว" : "ยังไม่จ่าย"}"
+            </Text>{" "}
+            ใช่หรือไม่?
+          </Text>
+          <View style={styles.payConfirmBtns}>
+            <TouchableOpacity
+              style={[styles.payConfirmBtn, styles.payConfirmCancel]}
+              onPress={() => setPayConfirm(null)}
+            >
+              <Text style={styles.payConfirmCancelText}>ยกเลิก</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.payConfirmBtn, { backgroundColor: color }]}
+              onPress={() => {
+                setPayConfirm(null);
+                saveReportPaid(item, paid);
+              }}
+            >
+              <Ionicons name={paid ? "checkmark" : "close"} size={16} color="#fff" />
+              <Text style={styles.payConfirmOkText}>
+                {paid ? "ยืนยันจ่ายแล้ว" : "ยืนยันยังไม่จ่าย"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </TouchableOpacity>
+    );
+  };
+
+  // ถามยืนยันก่อนทุกครั้ง กันกดพลาด (ป๊อปอัปเอง เพราะ Alert ของ Android ใส่สีปุ่มไม่ได้)
+  const setReportPaid = (item: any, paid: boolean) => {
+    if (payingId || isPaid(item) === paid) return;
+    setPayConfirm({ item, paid });
+  };
+
+  const saveReportPaid = async (item: any, paid: boolean) => {
+    if (payingId) return;
+    const id = String(item.id);
+    const patch =
+      (p: boolean, by?: string, at?: string) =>
+      (it: any) =>
+        String(it.id) === id
+          ? {
+              ...it,
+              is_paid: p ? 1 : 0,
+              ...(by !== undefined ? { paid_by: by, paid_at: at } : {}),
+            }
+          : it;
+    const apply = (fn: (it: any) => any) => {
+      setRecentList((list) => list.map(fn));
+      setSelectedItem((s: any) => (s ? fn(s) : s));
+    };
+
+    apply(patch(paid)); // เปลี่ยนบนจอทันที ถ้าบันทึกไม่สำเร็จค่อยย้อนกลับ
+    setPayingId(id);
+    try {
+      const fd = new FormData();
+      fd.append("report_id", id);
+      fd.append("user_id", String(user?.id ?? ""));
+      fd.append("is_paid", paid ? "1" : "0");
+      const res = await axios.post(
+        `${API_BASE}/api_mobile.php?action=toggle_report_paid`,
+        fd,
+        { headers: { "Content-Type": "multipart/form-data" } },
+      );
+      if (res.data?.status !== "success")
+        throw new Error(res.data?.message || "บันทึกไม่สำเร็จ");
+      apply(patch(paid, res.data.paid_by, res.data.paid_at));
+    } catch (e: any) {
+      apply(patch(!paid));
+      Alert.alert("บันทึกไม่สำเร็จ", e?.message || "กรุณาลองใหม่อีกครั้ง");
+    } finally {
+      setPayingId(null);
+    }
+  };
+
+  const fmtPaidAt = (at?: string) => {
+    if (!at) return "";
+    const [d, t] = String(at).split(" ");
+    return `${formatShortThaiDate(d)}${t ? " " + t.slice(0, 5) : ""}`;
+  };
+
+  const renderPayToggle = (item: any) => {
+    const paid = isPaid(item);
+    const saving = payingId === String(item.id);
+    return (
+      <View style={styles.payRow}>
+        <View style={{ flex: 1, paddingRight: 8 }}>
+          <Text style={styles.payLabel}>การจ่ายเงิน</Text>
+          {!!item.paid_by && (
+            <Text style={styles.payMeta} numberOfLines={1}>
+              แก้ล่าสุด {item.paid_by}
+              {item.paid_at ? " · " + fmtPaidAt(item.paid_at) : ""}
+            </Text>
+          )}
+        </View>
+        {[true, false].map((p) => {
+          const on = paid === p;
+          const color = p ? SUCCESS_COLOR : DANGER_COLOR;
           return (
             <TouchableOpacity
-              key={p.label}
-              activeOpacity={0.8}
-              style={[styles.preset, on && styles.presetOn]}
-              onPress={() => applyRange(p.s, p.e)}
+              key={p ? "paid" : "unpaid"}
+              disabled={saving}
+              onPress={() => setReportPaid(item, p)}
+              hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+              style={[
+                styles.payBtn,
+                { borderColor: on ? color : T.line },
+                on && { backgroundColor: color },
+                saving && { opacity: 0.5 },
+              ]}
             >
-              <Text style={[styles.presetText, on && styles.presetTextOn]}>
-                {p.label}
+              <Ionicons
+                name={p ? "checkmark" : "close"}
+                size={14}
+                color={on ? "#fff" : color}
+              />
+              <Text style={[styles.payBtnText, { color: on ? "#fff" : color }]}>
+                {p ? "จ่ายแล้ว" : "ยังไม่จ่าย"}
               </Text>
             </TouchableOpacity>
           );
         })}
       </View>
-
-      <View style={styles.dateRow}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.filterLabel}>ตั้งแต่วันที่</Text>
-          <TouchableOpacity
-            onPress={() => openCustomDatePicker("start")}
-            style={styles.field}
-          >
-            <Ionicons name="calendar-outline" size={16} color={PRIMARY_COLOR} />
-            <Text
-              style={[styles.fieldText, !startDate && styles.fieldPlaceholder]}
-            >
-              {startDate ? fmtShort(startDate) : "ทั้งหมด"}
-            </Text>
-          </TouchableOpacity>
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.filterLabel}>ถึงวันที่</Text>
-          <TouchableOpacity
-            onPress={() => openCustomDatePicker("end")}
-            style={styles.field}
-          >
-            <Ionicons name="calendar-outline" size={16} color={PRIMARY_COLOR} />
-            <Text
-              style={[styles.fieldText, !endDate && styles.fieldPlaceholder]}
-            >
-              {endDate ? fmtShort(endDate) : "ทั้งหมด"}
-            </Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      <Text style={styles.filterLabel}>พนักงาน / ทีม</Text>
-      <TouchableOpacity
-        onPress={() => setSelectorVisible(true)}
-        style={styles.field}
-      >
-        <Ionicons name="person-outline" size={16} color={PRIMARY_COLOR} />
-        <Text
-          style={[
-            styles.fieldText,
-            { flex: 1 },
-            !filterReporter && styles.fieldPlaceholder,
-          ]}
-          numberOfLines={1}
-        >
-          {filterReporter || "พนักงานทั้งหมด"}
-        </Text>
-        <Ionicons name="chevron-down" size={16} color={T.textMute} />
-      </TouchableOpacity>
-
-      <View style={styles.filterActions}>
-        <TouchableOpacity onPress={resetFilters} style={styles.resetBtn}>
-          <Ionicons name="refresh" size={16} color={T.textSub} />
-          <Text style={styles.resetBtnText}>ล้าง</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          onPress={() => fetchData()}
-          style={styles.searchBtn}
-          activeOpacity={0.85}
-        >
-          <Ionicons name="search" size={16} color="#fff" />
-          <Text style={styles.searchBtnText}>ค้นหา</Text>
-        </TouchableOpacity>
-      </View>
-    </Animated.View>
-  );
+    );
+  };
 
   // ================= การ์ดรายงาน: 1 การ์ด = 1 รายงาน, ข้างในบล็อกละ 1 งาน =================
   const renderRecentItem = (
@@ -1090,6 +1863,8 @@ export default function ManagerSales() {
           style={styles.card}
           onPress={() => {
             setSelectedItem(item);
+            setEvRound("all");
+            setEvTypeOf({});
             setDetailModalVisible(true);
           }}
         >
@@ -1203,6 +1978,9 @@ export default function ManagerSales() {
             );
           })}
 
+          {/* 💰 จ่ายแล้ว / ยังไม่จ่าย */}
+          {renderPayToggle(item)}
+
           {/* หลักฐานแนบ + ทางเข้ารายละเอียด */}
           <View style={styles.cardFooter}>
             <View
@@ -1241,7 +2019,7 @@ export default function ManagerSales() {
 
   // รายการที่จะแสดงจริง - กรองสถานะที่ระดับ "งาน" ครั้งเดียวที่นี่
   // (เดิมกรองซ้ำในตัว render แล้ว return null ทำให้ empty state ไม่เคยขึ้น)
-  const visibleList = React.useMemo(() => {
+  const jobRows = React.useMemo(() => {
     return recentList
       .map((item: any) => {
         const jobs = jobsOf(item);
@@ -1252,6 +2030,20 @@ export default function ManagerSales() {
       })
       .filter((row) => row.jobs.length > 0);
   }, [recentList, filterStatus]);
+
+  // แท็บ ทั้งหมด / ยังไม่จ่าย / จ่ายแล้ว (นับเป็นจำนวนรายงาน เหมือนหน้าเว็บ)
+  const payCounts = React.useMemo(() => {
+    const paid = jobRows.filter((r) => isPaid(r.item)).length;
+    return { all: jobRows.length, paid, unpaid: jobRows.length - paid };
+  }, [jobRows]);
+
+  const visibleList = React.useMemo(
+    () =>
+      payFilter
+        ? jobRows.filter((r) => isPaid(r.item) === (payFilter === "paid"))
+        : jobRows,
+    [jobRows, payFilter],
+  );
 
   const fmtShort = (d: Date | null) =>
     d
@@ -1316,16 +2108,12 @@ export default function ManagerSales() {
           </Text>
         </View>
         <TouchableOpacity
-          onPress={() => setShowFilter(!showFilter)}
-          style={[styles.headerBtn, showFilter && styles.headerBtnActive]}
+          onPress={openFilterSheet}
+          style={styles.headerBtn}
           hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
         >
-          <Ionicons
-            name={showFilter ? "close" : "options-outline"}
-            size={20}
-            color={showFilter ? PRIMARY_COLOR : "#fff"}
-          />
-          {activeFilterCount > 0 && !showFilter && (
+          <Ionicons name="options-outline" size={20} color="#fff" />
+          {activeFilterCount > 0 && (
             <View style={styles.filterDot}>
               <Text style={styles.filterDotText}>{activeFilterCount}</Text>
             </View>
@@ -1374,7 +2162,7 @@ export default function ManagerSales() {
               <TouchableOpacity
                 activeOpacity={0.8}
                 style={styles.pill}
-                onPress={() => setShowFilter(true)}
+                onPress={openFilterSheet}
               >
                 <Ionicons name="calendar-outline" size={13} color="#fff" />
                 <Text style={styles.pillText} numberOfLines={1}>
@@ -1441,7 +2229,6 @@ export default function ManagerSales() {
               )}
             </ScrollView>
 
-            {showFilter && renderFilterPanel()}
 
             <View style={styles.heroTop}>
               <Text style={styles.heroLabel}>ยอดขายที่ปิดได้</Text>
@@ -1682,6 +2469,55 @@ export default function ManagerSales() {
             ) : null,
           )}
 
+          {/* 💰 แท็บ ทั้งหมด / ยังไม่จ่าย / จ่ายแล้ว */}
+          <View style={styles.payTabs}>
+            {(
+              [
+                ["", "ทั้งหมด", "list", PRIMARY_COLOR, payCounts.all],
+                ["unpaid", "ยังไม่จ่าย", "close-circle", DANGER_COLOR, payCounts.unpaid],
+                ["paid", "จ่ายแล้ว", "checkmark-circle", SUCCESS_COLOR, payCounts.paid],
+              ] as const
+            ).map(([key, label, icon, color, count]) => {
+              const active = payFilter === key;
+              return (
+                <TouchableOpacity
+                  key={key || "all"}
+                  onPress={() => setPayFilter(key)}
+                  style={[
+                    styles.payTab,
+                    active && { backgroundColor: color, borderColor: color },
+                  ]}
+                >
+                  <Ionicons
+                    name={icon}
+                    size={14}
+                    color={active ? "#fff" : color}
+                  />
+                  <Text
+                    style={[styles.payTabText, active && { color: "#fff" }]}
+                  >
+                    {label}
+                  </Text>
+                  <View
+                    style={[
+                      styles.payTabCount,
+                      active && { backgroundColor: "rgba(255,255,255,0.25)" },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.payTabCountText,
+                        active && { color: "#fff" },
+                      ]}
+                    >
+                      {count}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
           {loading ? (
             <ActivityIndicator
               size="large"
@@ -1698,9 +2534,13 @@ export default function ManagerSales() {
                 />
               </View>
               <Text style={styles.emptyText}>
-                {activeFilterCount > 0
-                  ? "ไม่พบรายงานตามตัวกรองนี้"
-                  : "ยังไม่มีรายงานในช่วงวันที่ที่เลือก"}
+                {payFilter && jobRows.length > 0
+                  ? payFilter === "paid"
+                    ? "ยังไม่มีรายการที่จ่ายแล้ว"
+                    : "ไม่มีรายการที่ยังไม่จ่าย"
+                  : activeFilterCount > 0
+                    ? "ไม่พบรายงานตามตัวกรองนี้"
+                    : "ยังไม่มีรายงานในช่วงวันที่ที่เลือก"}
               </Text>
               {activeFilterCount > 0 && (
                 <TouchableOpacity style={styles.emptyBtn} onPress={resetFilters}>
@@ -1714,62 +2554,7 @@ export default function ManagerSales() {
         </View>
       </ScrollView>
 
-      {/* Custom Date Picker Modal */}
-      <Modal visible={showDatePicker} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { width: 320, padding: 0 }]}>
-            <View style={styles.calHeader}>
-              <TouchableOpacity
-                onPress={() => changeMonth(-1)}
-                style={styles.calNavBtn}
-              >
-                <Ionicons name="chevron-back" size={20} color="#fff" />
-              </TouchableOpacity>
-              <View style={{ flexDirection: "row", alignItems: "center" }}>
-                <TouchableOpacity onPress={() => setPickerView("month")}>
-                  <Text style={styles.calTitle}>
-                    {TH_MONTHS_FULL[pickerDate.getMonth()]}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => setPickerView("year")}>
-                  <Text style={styles.calTitle}>
-                    {" "}
-                    {pickerDate.getFullYear()}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-              <TouchableOpacity
-                onPress={() => changeMonth(1)}
-                style={styles.calNavBtn}
-              >
-                <Ionicons name="chevron-forward" size={20} color="#fff" />
-              </TouchableOpacity>
-            </View>
-            <View style={{ padding: 15 }}>
-              {pickerView === "day" && (
-                <>
-                  <View style={styles.calWeekRow}>
-                    {["อา", "จ", "อ", "พ", "พฤ", "ศ", "ส"].map((d, i) => (
-                      <Text key={i} style={styles.calWeekText}>
-                        {d}
-                      </Text>
-                    ))}
-                  </View>
-                  {renderCalendar()}
-                </>
-              )}
-              {pickerView === "month" && renderMonthSelector()}
-              {pickerView === "year" && renderYearSelector()}
-            </View>
-            <TouchableOpacity
-              style={styles.calCloseBtn}
-              onPress={() => setShowDatePicker(false)}
-            >
-              <Text style={{ color: "#666" }}>ปิด</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      {renderFilterSheet()}
 
       {/* ✅ Detail Modal: ปรับ Layout ใหม่ตามสั่ง (แสดงครบทุกช่องใน Box) */}
       <Modal visible={detailModalVisible} transparent animationType="slide">
@@ -2078,51 +2863,7 @@ export default function ManagerSales() {
 
                       <View style={styles.divider} />
                       <View style={styles.expenseCard}>
-                        {[
-                          {
-                            label: "น้ำมัน",
-                            icon: "flame-outline",
-                            val: selectedItem.fuel_cost,
-                          },
-                          {
-                            label: "ที่พัก",
-                            icon: "bed-outline",
-                            val: selectedItem.accommodation_cost,
-                          },
-                          {
-                            label: `อื่นๆ (${selectedItem.other_cost_detail || "-"})`,
-                            icon: "receipt-outline",
-                            val: selectedItem.other_cost,
-                          },
-                        ].map((row, i) => (
-                          <View key={i} style={styles.expenseRow}>
-                            <View
-                              style={{
-                                flexDirection: "row",
-                                alignItems: "center",
-                                gap: 8,
-                              }}
-                            >
-                              <Ionicons
-                                name={row.icon as any}
-                                size={16}
-                                color="#64748b"
-                              />
-                              <Text style={{ fontSize: 13, color: "#64748b" }}>
-                                {row.label}
-                              </Text>
-                            </View>
-                            <Text
-                              style={{
-                                fontSize: 13,
-                                fontWeight: "500",
-                                color: "#333",
-                              }}
-                            >
-                              {parseFloat(row.val || 0).toLocaleString()} ฿
-                            </Text>
-                          </View>
-                        ))}
+                        {renderEvidenceByRound(selectedItem)}
                         <View
                           style={[
                             styles.expenseRow,
@@ -2152,64 +2893,9 @@ export default function ManagerSales() {
                         </View>
                       </View>
 
-                      <Text
-                        style={[styles.detailSectionTitle, { marginTop: 10 }]}
-                      >
-                        📸 หลักฐาน
-                      </Text>
-                      <View
-                        style={{
-                          flexDirection: "row",
-                          gap: 10,
-                          flexWrap: "wrap",
-                        }}
-                      >
-                        {selectedItem.fuel_receipt &&
-                          selectedItem.fuel_receipt
-                            .split(",")
-                            .map((img: string, i: number) => (
-                              <TouchableOpacity
-                                key={i}
-                                onPress={() => openImage(img)}
-                                style={[
-                                  styles.evBtn,
-                                  { borderColor: "#c2410c" },
-                                ]}
-                              >
-                                <FontAwesome5 name="gas-pump" color="#c2410c" />
-                                <Text
-                                  style={{ fontSize: 10, color: "#c2410c" }}
-                                >
-                                  น้ำมัน {i + 1}
-                                </Text>
-                              </TouchableOpacity>
-                            ))}
-                        {selectedItem.accommodation_receipt && (
-                          <TouchableOpacity
-                            onPress={() =>
-                              openImage(selectedItem.accommodation_receipt)
-                            }
-                            style={[styles.evBtn, { borderColor: "#1d4ed8" }]}
-                          >
-                            <FontAwesome5 name="bed" color="#1d4ed8" />
-                            <Text style={{ fontSize: 10, color: "#1d4ed8" }}>
-                              ที่พัก
-                            </Text>
-                          </TouchableOpacity>
-                        )}
-                        {selectedItem.other_receipt && (
-                          <TouchableOpacity
-                            onPress={() =>
-                              openImage(selectedItem.other_receipt)
-                            }
-                            style={[styles.evBtn, { borderColor: "#a16207" }]}
-                          >
-                            <FontAwesome5 name="receipt" color="#a16207" />
-                            <Text style={{ fontSize: 10, color: "#a16207" }}>
-                              อื่นๆ
-                            </Text>
-                          </TouchableOpacity>
-                        )}
+                      {/* 💰 จ่ายแล้ว / ยังไม่จ่าย */}
+                      <View style={{ marginTop: 10 }}>
+                        {renderPayToggle(selectedItem)}
                       </View>
                     </>
                   );
@@ -2217,6 +2903,10 @@ export default function ManagerSales() {
             </ScrollView>
           </View>
         </View>
+        {/* ยืนยันการจ่ายเงินซ้อนอยู่ใน Modal นี้เลย (iOS เปิด Modal ที่สองทับไม่ได้) */}
+        {!!payConfirm && (
+          <View style={styles.payConfirmLayer}>{renderPayConfirm()}</View>
+        )}
       </Modal>
 
       {/* History Modal */}
@@ -2357,43 +3047,6 @@ export default function ManagerSales() {
         </View>
       </Modal>
 
-      {/* Selector Modal */}
-      <Modal visible={selectorVisible} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { height: "60%" }]}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>เลือกพนักงาน</Text>
-              <TouchableOpacity onPress={() => setSelectorVisible(false)}>
-                <Ionicons name="close" size={24} color="#999" />
-              </TouchableOpacity>
-            </View>
-            <FlatList
-              data={["ทั้งหมด", ...reporters]}
-              keyExtractor={(i) => i}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={styles.selectorItem}
-                  onPress={() => {
-                    setFilterReporter(item === "ทั้งหมด" ? "" : item);
-                    setSelectorVisible(false);
-                  }}
-                >
-                  <Text style={{ fontSize: 16, color: "#333" }}>{item}</Text>
-                  {(filterReporter === item ||
-                    (item === "ทั้งหมด" && !filterReporter)) && (
-                      <Ionicons
-                        name="checkmark"
-                        size={20}
-                        color={PRIMARY_COLOR}
-                      />
-                    )}
-                </TouchableOpacity>
-              )}
-            />
-          </View>
-        </View>
-      </Modal>
-
       {/* ===== Popup สถิติทีมเซลส์: bottom sheet — สรุปทั้งทีมด้านบน, การ์ดรายคนแยกกลุ่มด้านล่าง =====
           Android edge-to-edge: Modal ไม่ได้ inset เอง จึงใช้ insets ของหน้าหลักเว้นขอบล่างให้ */}
       <Modal
@@ -2495,6 +3148,18 @@ export default function ManagerSales() {
             </ScrollView>
           </View>
         </View>
+      </Modal>
+
+      {/* 💰 ยืนยันก่อนเปลี่ยน จ่ายแล้ว / ยังไม่จ่าย — กดจากการ์ดในรายการ
+          (ถ้าป๊อปอัปรายละเอียดเปิดอยู่ จะแสดงซ้อนอยู่ข้างในป๊อปอัปนั้นแทน เพราะ iOS เปิด Modal ซ้อน Modal ไม่ได้) */}
+      <Modal
+        visible={!!payConfirm && !detailModalVisible}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => setPayConfirm(null)}
+      >
+        {renderPayConfirm()}
       </Modal>
     </View>
   );
@@ -2699,6 +3364,156 @@ const styles = StyleSheet.create({
     backgroundColor: PRIMARY_COLOR,
   },
   searchBtnText: { fontSize: FS.md, color: "#fff", fontWeight: "800" },
+
+  // ===== แผ่นตัวกรอง (bottom sheet) =====
+  fsSheet: {
+    maxHeight: "88%",
+    backgroundColor: T.bg,
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    paddingHorizontal: T.pad,
+  },
+  fsHandle: {
+    alignSelf: "center",
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "#cbd5e1",
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  fsHead: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 6 },
+  fsTitle: { fontSize: FS.xl, fontWeight: "800", color: T.text },
+  fsHeadCount: { fontSize: FS.sm, fontWeight: "700", color: PRIMARY_COLOR },
+  fsClose: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: T.surface,
+    borderWidth: 1,
+    borderColor: T.line,
+  },
+  fsBody: { paddingBottom: 8 },
+  fsLabel: {
+    fontSize: FS.md - 1,
+    fontWeight: "700",
+    color: T.textSub,
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  fsLabelRow: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: 8,
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  fsLabelSub: { fontSize: FS.xs, color: T.textMute },
+  fsSeg: {
+    flexDirection: "row",
+    padding: 4,
+    gap: 4,
+    borderRadius: 14,
+    backgroundColor: T.surface,
+    borderWidth: 1,
+    borderColor: T.lineSoft,
+  },
+  fsSegWrap: { flexWrap: "wrap" },
+  fsSegCompact: { padding: 3, gap: 3, borderRadius: 12, borderColor: T.line },
+  fsSegItemCompact: { minHeight: 34, paddingHorizontal: 10, borderRadius: 9 },
+  fsSegItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    minHeight: 40,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+  },
+  fsSegItemOn: { backgroundColor: PRIMARY_COLOR },
+  fsSegText: { fontSize: FS.md, fontWeight: "700", color: T.text },
+  fsSegTextOn: { color: "#fff" },
+  fsSegNum: { fontSize: FS.sm, fontWeight: "600", color: T.textMute },
+  fsSegNumOn: { color: "rgba(255,255,255,0.85)" },
+  fsDateRow: { flexDirection: "row", gap: 8, marginTop: 8 },
+  fsDateField: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+    backgroundColor: T.surface,
+    borderWidth: 1,
+    borderColor: T.lineSoft,
+  },
+  fsDateCap: { fontSize: 10, color: T.textMute, fontWeight: "600" },
+  fsList: {
+    borderRadius: 14,
+    backgroundColor: T.surface,
+    borderWidth: 1,
+    borderColor: T.lineSoft,
+    paddingHorizontal: 14,
+  },
+  fsListRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 14,
+  },
+  fsListLine: { borderTopWidth: 1, borderTopColor: T.lineSoft },
+  fsListName: { flex: 1, fontSize: FS.md + 1, fontWeight: "700", color: T.text },
+  fsListNum: { fontSize: FS.md, fontWeight: "600", color: T.textMute },
+  fsCheck: {
+    width: 24,
+    height: 24,
+    borderRadius: 7,
+    borderWidth: 2,
+    borderColor: "#cbd5e1",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  fsCheckOn: { backgroundColor: PRIMARY_COLOR, borderColor: PRIMARY_COLOR },
+  fsEmpty: {
+    textAlign: "center",
+    paddingVertical: 18,
+    fontSize: FS.sm,
+    color: T.textMute,
+  },
+  fsFooter: { flexDirection: "row", gap: 10, paddingTop: 12 },
+  fsClearBtn: {
+    flex: 1,
+    height: 50,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: T.surface,
+    borderWidth: 1,
+    borderColor: T.line,
+  },
+  fsClearText: { fontSize: FS.md + 1, fontWeight: "700", color: T.text },
+  fsApplyBtn: {
+    flex: 1.6,
+    height: 50,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: PRIMARY_COLOR,
+  },
+  fsApplyText: { fontSize: FS.md + 1, fontWeight: "800", color: "#fff" },
+  fsPickerOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(15,23,42,0.45)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
 
   // ===== การ์ดสรุปลอยทับขอบ hero =====
   summaryCard: {
@@ -2917,6 +3732,111 @@ const styles = StyleSheet.create({
   detailLinkRow: { flexDirection: "row", alignItems: "center", gap: 2 },
   detailLink: { fontSize: FS.sm, color: PRIMARY_COLOR, fontWeight: "700" },
 
+  // ===== 💰 จ่ายแล้ว / ยังไม่จ่าย =====
+  payRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderTopWidth: 1,
+    borderTopColor: T.lineSoft,
+    paddingVertical: 9,
+  },
+  payLabel: { fontSize: FS.sm, fontWeight: "700", color: T.textSub },
+  payMeta: { fontSize: 10, color: T.textMute, marginTop: 1 },
+  payBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    paddingHorizontal: 10,
+    height: 30,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    backgroundColor: T.surface,
+  },
+  payBtnText: { fontSize: FS.sm, fontWeight: "700" },
+  payTabs: { flexDirection: "row", gap: 6, marginBottom: 10 },
+  payTab: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: T.line,
+    backgroundColor: T.surface,
+  },
+  payTabText: { fontSize: FS.sm, fontWeight: "700", color: T.textSub },
+  payTabCount: {
+    minWidth: 20,
+    paddingHorizontal: 5,
+    borderRadius: 999,
+    backgroundColor: T.lineSoft,
+    alignItems: "center",
+  },
+  payTabCountText: { fontSize: 10, fontWeight: "800", color: T.textSub },
+  // ชั้นซ้อนเต็มจอภายในป๊อปอัปรายละเอียด
+  payConfirmLayer: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 100,
+    elevation: 100,
+  },
+  payConfirmOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15,23,42,0.5)",
+    justifyContent: "center",
+    padding: 28,
+  },
+  payConfirmBox: {
+    backgroundColor: T.surface,
+    borderRadius: 18,
+    padding: 20,
+    alignItems: "center",
+  },
+  payConfirmIcon: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 10,
+  },
+  payConfirmTitle: {
+    fontSize: FS.lg,
+    fontWeight: "800",
+    color: T.text,
+    marginBottom: 6,
+  },
+  payConfirmMsg: {
+    fontSize: FS.md,
+    color: T.textSub,
+    textAlign: "center",
+    lineHeight: 21,
+  },
+  payConfirmBtns: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 18,
+    alignSelf: "stretch",
+  },
+  payConfirmBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+    height: 44,
+    borderRadius: 12,
+  },
+  payConfirmCancel: { backgroundColor: T.lineSoft },
+  payConfirmCancelText: { fontSize: FS.md, fontWeight: "700", color: T.textSub },
+  payConfirmOkText: { fontSize: FS.md, fontWeight: "800", color: "#fff" },
+
   // ===== Empty state =====
   empty: {
     alignItems: "center",
@@ -3075,6 +3995,81 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: T.lineSoft,
   },
+  // 1 หมวดค่าใช้จ่าย = แถวยอดเงิน + หลักฐานของหมวดนั้นอยู่ใต้แถว (เส้นคั่นอยู่ท้ายบล็อก)
+  expenseBlock: {
+    borderBottomWidth: 1,
+    borderBottomColor: T.lineSoft,
+    paddingBottom: 4,
+  },
+  expenseEvRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    paddingLeft: 24,
+    paddingBottom: 6,
+  },
+  // รูปย่อหลักฐาน (สลิป/เอกสาร) ในป๊อปอัปรายละเอียด
+  evThumbWrap: { width: 60, alignItems: "center", marginTop: 4 },
+  evThumb: {
+    width: 56,
+    height: 56,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    overflow: "hidden",
+    backgroundColor: T.lineSoft,
+  },
+  evThumbImg: { width: "100%", height: "100%" },
+  evThumbPdf: { flex: 1, alignItems: "center", justifyContent: "center" },
+  evThumbLabel: { fontSize: 9, marginTop: 2, fontWeight: "600" },
+  // --- หลักฐานแยกรอบ (แบบหน้ารายละเอียดบนเว็บ) ---
+  evrSegWrap: { marginBottom: 10 },
+  evrBox: {
+    borderWidth: 1,
+    borderColor: "#bfdbfe",
+    borderRadius: 12,
+    padding: 12,
+    backgroundColor: "#fff",
+    marginBottom: 12,
+  },
+  evrBoxHead: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 8,
+    paddingBottom: 8,
+    marginBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#dbeafe",
+    borderStyle: "dashed",
+  },
+  evrBoxTitle: { fontWeight: "800", fontSize: 15, color: "#1d4ed8" },
+  evrBoxAt: { fontSize: 11, color: "#64748b" },
+  evrCat: { paddingVertical: 6 },
+  evrCatHead: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 8,
+  },
+  evrCatTitleRow: { flexDirection: "row", alignItems: "center", gap: 8, flexShrink: 1 },
+  evrCatTitle: { fontWeight: "700", fontSize: 14, color: "#334155", flexShrink: 1 },
+  evrCatAmt: { fontWeight: "700", fontSize: 14, color: "#334155" },
+  evrGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 8 },
+  evrThumbWrap: { width: 84, alignItems: "center" },
+  evrThumb: {
+    width: 84,
+    height: 84,
+    borderRadius: 8,
+    borderWidth: 2,
+    overflow: "hidden",
+    backgroundColor: "#fff",
+  },
+  evrExt: { fontSize: 10, fontWeight: "700", color: "#dc2626", marginTop: 2 },
+  evrThumbType: { fontSize: 11, fontWeight: "700", marginTop: 3 },
+  evrThumbRound: { fontSize: 10, color: "#64748b" },
+  evrOtherFrame: { paddingLeft: 24, paddingTop: 6, paddingBottom: 4 },
+  evrOtherTitle: { fontWeight: "700", fontSize: 13, flexShrink: 1 },
+  evrOtherAmt: { fontWeight: "700", fontSize: 13, color: "#334155" },
   evBtn: {
     flexDirection: "row",
     gap: 5,

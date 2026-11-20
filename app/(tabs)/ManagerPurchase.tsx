@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Image,
   Linking,
   Modal,
   RefreshControl,
@@ -652,28 +653,33 @@ export default function ManagerPurchase() {
     </View>
   );
 
-  const ImageButton = ({ icon, color, label, onPress }: any) => (
-    <TouchableOpacity
-      onPress={onPress}
-      style={{ alignItems: "center", padding: 5 }}
-      activeOpacity={0.7}
-    >
-      <View
-        style={{
-          width: 50,
-          height: 50,
-          borderRadius: 12,
-          backgroundColor: color + "15",
-          justifyContent: "center",
-          alignItems: "center",
-          marginBottom: 5,
-        }}
-      >
-        <MaterialCommunityIcons name={icon} size={24} color={color} />
+  // 📸 รูปย่อหลักฐาน (รูปจริงจากเซิร์ฟเวอร์ · PDF แสดงไอคอน) — แบบเดียวกับหน้าฝ่ายขาย
+  const EvidenceThumb = ({ file, label, color, onPress }: any) => {
+    const isPdf = /\.pdf$/i.test(file);
+    const uri = file.startsWith("http")
+      ? file
+      : `${IMG_BASE_URL.endsWith("/") ? IMG_BASE_URL : IMG_BASE_URL + "/"}${encodeURIComponent(file)}`;
+    return (
+      <View style={styles.evThumbWrap}>
+        <TouchableOpacity
+          activeOpacity={0.8}
+          onPress={onPress}
+          style={[styles.evThumb, { borderColor: color }]}
+        >
+          {isPdf ? (
+            <View style={styles.evThumbPdf}>
+              <FontAwesome5 name="file-pdf" size={20} color={color} />
+            </View>
+          ) : (
+            <Image source={{ uri }} style={styles.evThumbImg} />
+          )}
+        </TouchableOpacity>
+        <Text style={[styles.evThumbLabel, { color }]} numberOfLines={1}>
+          {label}
+        </Text>
       </View>
-      <Text style={{ fontSize: 11, color: "#666" }}>{label}</Text>
-    </TouchableOpacity>
-  );
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
@@ -1012,61 +1018,55 @@ export default function ManagerPurchase() {
                       text={selectedItem.additional_notes}
                     />
                   </View>
-                  {parseFloat(selectedItem.total_expense) > 0 && (
-                    <View
-                      style={[
-                        styles.costContainer,
-                        { borderColor: ACTIVE_COLOR + "30" },
-                      ]}
-                    >
-                      <Text style={[styles.costTitle, { color: ACTIVE_COLOR }]}>
-                        💸 สรุปยอดเงิน
-                      </Text>
-                      <View style={styles.costRow}>
-                        <View style={styles.costItem}>
-                          <Text style={styles.costLabel}>ค่าใช้จ่าย</Text>
-                          <Text style={styles.costValue}>
-                            -
-                            {parseInt(
-                              selectedItem.total_expense || 0,
-                            ).toLocaleString()}
+                  {(() => {
+                    const files = String(selectedItem.expense_files || "")
+                      .split(",")
+                      .map((s) => s.trim())
+                      .filter(Boolean);
+                    const total = parseFloat(selectedItem.total_expense) || 0;
+                    if (total <= 0 && files.length === 0) return null;
+                    return (
+                      <View
+                        style={[
+                          styles.costContainer,
+                          { borderColor: ACTIVE_COLOR + "30" },
+                        ]}
+                      >
+                        <Text style={[styles.costTitle, { color: ACTIVE_COLOR }]}>
+                          💸 สรุปยอดเงิน
+                        </Text>
+                        <View style={styles.costRow}>
+                          <View style={styles.costItem}>
+                            <Text style={styles.costLabel}>ค่าใช้จ่าย</Text>
+                            <Text style={styles.costValue}>
+                              -{Math.round(total).toLocaleString()}
+                            </Text>
+                          </View>
+                        </View>
+                        {selectedItem.expense_list && (
+                          <Text style={styles.costNote}>
+                            {selectedItem.expense_list}
                           </Text>
+                        )}
+                        {/* 📸 หลักฐานเป็นรูปจริง (แตะเพื่อเปิดเต็ม) — แบบเดียวกับหน้าฝ่ายขาย */}
+                        <View style={styles.evThumbRow}>
+                          {files.length === 0 ? (
+                            <Text style={styles.evNone}>ไม่มีหลักฐานแนบ</Text>
+                          ) : (
+                            files.map((f, idx) => (
+                              <EvidenceThumb
+                                key={`e-${idx}`}
+                                file={f}
+                                label={`รูป ${idx + 1}`}
+                                color={ACTIVE_COLOR}
+                                onPress={() => openImage(f)}
+                              />
+                            ))
+                          )}
                         </View>
                       </View>
-                      {selectedItem.expense_list && (
-                        <Text style={styles.costNote}>
-                          {selectedItem.expense_list}
-                        </Text>
-                      )}
-                    </View>
-                  )}
-                  <Text style={styles.imgHeader}>📸 หลักฐาน / รูปภาพ</Text>
-                  <View
-                    style={{
-                      flexDirection: "row",
-                      flexWrap: "wrap",
-                      gap: 10,
-                      marginTop: 10,
-                    }}
-                  >
-                    {selectedItem.expense_files &&
-                      String(selectedItem.expense_files).trim() !== "" &&
-                      String(selectedItem.expense_files)
-                        .split(",")
-                        .map((img: string, idx: number) => {
-                          const c = img.trim();
-                          if (!c) return null;
-                          return (
-                            <ImageButton
-                              key={`e-${idx}`}
-                              icon="receipt"
-                              color="#ef4444"
-                              label={`ค่าใช้จ่าย ${idx + 1}`}
-                              onPress={() => openImage(c)}
-                            />
-                          );
-                        })}
-                  </View>
+                    );
+                  })()}
                 </View>
               )}
             </ScrollView>
@@ -1384,6 +1384,29 @@ const styles = StyleSheet.create({
   },
   detailTitle: { fontSize: 20, fontWeight: "bold", color: "#333" },
   imgHeader: { fontSize: 15, fontWeight: "bold", color: "#333", marginTop: 10 },
+  // 📸 รูปย่อหลักฐานในกล่องสรุปยอดเงิน
+  evThumbRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: "#eef2f7",
+  },
+  evThumbWrap: { width: 60, alignItems: "center" },
+  evThumb: {
+    width: 56,
+    height: 56,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    overflow: "hidden",
+    backgroundColor: "#eef2f7",
+  },
+  evThumbImg: { width: "100%", height: "100%" },
+  evThumbPdf: { flex: 1, alignItems: "center", justifyContent: "center" },
+  evThumbLabel: { fontSize: 9, marginTop: 2, fontWeight: "600" },
+  evNone: { fontSize: 11, color: "#94a3b8" },
   costContainer: {
     backgroundColor: "#f8fafc",
     padding: 15,
